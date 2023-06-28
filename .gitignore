@@ -9,7 +9,6 @@ __pycache__/
 *.gif
 *.mp4
 *.pkl
-*.pt
 *.npy
 *.zip
 cached_features/
