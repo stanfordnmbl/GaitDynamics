@@ -230,8 +230,8 @@ class EDGE:
                             self.diffusion.master_model, self.diffusion.model
                         )
             # Save model
-            if (epoch % 1) == 0:
-            # if (epoch % opt.save_interval) == 0:
+            # if (epoch % 1) == 0:
+            if (epoch % opt.save_interval) == 0:
                 # everyone waits here for the val loop to finish ( don't start next train epoch early)
                 self.accelerator.wait_for_everyone()
                 # save only if on main thread
