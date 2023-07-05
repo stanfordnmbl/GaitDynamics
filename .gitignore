@@ -1,5 +1,4 @@
-train/
-test/
+
 edge_aistpp/
 dataset_backups/
 wandb/
@@ -13,6 +12,8 @@ __pycache__/
 *.zip
 cached_features/
 custom_music/
-data/
-
+data/AMASS
+data/AMASS_agreggated
+data/AMASS_agreggated_sliced
+runs/
 

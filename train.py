@@ -25,5 +25,5 @@ def train(opt):
 
 if __name__ == "__main__":
     opt = parse_train_opt()
-    opt.checkpoint = "./runs/train/exp16/weights/train-2.pt"
+    opt.checkpoint = "./runs/train/exp18/weights/train-1550.pt"
     train(opt)

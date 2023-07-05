@@ -230,8 +230,29 @@ class EDGE:
                             self.diffusion.master_model, self.diffusion.model
                         )
             # Save model
-            # if (epoch % 1) == 0:
-            if (epoch % opt.save_interval) == 0:
+            # generate a sample
+            render_count = 20
+            shape = (render_count, self.horizon, self.repr_dim)
+            print("Generating Sample")
+            # draw a music from the test dataset
+            # (x, cond, filename, wavnames) = next(iter(test_data_loader))
+            # (x, cond, filename, wavnames) = next(iter(train_data_loader))
+            self.accelerator.wait_for_everyone()
+            cond = torch.ones(render_count)
+            wavnames = torch.ones(render_count)
+            cond = cond.to(self.accelerator.device)
+            self.diffusion.render_sample(
+                shape,
+                cond[:render_count],
+                self.normalizer,
+                epoch,
+                os.path.join(opt.render_dir, "train_" + opt.exp_name),
+                name=wavnames[:render_count],
+                sound=True,
+            )
+
+            if (epoch % 1) == 0:
+            # if (epoch % opt.save_interval) == 0:
                 # everyone waits here for the val loop to finish ( don't start next train epoch early)
                 self.accelerator.wait_for_everyone()
                 # save only if on main thread
