@@ -16,4 +16,5 @@ data/AMASS
 data/AMASS_agreggated
 data/AMASS_agreggated_sliced
 runs/
+alant/train-1550.pt
 
