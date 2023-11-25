@@ -1,23 +1,11 @@
 import glob
 import os
-import pickle
-import random
-from functools import cmp_to_key
-from pathlib import Path
-from typing import Any
-
-from torch.utils.data import Dataset
-
-from dataset.preprocess import Normalizer, vectorize_many
+from typing import List
 from dataset.quaternion import ax_to_6v
-
-
-import glob
-import os
-import pickle
 import numpy as np
 import torch
 from tqdm import tqdm
+import nimblephysics as nimble
 
 
 def slice_and_process_motion(joint_orientations, root_translation, frame_rate, target_frame_rate, stride, length, out_dir, file_name):
@@ -86,8 +74,6 @@ def slice_AMASS(motion_dir, stride=1, length=3, target_frame_rate=20):
     os.makedirs(out_dir, exist_ok=True)
     motions = sorted(glob.glob(f"{motion_dir}/*.npz"))
     motions = [m.replace('\\', '/') for m in motions]
-    motion_out = motion_dir + "_sliced"
-    os.makedirs(motion_out, exist_ok=True)
     for motion in tqdm(motions):
         data = np.load(motion)
         # check if poses exists in data
@@ -103,74 +89,72 @@ def slice_AMASS(motion_dir, stride=1, length=3, target_frame_rate=20):
             number_of_slices = slice_and_process_motion(joint_orientations, root_translation, frame_rate, target_frame_rate, stride, length, out_dir, motion.split('/')[-1][:-4])
 
 
-class MotionDataset(Dataset):
-    def __init__(
-            self,
-            data_path: str,
-            backup_path: str,
-            train: bool,
-            normalizer: Any = None,
-            data_len: int = -1,
-            force_reload: bool = False,
-    ):
-        self.data_path = data_path
-        self.raw_fps = 120
-        self.data_fps = 30
-        assert self.data_fps <= self.raw_fps
-        self.data_stride = self.raw_fps // self.data_fps
+def slice_addb(motion_dir, length_sec=3, stride_sec=1, target_frame_rate=20):
+    print("Slicing train data")
+    out_dir = motion_dir + "_sliced"
+    os.makedirs(out_dir, exist_ok=True)
 
-        self.train = train
-        self.name = "Train" if self.train else "Test"
+    sample_stride = int(100 / target_frame_rate)
+    length = int(length_sec * 100)
+    window_stride = int(stride_sec * 100)
 
-        self.normalizer = normalizer
-        self.data_len = data_len
+    subject_paths = []
+    if os.path.isdir(motion_dir):
+        for root, dirs, files in os.walk(motion_dir):
+            for file in files:
+                if file.endswith(".b3d") and "vander" not in file.lower():
+                    subject_paths.append(os.path.join(root, file))
 
-        pickle_name = "processed_train_data.pkl" if train else "processed_test_data.pkl"
+    windows = []
+    subjects = {}
+    for i, subject_path in enumerate(subject_paths):
+        # Add the skeleton to the list of skeletons
+        subject = nimble.biomechanics.SubjectOnDisk(subject_path)
+        force_bodies = subject.getGroundForceBodies()
+        if len(force_bodies) > 2:
+            print(f'Subject {subject} has more than two force bodies, skipping')
+            continue
+        subject_name = subject_path.split('/')[-1].split('.')[0]
+        subjects[subject_name] = subject
 
-        backup_path = Path(backup_path)
-        backup_path.mkdir(parents=True, exist_ok=True)
-        # save normalizer
-        if not train:
-            pickle.dump(
-                normalizer, open(os.path.join(backup_path, "normalizer.pkl"), "wb")
-            )
-        # load raw data
-        if not force_reload and pickle_name in os.listdir(backup_path):
-            print("Using cached dataset...")
-            with open(os.path.join(backup_path, pickle_name), "rb") as f:
-                data = pickle.load(f)
-        else:
-            print("Loading dataset...")
-            self.data = self.load_AMASS()  # Call this last
-            # with open(os.path.join(backup_path, pickle_name), "wb") as f:
-            #     pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)
-        self.length = self.data.shape[0]
-        self.data[...,:2] = self.data[:,:,:2] - self.data[:,0:1,:2]
-        global_pose_vec_input = self.data.float().detach()
-        self.normalizer = Normalizer(global_pose_vec_input.clone())
-        self.data = self.normalizer.normalize(global_pose_vec_input.clone())
+        for trial_index in range(subject.getNumTrials()):
+            if np.abs(subject.getTrialTimestep(trial_index) - 0.01) > 0.001:
+                raise ValueError('sampling rate not equal to 100 Hz')
+            trial_length = subject.getTrialLength(trial_index)
+            probably_missing: List[bool] = [reason != nimble.biomechanics.MissingGRFReason.notMissingGRF for reason
+                                            in subject.getMissingGRF(trial_index)]
+            for window_start in range(0, max(trial_length - length - 1, 0), window_stride):
+                if not any(probably_missing[window_start:window_start + length:sample_stride]):
+                    assert window_start + length < trial_length
+                    windows.append((subject_name, trial_index, window_start))
 
-    def __len__(self):
-        return self.length
+    for i_window, (subject_name, trial, window_start) in enumerate(tqdm(windows)):
+        # Read the frames from disk
+        subject = subjects[subject_name]
+        frames: nimble.biomechanics.FrameList = subject.readFrames(trial,
+                                                                   window_start,
+                                                                   length // sample_stride,
+                                                                   stride=sample_stride,
+                                                                   includeSensorData=False,
+                                                                   includeProcessingPasses=True)
+        assert (len(frames) == length // sample_stride)
+        first_passes: List[nimble.biomechanics.FramePass] = [frame.processingPasses[0] for frame in frames]
 
-    def __getitem__(self, idx):
-        return self.data[idx,...]
+        pose = [frame.pos for frame in first_passes]
+        pose = torch.tensor(pose).float()
+        pose[:, 3] = pose[:, 3].clone() - pose[0, 3].clone()
+        pose[:, 4] = pose[:, 4].clone() - pose[0, 4].clone()
+        pose[:, 5] = pose[:, 5].clone() - pose[0, 5].clone()
 
-    def load_AMASS(self):
-        split_data_path = self.data_path
-        motion_path = split_data_path
-        motions = sorted(glob.glob(os.path.join(motion_path, "*.pt")))
-        data_list = []
-        for motion in motions:
-            data = torch.load(motion)
-            data_list.append(data)
-        data = torch.stack(data_list, dim=0)
-        return data
+        trial_name = subject.getTrialName(trial)
+        torch.save(pose, f"{out_dir}/{subject_name}_{trial_name}_slice{i_window}.pt")        # save train/test data
+
+        # ax_to_6v
 
 
 if __name__ == '__main__':
-    path = 'D:/Local/Data/AMASS_Copy/'
-    slice_AMASS(path)
+    path = '/mnt/e/MotionModelData/train/'
+    slice_addb(path)
 
 
 
