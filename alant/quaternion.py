@@ -1,7 +1,7 @@
 import torch
-from pytorch3d.transforms import (axis_angle_to_matrix, matrix_to_axis_angle,
-                                  matrix_to_quaternion, matrix_to_rotation_6d,
-                                  quaternion_to_matrix, rotation_6d_to_matrix)
+from data.rotation_conversions import (axis_angle_to_matrix, matrix_to_axis_angle, euler_angles_to_matrix,
+                                       matrix_to_quaternion, matrix_to_rotation_6d, matrix_to_euler_angles,
+                                       quaternion_to_matrix, rotation_6d_to_matrix)
 
 
 def quat_to_6v(q):
@@ -16,6 +16,20 @@ def quat_from_6v(q):
     mat = rotation_6d_to_matrix(q)
     quat = matrix_to_quaternion(mat)
     return quat
+
+
+def euler_to_6v(q, convention="XYZ"):
+    assert q.shape[-1] == 3
+    mat = euler_angles_to_matrix(q, convention)
+    mat = matrix_to_rotation_6d(mat)
+    return mat
+
+
+def euler_from_6v(q, convention="XYZ"):
+    assert q.shape[-1] == 6
+    mat = rotation_6d_to_matrix(q)
+    eul = matrix_to_euler_angles(mat, convention)
+    return eul
 
 
 def ax_to_6v(q):

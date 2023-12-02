@@ -2,10 +2,8 @@ import glob
 import os
 import re
 from pathlib import Path
-
 import torch
-
-from .scaler import MinMaxScaler
+from scaler import StandardScaler, MinMaxScaler
 
 
 def increment_path(path, exist_ok=False, sep="", mkdir=False):
@@ -32,9 +30,9 @@ class Normalizer:
         self.scaler.fit(flat)
 
     def normalize(self, x):
-        batch, seq, ch = x.shape
-        x = x.reshape(-1, ch)
-        return self.scaler.transform(x).reshape((batch, seq, ch))
+        # batch, seq, ch = x.shape
+        # x = x.reshape(-1, ch)
+        return self.scaler.transform(x)
 
     def unnormalize(self, x):
         batch, seq, ch = x.shape

@@ -1,7 +1,7 @@
 
 edge_aistpp/
 dataset_backups/
-wandb/
+wandb_logs/
 renders/
 .ipynb_checkpoints/
 __pycache__/

@@ -1,11 +1,9 @@
 from args import parse_train_opt
-import os
 import torch
 from alan_model import MotionModel
 import nimblephysics as nimble
 from nimblephysics import NimbleGUI
 import time
-
 
 
 def inference(opt):
@@ -14,8 +12,6 @@ def inference(opt):
     wavnames = torch.ones(render_count)
     model = MotionModel(opt.feature_type, opt.checkpoint)
     data_tuple = (None, cond, wavnames)
-    label = '_test_1121'
-    osim_model_path = f"/mnt/d/Local/AddBiom/vmu-suit/test_data/NordData/Subject002/"
 
     model.eval()
     _, cond, wavname = data_tuple
@@ -26,10 +22,9 @@ def inference(opt):
         cond[:render_count],
         model.normalizer,
     )
-    samples_np = samples.detach().cpu().numpy()
 
     customOsim: nimble.biomechanics.OpenSimFile = nimble.biomechanics.OpenSimParser.parseOsim(
-        osim_model_path + 'unscaled_generic.osim')
+        '/mnt/d/Local/Data/MotionModelData/model_and_geometry/unscaled_generic_with_arm.osim')
     skel = customOsim.skeleton
     world = nimble.simulation.World()
     world.addSkeleton(skel)
@@ -41,7 +36,7 @@ def inference(opt):
     gui.serve(8080)
     gui.nativeAPI().renderSkeleton(skel)
     while True:
-        for i_generation, sample in enumerate(samples_np):
+        for i_generation, sample in enumerate(samples):
             num_frames = sample.shape[0]
             gui.nativeAPI().createText('generation num', 'Generation: ' + str(i_generation), [1200, 200], [250, 50])
             for frame in range(num_frames):
@@ -52,7 +47,7 @@ def inference(opt):
 
 if __name__ == "__main__":
     opt = parse_train_opt()
-    opt.checkpoint = "./train-20000.pt"
+    opt.checkpoint = "./train-2.pt"
     inference(opt)
 
 

@@ -1,6 +1,6 @@
-import glob
-from dataset.preprocess import Normalizer
+from preprocess import Normalizer
 import numpy as np
+import pandas as pd
 import multiprocessing
 from functools import partial
 import torch.nn.functional as F
@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from torch.utils.data import Dataset
 from pathlib import Path
-from dataset.preprocess import increment_path
+from preprocess import increment_path
 from model.adan import Adan
 from model.model import DanceDecoder
 from vis import SMPLSkeleton
@@ -20,9 +20,61 @@ import pickle
 import torch
 import copy
 import torch.nn as nn
-from einops import reduce
 from model.utils import extract, make_beta_schedule
-from typing import Any
+from typing import Any, List
+import nimblephysics as nimble
+from alant.alan_consts import *
+from quaternion import euler_from_6v, euler_to_6v
+from alan_osim_fk import get_model_offsets, get_knee_rotation_coefficients, forward_kinematics
+
+
+with open('model_states_column_names.txt', 'r') as f:
+    model_states_column_names = f.read().splitlines()
+
+
+def convert_addb_state_to_model_input(pose_df):
+    # shift root position to start in (x,y) = (0,0)
+    pose_df['pelvis_tx'] = pose_df['pelvis_tx'] - pose_df['pelvis_tx'][0]
+    pose_df['pelvis_ty'] = pose_df['pelvis_ty'] - pose_df['pelvis_ty'][0]
+    pose_df['pelvis_tz'] = pose_df['pelvis_tz'] - pose_df['pelvis_tz'][0]
+
+    # remove frozen dof
+    for frozen_col in FROZEN_DOFS:
+        pose_df = pose_df.drop(frozen_col, axis=1)
+
+    # convert euler to 6v
+    # ??? Confirm this with Keenon, 'hip_flexion_r', 'hip_adduction_r', 'hip_rotation_r' should be ZXY ???
+    for joint_name, joints_with_3_dof in JOINTS_3D_ALL.items():
+        joint_6v = euler_to_6v(torch.tensor(pose_df[joints_with_3_dof].values), "ZXY").numpy()
+        for joints_euler_name in joints_with_3_dof:
+            pose_df = pose_df.drop(joints_euler_name, axis=1)
+        for i in range(6):
+            pose_df[joint_name + '_' + str(i)] = joint_6v[:, i]
+
+    # TODO: Might need to check if 1D joints are continuous
+    # <!--Orientation of the joint in the parent body specified in the parent reference frame.
+    # Euler XYZ body-fixed rotation angles are used to express the orientation. Default is (0,0,0).-->
+    return pose_df
+
+
+def inverse_convert_addb_state_to_model_input(model_states):
+    model_states_dict = {col: model_states[..., i] for i, col in enumerate(model_states_column_names) if col in OSIM_DOF_ORIGINAL}
+
+    # convert 6v to euler
+    for joint_name, joints_with_3_dof in JOINTS_3D_ALL.items():
+        joint_name_6v = [joint_name + '_' + str(i) for i in range(6)]
+        index_ = [model_states_column_names.index(joint_name_6v[i]) for i in range(6)]
+        joint_euler = euler_from_6v(model_states[..., index_], "ZXY")
+
+        for i, joints_euler_name in enumerate(joints_with_3_dof):
+            model_states_dict[joints_euler_name] = joint_euler[..., i]
+
+    # add frozen dof back
+    for frozen_col in FROZEN_DOFS:
+        model_states_dict[frozen_col] = torch.zeros(model_states.shape[:2]).to(model_states.device)
+
+    osim_states = torch.stack([model_states_dict[col] for col in OSIM_DOF_ORIGINAL], dim=2).float()
+    return osim_states
 
 
 def identity(t, *args, **kwargs):
@@ -44,7 +96,6 @@ class MotionDataset(Dataset):
             backup_path: str,
             train: bool,
             normalizer: Any = None,
-            data_len: int = -1,
             force_reload: bool = False,
     ):
         self.data_path = data_path
@@ -57,12 +108,11 @@ class MotionDataset(Dataset):
         self.name = "Train" if self.train else "Test"
 
         self.normalizer = normalizer
-        self.data_len = data_len
 
         pickle_name = "processed_train_data.pkl" if train else "processed_test_data.pkl"
 
         backup_path = Path(backup_path)
-        backup_path.mkdir(parents=True, exist_ok=True)
+        backup_path.mkdir(parents=True, exist_ok=True)      # TODO: save useful data into backup_path
         # save normalizer
         if not train:
             pickle.dump(
@@ -75,28 +125,85 @@ class MotionDataset(Dataset):
                 data = pickle.load(f)
         else:
             print("Loading dataset...")
-            self.data = self.load_addb()  # Call this last
-        self.length = self.data.shape[0]
-        global_pose_vec_input = self.data.float().detach()
-        self.normalizer = Normalizer(global_pose_vec_input.clone())
-        self.data = self.normalizer.normalize(global_pose_vec_input.clone())
+            self.load_addb()  # Call this last
+        self.trial_num = len(self.trials)
+        data_concat = torch.cat([trial.converted_pose for trial in self.trials], dim=0)
+        print("normalizing training data")
+        self.normalizer = Normalizer(data_concat)
+        # TODO: normalize based on 10000 clips that sampled via trial_length_probability
+        for i in range(self.trial_num):
+            self.trials[i].converted_pose = torch.tensor(self.normalizer.normalize(self.trials[i].converted_pose)).float().detach()
 
     def __len__(self):
-        return self.length
+        return 1000        # This num affects # of iterations in each epoch
 
     def __getitem__(self, idx):
-        return self.data[idx,...]
+        # idx_ = torch.multinomial(self.trial_length_probability, 1).item()
+        idx_ = torch.randint(0, self.trial_num, (1,)).item()
+        trial_length = self.trials[idx_].length
+        slice_index = torch.randint(0, trial_length - 61, (1,)).item()
+        return self.trials[idx_].converted_pose[slice_index:slice_index+60, ...], self.trials[idx_].model_offsets
 
     def load_addb(self):
-        split_data_path = self.data_path
-        motion_path = split_data_path
-        motions = sorted(glob.glob(os.path.join(motion_path, "*.pt")))
-        data_list = []
-        for motion in motions:
-            data = torch.load(motion)
-            data_list.append(data)
-        data = torch.stack(data_list, dim=0)
-        return data
+        subject_paths = []
+        if os.path.isdir(self.data_path):
+            for root, dirs, files in os.walk(self.data_path):
+                for file in files:
+                    if file.endswith(".b3d"):
+                        subject_paths.append(os.path.join(root, file))
+
+        self.trials = []
+        for i_sub, subject_path in enumerate(subject_paths):
+            # Add the skeleton to the list of skeletons
+            subject = nimble.biomechanics.SubjectOnDisk(subject_path)
+
+            skel = subject.readSkel(0)
+            model_offsets = get_model_offsets(skel).float()
+
+            force_bodies = subject.getGroundForceBodies()
+            if len(force_bodies) > 2:
+                print(f'Subject {subject} has more than two force bodies, skipping')
+                continue
+            subject_name = subject_path.split('/')[-1].split('.')[0]
+            # subjects[subject_name] = subject
+
+            for trial_index in range(subject.getNumTrials()):
+                if np.abs(subject.getTrialTimestep(trial_index) - 0.01) > 0.001:
+                    raise ValueError('sampling rate not equal to 100 Hz')
+                trial_length = subject.getTrialLength(trial_index)
+                probably_missing: List[bool] = [reason != nimble.biomechanics.MissingGRFReason.notMissingGRF for reason
+                                                in subject.getMissingGRF(trial_index)]
+
+                frames: nimble.biomechanics.FrameList = subject.readFrames(trial_index, 0, trial_length,
+                                                                           includeSensorData=False,
+                                                                           includeProcessingPasses=True)
+                first_passes: List[nimble.biomechanics.FramePass] = [frame.processingPasses[0] for frame in frames]
+                pose = [frame.pos for frame in first_passes]
+                pose_df = pd.DataFrame(pose, columns=OSIM_DOF_ORIGINAL)
+                pose_df = convert_addb_state_to_model_input(pose_df)
+
+                if i_sub == 0 and trial_index == 0:
+                    with open('model_states_column_names.txt', 'w') as f:
+                        for col in pose_df.columns:
+                            f.write("%s\n" % col)
+
+                pose = torch.tensor(pose_df.values)
+                trial_name = subject.getTrialName(trial_index)
+
+                current_trial = TrialData(pose, model_offsets, probably_missing, trial_name, subject_name)
+
+                self.trials.append(current_trial)
+        self.trial_length_probability = torch.tensor([1000 / trial.length for trial in self.trials]).float()
+
+
+class TrialData:
+    def __init__(self, converted_pose, model_offsets, probably_missing_grf, trial_name, subject_name):
+        self.converted_pose = converted_pose
+        self.model_offsets = model_offsets
+        self.probably_missing_grf = probably_missing_grf
+        self.trial_name = trial_name
+        self.subject_name = subject_name
+        self.length = converted_pose.shape[0]
 
 
 class MotionModel:
@@ -115,7 +222,7 @@ class MotionModel:
         num_processes = state.num_processes
         use_baseline_feats = feature_type == "baseline"
 
-        self.repr_dim = repr_dim = 23       # 23 opensim DoFs
+        self.repr_dim = repr_dim = 50       # 30 converted opensim DoFs
 
         feature_dim = 35 if use_baseline_feats else 4800
 
@@ -152,7 +259,7 @@ class MotionModel:
             smpl,
             # schedule="cosine",
             n_timestep=1000,
-            predict_epsilon=False,
+            predict_epsilon=False,          # predict epsilon is usually True for diffusion models right???
             loss_type="l2",
             use_p2=False,
             cond_drop_prob=0.25,
@@ -208,8 +315,7 @@ class MotionModel:
             )
         # set normalizer
         self.normalizer = train_dataset.normalizer
-        # self.normalizer = None
-
+        self.diffusion.set_normalizer(self.normalizer)
 
         # data loaders
         # decide number of workers based on cpu count
@@ -233,25 +339,26 @@ class MotionModel:
         if self.accelerator.is_main_process:
             save_dir = str(increment_path(Path(opt.project) / opt.exp_name))
             opt.exp_name = save_dir.split("/")[-1]
-            wandb.init(project=opt.wandb_pj_name, name=opt.exp_name)
+            wandb.init(project=opt.wandb_pj_name, name=opt.exp_name, dir="wandb_logs")
             save_dir = Path(save_dir)
             wdir = save_dir / "weights"
             wdir.mkdir(parents=True, exist_ok=True)
 
         self.accelerator.wait_for_everyone()
         for epoch in range(1, opt.epochs + 1):
-            print('epoch: ', epoch)
-            avg_loss = 0
-            avg_vloss = 0
-            avg_fkloss = 0
-            avg_footloss = 0
+            print(f'epoch: {epoch} / {opt.epochs}')
+            avg_loss_simple = 0
+            avg_loss_vel = 0
+            avg_loss_fk = 0
+            avg_loss_drift = 0
+            avg_loss_slide = 0
             # train
             self.train()            # switch to train mode.
 
             for step, x in enumerate(
                     load_loop(train_data_loader)
             ):
-                total_loss, (loss, v_loss, fk_loss, foot_loss) = self.diffusion(
+                total_loss, losses = self.diffusion(
                     x, None, t_override=None
                 )
                 self.optim.zero_grad()
@@ -261,43 +368,27 @@ class MotionModel:
 
                 # ema update and train loss update only on main
                 if self.accelerator.is_main_process:
-                    avg_loss += loss.detach().cpu().numpy()
-                    avg_vloss += v_loss.detach().cpu().numpy()
-                    avg_fkloss += fk_loss.detach().cpu().numpy()
-                    avg_footloss += foot_loss.detach().cpu().numpy()
+                    avg_loss_simple += losses[0].detach().cpu().numpy()
+                    avg_loss_vel += losses[1].detach().cpu().numpy()
+                    avg_loss_fk += losses[2].detach().cpu().numpy()
+                    avg_loss_drift += losses[3].detach().cpu().numpy()
+                    avg_loss_slide += losses[4].detach().cpu().numpy()
                     if step % opt.ema_interval == 0:
                         self.diffusion.ema.update_model_average(
                             self.diffusion.master_model, self.diffusion.model
                         )
-            if epoch % opt.epochs != 0:
-                continue
-            # Save model
-            # generate a sample
-            render_count = 5
-            print("Generating Sample")
-            # TODO : generate samples
 
             self.accelerator.wait_for_everyone()
 
-
             if (epoch % 1) == 0:
-                # if (epoch % opt.save_interval) == 0:
-                # everyone waits here for the val loop to finish ( don't start next train epoch early)
                 self.accelerator.wait_for_everyone()
                 # save only if on main thread
                 if self.accelerator.is_main_process:
                     self.eval()
-                    # log
-                    avg_loss /= len(train_data_loader)
-                    avg_vloss /= len(train_data_loader)
-                    avg_fkloss /= len(train_data_loader)
-                    avg_footloss /= len(train_data_loader)
-                    log_dict = {
-                        "Train Loss": avg_loss,
-                        "V Loss": avg_vloss,
-                        "FK Loss": avg_fkloss,
-                        "Foot Loss": avg_footloss,
-                    }
+                    loss_val_name_pairs = [
+                        (avg_loss_simple, 'simple'), (avg_loss_vel, 'vel'), (avg_loss_fk, 'forward kinematics'),
+                        (avg_loss_drift, 'drift'), (avg_loss_slide, 'slide')]
+                    log_dict = {name: loss / len(train_data_loader) for loss, name in loss_val_name_pairs}
                     wandb.log(log_dict)
                     ckpt = {
                         "ema_state_dict": self.diffusion.master_model.state_dict(),
@@ -307,13 +398,10 @@ class MotionModel:
                         "optimizer_state_dict": self.optim.state_dict(),
                         "normalizer": self.normalizer,
                     }
-                    torch.save(ckpt, os.path.join(wdir, f"train-{epoch}.pt"))
-                    render_count = 20
-                    print("Generating Sample")
-                    cond = torch.ones(render_count)
-                    # TODO : generate samples
 
-                    print(f"[MODEL SAVED at Epoch {epoch}]")
+            if epoch % 100 == 0 or epoch == opt.epochs:
+                torch.save(ckpt, os.path.join(wdir, f"train-{epoch}.pt"))
+                print(f"[MODEL SAVED at Epoch {epoch}]")
         if self.accelerator.is_main_process:
             wandb.run.finish()
 
@@ -428,6 +516,9 @@ class GaussianDiffusion(nn.Module):
 
         ## get loss coefficients and initialize objective
         self.loss_fn = F.mse_loss if loss_type == "l2" else F.l1_loss
+
+    def set_normalizer(self, normalizer):
+        self.normalizer = normalizer
 
     # ------------------------------------------ sampling ------------------------------------------#
 
@@ -740,7 +831,8 @@ class GaussianDiffusion(nn.Module):
 
         return sample
 
-    def p_losses(self, x_start, cond, t):           # ?? why named as p_losses?
+    def p_losses(self, x, cond, t):           # ?? why named as p_losses?
+        x_start, model_offsets = x
         noise = torch.randn_like(x_start)
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
 
@@ -755,29 +847,51 @@ class GaussianDiffusion(nn.Module):
             target = x_start
 
         # full reconstruction loss
-        loss = self.loss_fn(model_out, target, reduction="none")
-        loss = reduce(loss, "b ... -> b (...)", "mean")
-        loss = loss * extract(self.p2_loss_weight, t, loss.shape)
+        loss_simple = self.loss_fn(model_out, target, reduction="none")
+        loss_simple = loss_simple * extract(self.p2_loss_weight, t, loss_simple.shape)
 
-        # root motion extra loss
-        loss_root = self.loss_fn(model_out[...,:3], target[...,:3], reduction="none")
-        loss_root = reduce(loss_root, "b ... -> b (...)", "mean")
-        loss_root = loss_root * extract(self.p2_loss_weight, t, loss_root.shape)
+        loss_vel = self.loss_fn(model_out[:, 1:, 3:] - model_out[:, :-1, 3:], target[:, 1:, 3:] - target[:, :-1, 3:], reduction="none")
+        loss_vel = loss_vel * extract(self.p2_loss_weight, t, loss_vel.shape)
+
+        osim_states_pred = self.normalizer.unnormalize(model_out)
+        osim_states_pred = inverse_convert_addb_state_to_model_input(osim_states_pred)
+        foot_locations_pred, joint_locations_pred, segment_orientations_pred = forward_kinematics(osim_states_pred, model_offsets)
+        osim_states_true = self.normalizer.unnormalize(target)
+        osim_states_true = inverse_convert_addb_state_to_model_input(osim_states_true)
+        foot_locations_true, joint_locations_true, segment_orientations_true = forward_kinematics(osim_states_true, model_offsets)
+
+        loss_fk = self.loss_fn(joint_locations_pred, joint_locations_true, reduction="none")
+        # loss_fk = reduce(loss_fk, "b ... -> b (...)", "mean")
+        loss_fk = loss_fk * extract(self.p2_loss_weight, t, loss_fk.shape[1:])
+
+        loss_drift = self.loss_fn(model_out[..., :3], target[..., :3], reduction="none")
+        loss_drift = loss_drift * extract(self.p2_loss_weight, t, loss_drift.shape)
+
+        # loss_floor_penetration = self.loss_fn(foot_locations_pred[..., 1], foot_locations_true[..., 1], reduction="none")
+        # loss_floor_penetration = loss_floor_penetration * extract(self.p2_loss_weight, t, loss_floor_penetration.shape)
+
+        foot_vel_pred = (foot_locations_pred[..., 1:, :] - foot_locations_pred[..., :-1, :]).abs()
+        stance_based_on_foot_vel = (torch.norm(foot_vel_pred, dim=-1) < 0.001)[..., None].expand(-1, -1, -1, 3)       # TODO tune this. Tom used 0.003 (0.3 m/s)
+        foot_vel_pred[~stance_based_on_foot_vel] = 0
+        loss_slide = self.loss_fn(foot_vel_pred, foot_vel_pred * 0, reduction="none")
+        loss_slide = loss_slide * extract(self.p2_loss_weight, t, loss_slide.shape[1:])
 
         losses = (
-            0.636 * loss.mean(),
-            1.000 * loss_root.mean(),
-            torch.tensor(0.0,device='cuda'),
-            torch.tensor(0.0,device='cuda')
+            1. * loss_simple.mean(),
+            1. * loss_vel.mean(),
+            1. * loss_fk.mean(),
+            1. * loss_drift.mean(),
+            # 1. * loss_floor_penetration.mean(),
+            100. * loss_slide.mean(),
         )
         return sum(losses), losses
 
     def loss(self, x, cond, t_override=None):
-        batch_size = len(x)
+        batch_size = len(x[0])
         if t_override is None:
-            t = torch.randint(0, self.n_timestep, (batch_size,), device=x.device).long()
+            t = torch.randint(0, self.n_timestep, (batch_size,), device=x[0].device).long()        # randomly select a timestep to train
         else:
-            t = torch.full((batch_size,), t_override, device=x.device).long()
+            t = torch.full((batch_size,), t_override, device=x[0].device).long()
         return self.p_losses(x, cond, t)
 
     def forward(self, x, cond, t_override=None):
@@ -819,13 +933,12 @@ class GaussianDiffusion(nn.Module):
                     constraint=constraint,
                     start_point=start_point,
                 )
-                .detach()
-                .cpu()
             )
         else:
             samples = shape
 
-        samples = normalizer.unnormalize(samples)
+        samples = normalizer.unnormalize(samples.detach().cpu())
+        samples = inverse_convert_addb_state_to_model_input(samples)
         return samples
 
 

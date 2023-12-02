@@ -5,11 +5,12 @@ def parse_train_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", default="runs/train", help="project/name")
     parser.add_argument("--exp_name", default="exp", help="save to project/name")
-    parser.add_argument("--data_path", type=str, default="data/AMASS_agreggated_sliced", help="raw data path")
+    parser.add_argument("--data_path", type=str, default="D:/Local/Data/AMASS_Copy/_sliced - Copy/", help="raw data path")
+    # parser.add_argument("--data_path", type=str, default="E:/MotionModelData/train/_sliced/", help="raw data path")
     parser.add_argument(
         "--processed_data_dir",
         type=str,
-        default="data/dataset_backups/",
+        default="dataset_backups/",
         help="Dataset backup path",
     )
     parser.add_argument(
@@ -18,10 +19,10 @@ def parse_train_opt():
 
     parser.add_argument("--feature_type", type=str, default="jukebox")
     parser.add_argument(
-        "--wandb_pj_name", type=str, default="EDGE", help="project name"
+        "--wandb_pj_name", type=str, default="MotionModel", help="project name"
     )
     parser.add_argument("--batch_size", type=int, default=64, help="batch size")
-    parser.add_argument("--epochs", type=int, default=2000)
+    parser.add_argument("--epochs", type=int, default=1000)
     parser.add_argument(
         "--force_reload", action="store_true", help="force reloads the datasets"
     )
