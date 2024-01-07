@@ -1,4 +1,3 @@
-from preprocess import Normalizer
 import numpy as np
 import pandas as pd
 import multiprocessing
@@ -11,28 +10,24 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from torch.utils.data import Dataset
 from pathlib import Path
-from preprocess import increment_path
+from alant.preprocess import increment_path, Normalizer
 from model.adan import Adan
-from model.model import DanceDecoder
-from vis import SMPLSkeleton
+from model.dance_decoder import DanceDecoder
+from alant.vis import SMPLSkeleton
 import os
 import pickle
 import torch
 import copy
 import torch.nn as nn
-from model.utils import extract, make_beta_schedule
+from model.utils import extract, make_beta_schedule, linear_resample_data
 from typing import Any, List
 import nimblephysics as nimble
 from alant.alan_consts import *
-from quaternion import euler_from_6v, euler_to_6v
-from alan_osim_fk import get_model_offsets, get_knee_rotation_coefficients, forward_kinematics
+from alant.quaternion import euler_from_6v, euler_to_6v
+from alant.alan_osim_fk import get_model_offsets, get_knee_rotation_coefficients, forward_kinematics
 
 
-with open('model_states_column_names.txt', 'r') as f:
-    model_states_column_names = f.read().splitlines()
-
-
-def convert_addb_state_to_model_input(pose_df):
+def convert_addb_state_to_model_input(pose_df, joints_3d):
     # shift root position to start in (x,y) = (0,0)
     pose_df['pelvis_tx'] = pose_df['pelvis_tx'] - pose_df['pelvis_tx'][0]
     pose_df['pelvis_ty'] = pose_df['pelvis_ty'] - pose_df['pelvis_ty'][0]
@@ -43,8 +38,7 @@ def convert_addb_state_to_model_input(pose_df):
         pose_df = pose_df.drop(frozen_col, axis=1)
 
     # convert euler to 6v
-    # ??? Confirm this with Keenon, 'hip_flexion_r', 'hip_adduction_r', 'hip_rotation_r' should be ZXY ???
-    for joint_name, joints_with_3_dof in JOINTS_3D_ALL.items():
+    for joint_name, joints_with_3_dof in joints_3d.items():
         joint_6v = euler_to_6v(torch.tensor(pose_df[joints_with_3_dof].values), "ZXY").numpy()
         for joints_euler_name in joints_with_3_dof:
             pose_df = pose_df.drop(joints_euler_name, axis=1)
@@ -57,11 +51,11 @@ def convert_addb_state_to_model_input(pose_df):
     return pose_df
 
 
-def inverse_convert_addb_state_to_model_input(model_states):
-    model_states_dict = {col: model_states[..., i] for i, col in enumerate(model_states_column_names) if col in OSIM_DOF_ORIGINAL}
+def inverse_convert_addb_state_to_model_input(model_states, model_states_column_names, joints_3d, osim_dof_columns):
+    model_states_dict = {col: model_states[..., i] for i, col in enumerate(model_states_column_names) if col in osim_dof_columns}
 
     # convert 6v to euler
-    for joint_name, joints_with_3_dof in JOINTS_3D_ALL.items():
+    for joint_name, joints_with_3_dof in joints_3d.items():
         joint_name_6v = [joint_name + '_' + str(i) for i in range(6)]
         index_ = [model_states_column_names.index(joint_name_6v[i]) for i in range(6)]
         joint_euler = euler_from_6v(model_states[..., index_], "ZXY")
@@ -73,7 +67,7 @@ def inverse_convert_addb_state_to_model_input(model_states):
     for frozen_col in FROZEN_DOFS:
         model_states_dict[frozen_col] = torch.zeros(model_states.shape[:2]).to(model_states.device)
 
-    osim_states = torch.stack([model_states_dict[col] for col in OSIM_DOF_ORIGINAL], dim=2).float()
+    osim_states = torch.stack([model_states_dict[col] for col in osim_dof_columns], dim=2).float()
     return osim_states
 
 
@@ -95,6 +89,8 @@ class MotionDataset(Dataset):
             data_path: str,
             backup_path: str,
             train: bool,
+            joints_3d: dict,
+            osim_dof_columns: List[str],
             normalizer: Any = None,
             force_reload: bool = False,
     ):
@@ -112,39 +108,31 @@ class MotionDataset(Dataset):
         pickle_name = "processed_train_data.pkl" if train else "processed_test_data.pkl"
 
         backup_path = Path(backup_path)
-        backup_path.mkdir(parents=True, exist_ok=True)      # TODO: save useful data into backup_path
         # save normalizer
         if not train:
             pickle.dump(
                 normalizer, open(os.path.join(backup_path, "normalizer.pkl"), "wb")
             )
-        # load raw data
-        if not force_reload and pickle_name in os.listdir(backup_path):
-            print("Using cached dataset...")
-            with open(os.path.join(backup_path, pickle_name), "rb") as f:
-                data = pickle.load(f)
-        else:
-            print("Loading dataset...")
-            self.load_addb()  # Call this last
+        print("Loading dataset...")
+        self.load_addb(joints_3d, osim_dof_columns)  # Call this last
         self.trial_num = len(self.trials)
-        data_concat = torch.cat([trial.converted_pose for trial in self.trials], dim=0)
+        data_concat = torch.cat([self[0][0] for _ in range(1000)], dim=0)      # [!] randomly get 1000 samples for normalization
         print("normalizing training data")
         self.normalizer = Normalizer(data_concat)
-        # TODO: normalize based on 10000 clips that sampled via trial_length_probability
         for i in range(self.trial_num):
             self.trials[i].converted_pose = torch.tensor(self.normalizer.normalize(self.trials[i].converted_pose)).float().detach()
 
     def __len__(self):
-        return 1000        # This num affects # of iterations in each epoch
+        return 20000        # [!] This num affects # of iterations in each epoch
 
     def __getitem__(self, idx):
         # idx_ = torch.multinomial(self.trial_length_probability, 1).item()
-        idx_ = torch.randint(0, self.trial_num, (1,)).item()
+        idx_ = torch.randint(0, self.trial_num, (1,)).item()        # a random trial regardless of its length
         trial_length = self.trials[idx_].length
         slice_index = torch.randint(0, trial_length - 61, (1,)).item()
         return self.trials[idx_].converted_pose[slice_index:slice_index+60, ...], self.trials[idx_].model_offsets
 
-    def load_addb(self):
+    def load_addb(self, joints_3d, osim_dof_columns):
         subject_paths = []
         if os.path.isdir(self.data_path):
             for root, dirs, files in os.walk(self.data_path):
@@ -157,19 +145,12 @@ class MotionDataset(Dataset):
             # Add the skeleton to the list of skeletons
             subject = nimble.biomechanics.SubjectOnDisk(subject_path)
 
-            skel = subject.readSkel(0)
+            skel = subject.readSkel(0, geometryFolder=os.path.dirname(os.path.realpath(__file__)) + "/../../data/Geometry/")
             model_offsets = get_model_offsets(skel).float()
-
-            force_bodies = subject.getGroundForceBodies()
-            if len(force_bodies) > 2:
-                print(f'Subject {subject} has more than two force bodies, skipping')
-                continue
             subject_name = subject_path.split('/')[-1].split('.')[0]
-            # subjects[subject_name] = subject
 
             for trial_index in range(subject.getNumTrials()):
-                if np.abs(subject.getTrialTimestep(trial_index) - 0.01) > 0.001:
-                    raise ValueError('sampling rate not equal to 100 Hz')
+                trial_name = subject.getTrialName(trial_index)
                 trial_length = subject.getTrialLength(trial_index)
                 probably_missing: List[bool] = [reason != nimble.biomechanics.MissingGRFReason.notMissingGRF for reason
                                                 in subject.getMissingGRF(trial_index)]
@@ -177,23 +158,31 @@ class MotionDataset(Dataset):
                 frames: nimble.biomechanics.FrameList = subject.readFrames(trial_index, 0, trial_length,
                                                                            includeSensorData=False,
                                                                            includeProcessingPasses=True)
-                first_passes: List[nimble.biomechanics.FramePass] = [frame.processingPasses[0] for frame in frames]
+                try:
+                    first_passes: List[nimble.biomechanics.FramePass] = [frame.processingPasses[0] for frame in frames]
+                except IndexError:
+                    print(f'{subject_name}, {trial_index} has no processing passes, skipping')
+                    continue
                 pose = [frame.pos for frame in first_passes]
-                pose_df = pd.DataFrame(pose, columns=OSIM_DOF_ORIGINAL)
-                pose_df = convert_addb_state_to_model_input(pose_df)
 
-                if i_sub == 0 and trial_index == 0:
-                    with open('model_states_column_names.txt', 'w') as f:
-                        for col in pose_df.columns:
-                            f.write("%s\n" % col)
+                sampling_rate = 1 / subject.getTrialTimestep(trial_index)
+                if (len(pose) / sampling_rate * 20) < 62:
+                    print(f'Subject {subject_name} trial {trial_name} has {round(len(pose) / sampling_rate * 20, 1)} s data (less than 3 s), skipping')
+                    continue
+                pose = linear_resample_data(np.array(pose), sampling_rate, 20)
+
+                pose_df = pd.DataFrame(pose, columns=osim_dof_columns)
+                pose_df = convert_addb_state_to_model_input(pose_df, joints_3d)
 
                 pose = torch.tensor(pose_df.values)
-                trial_name = subject.getTrialName(trial_index)
 
                 current_trial = TrialData(pose, model_offsets, probably_missing, trial_name, subject_name)
-
+                # TODO: check smoothness of the trial
                 self.trials.append(current_trial)
-        self.trial_length_probability = torch.tensor([1000 / trial.length for trial in self.trials]).float()
+        total_hour = sum([trial.length for trial in self.trials]) / 20 / 60 / 60
+        total_clip_num = sum([trial.length for trial in self.trials]) / 20 / 3
+        print(f"In total, {len(self.trials)} trials, {total_hour} hours, {total_clip_num} clips")
+        # self.trial_length_probability = torch.tensor([1000 / trial.length for trial in self.trials]).float()
 
 
 class TrialData:
@@ -209,20 +198,21 @@ class TrialData:
 class MotionModel:
     def __init__(
             self,
-            feature_type,
-            checkpoint_path="",
+            opt,
+            repr_dim,
             normalizer=None,
             EMA=True,
             learning_rate=4e-4,
             weight_decay=0.02,
     ):
+        self.opt = opt
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
         self.accelerator = Accelerator(kwargs_handlers=[ddp_kwargs])
         state = AcceleratorState()
         num_processes = state.num_processes
-        use_baseline_feats = feature_type == "baseline"
+        use_baseline_feats = opt.feature_type == "baseline"
 
-        self.repr_dim = repr_dim = 50       # 30 converted opensim DoFs
+        self.repr_dim = repr_dim
 
         feature_dim = 35 if use_baseline_feats else 4800
 
@@ -233,9 +223,9 @@ class MotionModel:
         self.accelerator.wait_for_everyone()
 
         checkpoint = None
-        if checkpoint_path != "":
+        if opt.checkpoint != "":
             checkpoint = torch.load(
-                checkpoint_path, map_location=self.accelerator.device
+                opt.checkpoint, map_location=self.accelerator.device
             )
             self.normalizer = checkpoint["normalizer"]
 
@@ -257,6 +247,7 @@ class MotionModel:
             horizon,
             repr_dim,
             smpl,
+            opt,
             # schedule="cosine",
             n_timestep=1000,
             predict_epsilon=False,          # predict epsilon is usually True for diffusion models right???
@@ -275,7 +266,7 @@ class MotionModel:
         optim = Adan(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         self.optim = self.accelerator.prepare(optim)
 
-        if checkpoint_path != "":
+        if opt.checkpoint != "":
             self.model.load_state_dict(
                 maybe_wrap(
                     checkpoint["ema_state_dict" if EMA else "model_state_dict"],
@@ -312,6 +303,8 @@ class MotionModel:
                 backup_path=opt.processed_data_dir,
                 train=True,
                 force_reload=opt.force_reload,
+                joints_3d=opt.joints_3d,
+                osim_dof_columns=opt.osim_dof_columns,
             )
         # set normalizer
         self.normalizer = train_dataset.normalizer
@@ -324,7 +317,7 @@ class MotionModel:
             train_dataset,
             batch_size=opt.batch_size,
             shuffle=True,
-            # num_workers=min(int(num_cpus * 0.75), 32),            # !!! uncomment this
+            # num_workers=min(int(num_cpus * 0.75), 32),            # causes error on slurm
             pin_memory=True,
             drop_last=True,
         )
@@ -339,7 +332,8 @@ class MotionModel:
         if self.accelerator.is_main_process:
             save_dir = str(increment_path(Path(opt.project) / opt.exp_name))
             opt.exp_name = save_dir.split("/")[-1]
-            wandb.init(project=opt.wandb_pj_name, name=opt.exp_name, dir="wandb_logs")
+            if opt.log_with_wandb:
+                wandb.init(project=opt.wandb_pj_name, name=opt.exp_name, dir="wandb_logs")
             save_dir = Path(save_dir)
             wdir = save_dir / "weights"
             wdir.mkdir(parents=True, exist_ok=True)
@@ -388,8 +382,9 @@ class MotionModel:
                     loss_val_name_pairs = [
                         (avg_loss_simple, 'simple'), (avg_loss_vel, 'vel'), (avg_loss_fk, 'forward kinematics'),
                         (avg_loss_drift, 'drift'), (avg_loss_slide, 'slide')]
-                    log_dict = {name: loss / len(train_data_loader) for loss, name in loss_val_name_pairs}
-                    wandb.log(log_dict)
+                    if opt.log_with_wandb:
+                        log_dict = {name: loss / len(train_data_loader) for loss, name in loss_val_name_pairs}
+                        wandb.log(log_dict)
                     ckpt = {
                         "ema_state_dict": self.diffusion.master_model.state_dict(),
                         "model_state_dict": self.accelerator.unwrap_model(
@@ -399,10 +394,11 @@ class MotionModel:
                         "normalizer": self.normalizer,
                     }
 
-            if epoch % 100 == 0 or epoch == opt.epochs:
+            # if epoch % 100 == 0 or epoch == opt.epochs:
+            if (epoch % 100) == 0:
                 torch.save(ckpt, os.path.join(wdir, f"train-{epoch}.pt"))
                 print(f"[MODEL SAVED at Epoch {epoch}]")
-        if self.accelerator.is_main_process:
+        if self.accelerator.is_main_process and opt.log_with_wandb:
             wandb.run.finish()
 
 
@@ -431,6 +427,7 @@ class GaussianDiffusion(nn.Module):
             horizon,
             repr_dim,
             smpl,
+            opt,
             n_timestep=1000,
             schedule="linear",
             loss_type="l1",
@@ -446,6 +443,7 @@ class GaussianDiffusion(nn.Module):
         self.model = model
         self.ema = EMA(0.9999)
         self.master_model = copy.deepcopy(self.model)
+        self.opt = opt
 
         self.cond_drop_prob = cond_drop_prob
 
@@ -831,7 +829,7 @@ class GaussianDiffusion(nn.Module):
 
         return sample
 
-    def p_losses(self, x, cond, t):           # ?? why named as p_losses?
+    def p_losses(self, x, cond, t):
         x_start, model_offsets = x
         noise = torch.randn_like(x_start)
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
@@ -854,10 +852,10 @@ class GaussianDiffusion(nn.Module):
         loss_vel = loss_vel * extract(self.p2_loss_weight, t, loss_vel.shape)
 
         osim_states_pred = self.normalizer.unnormalize(model_out)
-        osim_states_pred = inverse_convert_addb_state_to_model_input(osim_states_pred)
+        osim_states_pred = inverse_convert_addb_state_to_model_input(osim_states_pred, self.opt.model_states_column_names, self.opt.joints_3d, self.opt.osim_dof_columns)
         foot_locations_pred, joint_locations_pred, segment_orientations_pred = forward_kinematics(osim_states_pred, model_offsets)
         osim_states_true = self.normalizer.unnormalize(target)
-        osim_states_true = inverse_convert_addb_state_to_model_input(osim_states_true)
+        osim_states_true = inverse_convert_addb_state_to_model_input(osim_states_true, self.opt.model_states_column_names, self.opt.joints_3d, self.opt.osim_dof_columns)
         foot_locations_true, joint_locations_true, segment_orientations_true = forward_kinematics(osim_states_true, model_offsets)
 
         loss_fk = self.loss_fn(joint_locations_pred, joint_locations_true, reduction="none")
@@ -877,7 +875,7 @@ class GaussianDiffusion(nn.Module):
         loss_slide = loss_slide * extract(self.p2_loss_weight, t, loss_slide.shape[1:])
 
         losses = (
-            1. * loss_simple.mean(),
+            1. * loss_simple.mean(),         # TODO tune this
             1. * loss_vel.mean(),
             1. * loss_fk.mean(),
             1. * loss_drift.mean(),
@@ -911,6 +909,7 @@ class GaussianDiffusion(nn.Module):
             shape,
             cond,
             normalizer,
+            opt,
             mode="normal",
             noise=None,
             constraint=None,
@@ -938,7 +937,8 @@ class GaussianDiffusion(nn.Module):
             samples = shape
 
         samples = normalizer.unnormalize(samples.detach().cpu())
-        samples = inverse_convert_addb_state_to_model_input(samples)
+        samples = inverse_convert_addb_state_to_model_input(samples, opt.model_states_column_names,
+                                                            opt.joints_3d, opt.osim_dof_columns)
         return samples
 
 

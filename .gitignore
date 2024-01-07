@@ -17,4 +17,4 @@ data/AMASS_agreggated
 data/AMASS_agreggated_sliced
 runs/
 *.pt
-
+.idea/*

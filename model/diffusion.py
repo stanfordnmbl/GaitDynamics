@@ -16,11 +16,12 @@ from tqdm import tqdm
 
 from dataset.quaternion import ax_from_6v, quat_slerp
 from vis import skeleton_render
-
 from .utils import extract, make_beta_schedule
+
 
 def identity(t, *args, **kwargs):
     return t
+
 
 class EMA:
     def __init__(self, beta):
@@ -43,7 +44,7 @@ class EMA:
 class GaussianDiffusion(nn.Module):
     def __init__(
         self,
-        model,
+        model,      # this is a DanceDecoder
         horizon,
         repr_dim,
         smpl,
@@ -147,13 +148,13 @@ class GaussianDiffusion(nn.Module):
             )
         else:
             return noise
-    
+
     def predict_noise_from_start(self, x_t, t, x0):
         return (
             (extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - x0) / \
             extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape)
         )
-    
+
     def model_predictions(self, x, cond, t, weight=None, clip_x_start = False):
         weight = weight if weight is not None else self.guidance_weight
         model_output = self.model.guided_forward(x, cond, t, weight)
@@ -214,7 +215,7 @@ class GaussianDiffusion(nn.Module):
         return x_out, x_start
 
     @torch.no_grad()
-    def p_sample_loop(
+    def p_sample_loop(          # Only used during inference
         self,
         shape,
         cond,
@@ -246,7 +247,7 @@ class GaussianDiffusion(nn.Module):
             return x, diffusion
         else:
             return x
-        
+
     @torch.no_grad()
     def ddim_sample(self, shape, cond, **kwargs):
         batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 1
@@ -280,11 +281,11 @@ class GaussianDiffusion(nn.Module):
                   c * pred_noise + \
                   sigma * noise
         return x
-    
+
     @torch.no_grad()
     def long_ddim_sample(self, shape, cond, **kwargs):
         batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 1
-        
+
         if batch == 1:
             return self.ddim_sample(shape, cond)
 
@@ -295,7 +296,7 @@ class GaussianDiffusion(nn.Module):
 
         x = torch.randn(shape, device = device)
         cond = cond.to(device)
-        
+
         assert batch > 1
         assert x.shape[1] % 2 == 0
         half = x.shape[1] // 2
@@ -304,7 +305,7 @@ class GaussianDiffusion(nn.Module):
 
         for time, time_next, weight in tqdm(time_pairs, desc = 'sampling loop time step'):
             time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
-            pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, weight=weight, clip_x_start = self.clip_denoised) 
+            pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, weight=weight, clip_x_start = self.clip_denoised)
 
             if time_next < 0:
                 x = x_start
@@ -321,7 +322,7 @@ class GaussianDiffusion(nn.Module):
             x = x_start * alpha_next.sqrt() + \
                   c * pred_noise + \
                   sigma * noise
-            
+
             if time > 0:
                 # the first half of each sequence is the second half of the previous one
                 x[1:, :half] = x[:-1, half:]
@@ -409,7 +410,7 @@ class GaussianDiffusion(nn.Module):
             # enforce constraint between each denoising step
             if i > 0:
                 # the first half of each sequence is the second half of the previous one
-                x[1:, :half] = x[:-1, half:] 
+                x[1:, :half] = x[:-1, half:]
 
             if return_diffusion:
                 diffusion.append(x)
@@ -433,7 +434,7 @@ class GaussianDiffusion(nn.Module):
 
     # ------------------------------------------ training ------------------------------------------#
 
-    def q_sample(self, x_start, t, noise=None):
+    def q_sample(self, x_start, t, noise=None):     # blend noise into state variables
         if noise is None:
             noise = torch.randn_like(x_start)
 
@@ -444,7 +445,7 @@ class GaussianDiffusion(nn.Module):
 
         return sample
 
-    def p_losses(self, x_start, cond, t):
+    def p_losses(self, x_start, cond, t):           # ?? why named as p_losses?
         noise = torch.randn_like(x_start)
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
 
@@ -468,60 +469,6 @@ class GaussianDiffusion(nn.Module):
         loss_root = reduce(loss_root, "b ... -> b (...)", "mean")
         loss_root = loss_root * extract(self.p2_loss_weight, t, loss_root.shape)
 
-        # split off contact from the rest
-        # model_contact, model_out = torch.split(
-        #     model_out, (4, model_out.shape[2] - 4), dim=2
-        # )
-        # target_contact, target = torch.split(target, (4, target.shape[2] - 4), dim=2)
-
-        # velocity loss
-        # target_v = target[:, 1:] - target[:, :-1]
-        # model_out_v = model_out[:, 1:] - model_out[:, :-1]
-        # v_loss = self.loss_fn(model_out_v, target_v, reduction="none")
-        # v_loss = reduce(v_loss, "b ... -> b (...)", "mean")
-        # v_loss = v_loss * extract(self.p2_loss_weight, t, v_loss.shape)
-        #
-        # # FK loss
-        # b, s, c = model_out.shape
-        # # unnormalize
-        # # model_out = self.normalizer.unnormalize(model_out)
-        # # target = self.normalizer.unnormalize(target)
-        # # X, Q
-        # model_x = model_out[:, :, :3]
-        # model_q = ax_from_6v(model_out[:, :, 3:].reshape(b, s, -1, 6))
-        # target_x = target[:, :, :3]
-        # target_q = ax_from_6v(target[:, :, 3:].reshape(b, s, -1, 6))
-        #
-        # # perform FK
-        # model_xp = self.smpl.forward(model_q, model_x)
-        # target_xp = self.smpl.forward(target_q, target_x)
-        #
-        # fk_loss = self.loss_fn(model_xp, target_xp, reduction="none")
-        # fk_loss = reduce(fk_loss, "b ... -> b (...)", "mean")
-        # fk_loss = fk_loss * extract(self.p2_loss_weight, t, fk_loss.shape)
-        #
-        # # foot skate loss
-        # foot_idx = [7, 8, 10, 11]
-        #
-        # # find static indices consistent with model's own predictions
-        # static_idx = model_contact > 0.95  # N x S x 4
-        # model_feet = model_xp[:, :, foot_idx]  # foot positions (N, S, 4, 3)
-        # model_foot_v = torch.zeros_like(model_feet)
-        # model_foot_v[:, :-1] = (
-        #     model_feet[:, 1:, :, :] - model_feet[:, :-1, :, :]
-        # )  # (N, S-1, 4, 3)
-        # model_foot_v[~static_idx] = 0
-        # foot_loss = self.loss_fn(
-        #     model_foot_v, torch.zeros_like(model_foot_v), reduction="none"
-        # )
-        # foot_loss = reduce(foot_loss, "b ... -> b (...)", "mean")
-
-        # losses = (
-        #     0.636 * loss.mean(),
-        #     2.964 * v_loss.mean(),
-        #     0.646 * fk_loss.mean(),
-        #     10.942 * foot_loss.mean(),
-        # )
         losses = (
             0.636 * loss.mean(),
             1.000 * loss_root.mean(),
@@ -685,11 +632,6 @@ class GaussianDiffusion(nn.Module):
             return
 
         poses = self.smpl.forward(q, pos).detach().cpu().numpy()
-        # sample_contact = (
-        #     sample_contact.detach().cpu().numpy()
-        #     if sample_contact is not None
-        #     else None
-        # )
 
         def inner(xx):
             num, pose = xx

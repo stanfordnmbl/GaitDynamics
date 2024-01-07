@@ -201,7 +201,7 @@ class EDGE:
             avg_fkloss = 0
             avg_footloss = 0
             # train
-            self.train()
+            self.train()            # switch to train mode.
             # for step, (x, cond, filename, wavnames) in enumerate(
             #     load_loop(train_data_loader)
             # ):
@@ -302,7 +302,7 @@ class EDGE:
         if self.accelerator.is_main_process:
             wandb.run.finish()
 
-    def render_sample(
+    def render_sample(          # This is inference
         self, data_tuple, label, render_dir, render_count=-1, fk_out=None, render=True
     ):
         _, cond, wavname = data_tuple

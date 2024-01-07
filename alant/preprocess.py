@@ -3,7 +3,7 @@ import os
 import re
 from pathlib import Path
 import torch
-from scaler import StandardScaler, MinMaxScaler
+from alant.scaler import StandardScaler, MinMaxScaler
 
 
 def increment_path(path, exist_ok=False, sep="", mkdir=False):

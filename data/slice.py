@@ -65,11 +65,11 @@ def slice_and_process_motion(joint_orientations, root_translation, frame_rate, t
         pose[:,0] = pose[:,0].clone() - pose[0,0].clone()
         pose[:,1] = pose[:,1].clone() - pose[0,1].clone()
 
-
-        torch.save(pose, f"{out_dir}/{file_name}_slice{slice_count}.pt")
+        torch.save(pose, f"{out_dir}/{file_name}_slice{slice_count}.pt")        # save train/test data
         start_idx += stride_step
         slice_count += 1
     return slice_count
+
 
 def slice_AMASS(motion_dir, stride=1, length=3, target_frame_rate=20):
     """

@@ -1,0 +1,5 @@
+{
+  "batch_size": 32,
+  "b3d_path": "/mnt/d/Local/Data/MotionPriorData/train/"
+}
+

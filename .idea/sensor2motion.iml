@@ -1,8 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <module type="PYTHON_MODULE" version="4">
   <component name="NewModuleRootManager">
-    <content url="file://$MODULE_DIR$" />
-    <orderEntry type="jdk" jdkName="sensor2motion" jdkType="Python SDK" />
+    <content url="file://$MODULE_DIR$">
+      <excludeFolder url="file://$MODULE_DIR$/alant/dataset_backups" />
+      <excludeFolder url="file://$MODULE_DIR$/alant/runs" />
+      <excludeFolder url="file://$MODULE_DIR$/alant/runs/train" />
+      <excludeFolder url="file://$MODULE_DIR$/alant/wandb_logs" />
+      <excludeFolder url="file://$MODULE_DIR$/alant/renders" />
+      <excludeFolder url="file://$MODULE_DIR$/trained_models" />
+    </content>
+    <orderEntry type="jdk" jdkName="Python 3.8.10 WSL (Ubuntu-20.04): (/usr/bin/python3)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
   <component name="PyDocumentationSettings">

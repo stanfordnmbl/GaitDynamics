@@ -1,10 +1,24 @@
 import math
-
 import numpy as np
 import torch
-from einops import rearrange, reduce, repeat
-from einops.layers.torch import Rearrange
 from torch import nn
+from scipy.interpolate import interp1d
+import scipy.interpolate as interpo
+
+
+def linear_resample_data(trial_data, original_fre, target_fre):
+    x, step = np.linspace(0., 1., trial_data.shape[0], retstep=True)
+    new_x = np.arange(0., 1., step*original_fre/target_fre)
+    f = interp1d(x, trial_data, axis=0)
+    trial_data_resampled = f(new_x)
+    return trial_data_resampled
+
+
+def resample_via_spline_fitting(data_, step_to_resample):
+    tck, step = interpo.splprep(data_[:, :].T, u=data_[:, 0], s=0)
+    data_resampled = interpo.splev(step_to_resample, tck, der=0)
+    data_resampled = np.column_stack(data_resampled)
+    return data_resampled
 
 
 # absolute positional embedding used for vanilla transformer sequential data
