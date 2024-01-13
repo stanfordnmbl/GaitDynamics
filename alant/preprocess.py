@@ -26,7 +26,8 @@ def increment_path(path, exist_ok=False, sep="", mkdir=False):
 class Normalizer:
     def __init__(self, data):
         flat = data.reshape(-1, data.shape[-1])
-        self.scaler = MinMaxScaler((-1, 1), clip=True)
+        self.norm_cap = 10
+        self.scaler = MinMaxScaler((-self.norm_cap, self.norm_cap), clip=False)
         self.scaler.fit(flat)
 
     def normalize(self, x):
@@ -37,7 +38,7 @@ class Normalizer:
     def unnormalize(self, x):
         batch, seq, ch = x.shape
         x = x.reshape(-1, ch)
-        x = torch.clip(x, -1, 1)  # clip to force compatibility
+        x = torch.clip(x, -self.norm_cap, self.norm_cap)  # clip to force compatibility
         return self.scaler.inverse_transform(x).reshape((batch, seq, ch))
 
 

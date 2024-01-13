@@ -1,6 +1,6 @@
 from alant.args import parse_train_opt, set_with_arm_opt
 import torch
-from alant.alan_model import MotionModel
+from model.alan_model import MotionModel
 import nimblephysics as nimble
 from nimblephysics import NimbleGUI
 import time

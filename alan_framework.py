@@ -1,5 +1,5 @@
 from alant.args import parse_train_opt
-from alant.alan_model import MotionModel
+from model.alan_model import MotionModel
 
 
 def train(opt):

@@ -9,7 +9,8 @@ def parse_train_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument("--with_arm", type=bool, default=False, help="whether osim model has arm DoFs")
     parser.add_argument("--log_with_wandb", type=bool, default=True, help="log with wandb")
-    parser.add_argument("--epochs", type=int, default=1000)
+    parser.add_argument("--epochs", type=int, default=300)        # [!]
+    parser.add_argument("--target_sampling_rate", type=int, default=60)        # [!]
 
     parser.add_argument("--project", default="runs/train", help="project/name")
     parser.add_argument("--exp_name", default="exp", help="save to project/name")
@@ -61,6 +62,7 @@ def set_with_arm_opt(opt, with_arm):
         opt.with_arm = False
         opt.osim_dof_columns = OSIM_DOF_ALL[:23]
         opt.joints_3d = {key_: value_ for key_, value_ in JOINTS_3D_ALL.items() if key_ in ['pelvis', 'hip_r', 'hip_l']}
+        # opt.data_path = opt.data_path_parent + '/for_check/'       # !!!
         opt.data_path = opt.data_path_parent + '/b3d_no_arm/'
         opt.model_states_column_names = MODEL_STATES_COLUMN_NAMES_NO_ARM
 

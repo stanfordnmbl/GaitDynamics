@@ -14,6 +14,14 @@ def linear_resample_data(trial_data, original_fre, target_fre):
     return trial_data_resampled
 
 
+def update_d_dd(q, dt):
+    dq = np.zeros(q.shape)
+    dq[1:] = (q[1:] - q[:-1]) / dt
+    ddq = np.zeros(q.shape)
+    ddq[1:-1] = (q[2:] - 2 * q[1:-1] + q[:-2]) / (dt * dt)
+    return dq, ddq
+
+
 def resample_via_spline_fitting(data_, step_to_resample):
     tck, step = interpo.splprep(data_[:, :].T, u=data_[:, 0], s=0)
     data_resampled = interpo.splev(step_to_resample, tck, der=0)

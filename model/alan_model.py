@@ -19,7 +19,7 @@ import pickle
 import torch
 import copy
 import torch.nn as nn
-from model.utils import extract, make_beta_schedule, linear_resample_data
+from model.utils import extract, make_beta_schedule, linear_resample_data, update_d_dd
 from typing import Any, List
 import nimblephysics as nimble
 from alant.alan_consts import *
@@ -87,52 +87,105 @@ class MotionDataset(Dataset):
     def __init__(
             self,
             data_path: str,
-            backup_path: str,
             train: bool,
             joints_3d: dict,
             osim_dof_columns: List[str],
+            target_sampling_rate,
+            augment_4_moving_directions: bool = False,
             normalizer: Any = None,
-            force_reload: bool = False,
+            trial_start_num = 0,
+            max_trial_num = None
     ):
         self.data_path = data_path
-        self.raw_fps = 120
-        self.data_fps = 30
-        assert self.data_fps <= self.raw_fps
-        self.data_stride = self.raw_fps // self.data_fps
+        self.trial_start_num = trial_start_num
+        self.target_sampling_rate = target_sampling_rate
+        self.window_len = int(target_sampling_rate * 1.5)     # 1.5 seconds for each window
 
         self.train = train
         self.name = "Train" if self.train else "Test"
 
-        self.normalizer = normalizer
+        self.dset_set = set()
 
-        pickle_name = "processed_train_data.pkl" if train else "processed_test_data.pkl"
-
-        backup_path = Path(backup_path)
-        # save normalizer
-        if not train:
-            pickle.dump(
-                normalizer, open(os.path.join(backup_path, "normalizer.pkl"), "wb")
-            )
         print("Loading dataset...")
-        self.load_addb(joints_3d, osim_dof_columns)  # Call this last
+        self.load_addb(joints_3d, osim_dof_columns, max_trial_num)  # Call this last
+
         self.trial_num = len(self.trials)
-        data_concat = torch.cat([self[0][0] for _ in range(1000)], dim=0)      # [!] randomly get 1000 samples for normalization
-        print("normalizing training data")
-        self.normalizer = Normalizer(data_concat)
+        total_hour = sum([trial.length for trial in self.trials]) / self.target_sampling_rate / 60 / 60
+        total_clip_num = sum([trial.length for trial in self.trials]) / self.target_sampling_rate / 3
+        print(f"In total, {self.trial_num} trials, {total_hour} hours, {total_clip_num} clips not considering overlapping")
+
+        # [!] randomly get 10000 samples for normalization
+        if train:
+            data_concat = torch.cat([self[0][0] for _ in range(10000)], dim=0)      # [!] randomly get 10000 samples for normalization
+            print("normalizing training data")
+            self.normalizer = Normalizer(data_concat)
+
+            # # [debug] check data continuity
+            # import matplotlib.pyplot as plt
+            # for trial in self.trials:
+            #     plt.figure()
+            #     # plt.plot(trial.converted_pose[:, 8])
+            #     # plt.plot(trial.converted_pose[:, 6])
+            #     plt.plot(np.abs(trial.converted_pose[1:, 8] - trial.converted_pose[:-1, 8]))
+            #     plt.plot(np.abs(trial.converted_pose[1:, 6] - trial.converted_pose[:-1, 6]))
+            # plt.show()
+            #
+            # sub_and_trial_names, dset_names = self.get_attributes_of_trials()
+            #
+            # num_of_sample_to_check = 100
+            # sampled_data = [self[0] for _ in range(num_of_sample_to_check)]
+            #
+            # data_concat_check = [item_[0] for item_ in sampled_data]
+            # sub_and_trial_names_data_concat = [item_[2] for item_ in sampled_data]
+            # data_concat_check = torch.cat(data_concat_check, dim=0)
+            #
+            # # data_concat_check = self.normalizer.normalize(data_concat_check)
+            # data_concat_check = data_concat_check.reshape([num_of_sample_to_check, -1, 30])
+            # values = (data_concat_check[:, 1:] - data_concat_check[:, :-1]).abs()
+            # print('{:.3f}'.format(values.mean()), end=' +- ')
+            # print('{:.3f}'.format(values.std()))
+            # print('{:.3f}'.format(values.max()))
+            #
+            # # print('{:.3f}'.format(values[:, :, 14].max()))
+            #
+            # values_np = values.cpu().numpy()
+            #
+            # max_index = np.where(values_np > values_np.max() - 0.1)
+            # print(max_index)
+            #
+            #
+            # for x, y, z in zip(max_index[0], max_index[1], max_index[2]):
+            #     print(np.array(sub_and_trial_names)[np.array(sub_and_trial_names_data_concat)[x]])
+            #     if y > 0:
+            #         print('{:.3f}'.format(data_concat_check[x, y-1, z]), end=' ')
+            #     print('{:.3f}'.format(data_concat_check[x, y, z]), end=' ')
+            #     if y < 59:
+            #         print('{:.3f}'.format(data_concat_check[x, y+1, z]))
+            #     pass
+            # exit()
+
+        else:
+            self.normalizer = normalizer
         for i in range(self.trial_num):
             self.trials[i].converted_pose = torch.tensor(self.normalizer.normalize(self.trials[i].converted_pose)).float().detach()
 
     def __len__(self):
-        return 20000        # [!] This num affects # of iterations in each epoch
+        return 100000        # [!] This num affects # of iterations in each epoch, use 100000
 
-    def __getitem__(self, idx):
-        # idx_ = torch.multinomial(self.trial_length_probability, 1).item()
-        idx_ = torch.randint(0, self.trial_num, (1,)).item()        # a random trial regardless of its length
-        trial_length = self.trials[idx_].length
-        slice_index = torch.randint(0, trial_length - 61, (1,)).item()
-        return self.trials[idx_].converted_pose[slice_index:slice_index+60, ...], self.trials[idx_].model_offsets
+    def __getitem__(self, _):
+        i_trial = torch.randint(0, self.trial_num, (1,)).item()        # a random trial regardless of its length
+        trial_length = self.trials[i_trial].length
+        slice_index = torch.randint(0, trial_length - self.window_len+1, (1,)).item()
+        return (self.trials[i_trial].converted_pose[slice_index:slice_index+self.window_len, ...],
+                self.trials[i_trial].model_offsets, i_trial)
 
-    def load_addb(self, joints_3d, osim_dof_columns):
+    def get_attributes_of_trials(self):
+        attributes = [trial.get_attributes() for trial in self.trials]
+        sub_and_trial_names = [attribute['sub_and_trial_name'] for attribute in attributes]
+        dset_names = [attribute['dset_name'] for attribute in attributes]
+        return sub_and_trial_names, dset_names
+
+    def load_addb(self, joints_3d, osim_dof_columns, max_trial_num):
         subject_paths = []
         if os.path.isdir(self.data_path):
             for root, dirs, files in os.walk(self.data_path):
@@ -148,9 +201,12 @@ class MotionDataset(Dataset):
             skel = subject.readSkel(0, geometryFolder=os.path.dirname(os.path.realpath(__file__)) + "/../../data/Geometry/")
             model_offsets = get_model_offsets(skel).float()
             subject_name = subject_path.split('/')[-1].split('.')[0]
+            dset_name = subject_path.split('/')[-3]
+            if dset_name == '':
+                dset_name = subject_name.split('_')[0]
 
-            for trial_index in range(subject.getNumTrials()):
-                trial_name = subject.getTrialName(trial_index)
+            for trial_index in range(self.trial_start_num, subject.getNumTrials()):
+                sub_and_trial_name = subject_name + '_' + subject.getTrialName(trial_index)
                 trial_length = subject.getTrialLength(trial_index)
                 probably_missing: List[bool] = [reason != nimble.biomechanics.MissingGRFReason.notMissingGRF for reason
                                                 in subject.getMissingGRF(trial_index)]
@@ -166,33 +222,87 @@ class MotionDataset(Dataset):
                 pose = [frame.pos for frame in first_passes]
 
                 sampling_rate = 1 / subject.getTrialTimestep(trial_index)
-                if (len(pose) / sampling_rate * 20) < 62:
-                    print(f'Subject {subject_name} trial {trial_name} has {round(len(pose) / sampling_rate * 20, 1)} s data (less than 3 s), skipping')
+                if (len(pose) / sampling_rate * self.target_sampling_rate) < self.window_len + 2:
+                    # print(f'Subject {subject_name} trial {sub_and_trial_name} has {round(len(pose) / sampling_rate, 1)} s data (less than 3 s), skipping')
                     continue
-                pose = linear_resample_data(np.array(pose), sampling_rate, 20)
+                pose = linear_resample_data(np.array(pose), sampling_rate, self.target_sampling_rate)
 
                 pose_df = pd.DataFrame(pose, columns=osim_dof_columns)
                 pose_df = convert_addb_state_to_model_input(pose_df, joints_3d)
+                converted_column_names = list(pose_df.columns)
 
                 pose = torch.tensor(pose_df.values)
 
-                current_trial = TrialData(pose, model_offsets, probably_missing, trial_name, subject_name)
-                # TODO: check smoothness of the trial
-                self.trials.append(current_trial)
-        total_hour = sum([trial.length for trial in self.trials]) / 20 / 60 / 60
-        total_clip_num = sum([trial.length for trial in self.trials]) / 20 / 3
-        print(f"In total, {len(self.trials)} trials, {total_hour} hours, {total_clip_num} clips")
+                current_trial = TrialData(pose, model_offsets, probably_missing, sub_and_trial_name, dset_name)
+                divide_jittery = True
+                if divide_jittery:
+                    current_trials = self.divide_jittery_trials(current_trial, converted_column_names)
+                    for trial_ in current_trials:
+                        self.trials.append(trial_)
+                        self.dset_set.add(dset_name)
+                else:
+                    self.trials.append(current_trial)
+                    self.dset_set.add(dset_name)
+
+                if max_trial_num is not None and len(self.trials) >= max_trial_num:
+                    return
         # self.trial_length_probability = torch.tensor([1000 / trial.length for trial in self.trials]).float()
+
+    def divide_jittery_trials(self, current_trial, converted_column_names):
+        """ If one sample have abnormal acceleration or angular velocity, divide the trial into two from this sample."""
+        linear_acc_limit = 320          # 320 m/s^2
+        angular_v_limit = np.deg2rad(2000)          # 2000 deg/s
+        rot_mat_angular_v_limit = angular_v_limit               # use the same limit because sin(x) ~= x for small x
+
+        pos_col = [col for col in converted_column_names if '_tx' in col or '_ty' in col or '_tz' in col]
+        pos_col_loc = [converted_column_names.index(col) for col in pos_col]
+        rot_mat_col = [col for col in converted_column_names if '_0' in col or '_1' in col or '_2' in col or '_3'
+                       in col or '_4' in col or '_5' in col]
+        rot_mat_col_loc = [converted_column_names.index(col) for col in rot_mat_col]
+        euler_angle_col = [col for col in converted_column_names if (col not in pos_col and col not in rot_mat_col)]
+        euler_angle_col_loc = [converted_column_names.index(col) for col in euler_angle_col]
+
+        vel, acc = update_d_dd(current_trial.converted_pose, 1 / self.target_sampling_rate)
+        pos_break_point = np.where(acc[:, pos_col_loc] > linear_acc_limit)[0]
+        euler_angle_break_point = np.where(vel[:, euler_angle_col_loc] > angular_v_limit)[0]
+        rot_mat_break_point = np.where(vel[:, rot_mat_col_loc] > rot_mat_angular_v_limit)[0]
+        break_point_list = list(set(np.concatenate([pos_break_point, euler_angle_break_point, rot_mat_break_point]).flatten()))
+        break_point_list.sort()
+
+        if len(break_point_list) > 0:
+            trial_data_list = []
+            break_point_list = [0] + break_point_list + [current_trial.length]
+            for i_clip in range(len(break_point_list) - 1):
+                start_, end_ = break_point_list[i_clip] + 2, break_point_list[i_clip+1] - 2
+                if end_ - start_ < self.window_len:
+                    continue
+                trial_data_list.append(
+                    TrialData(current_trial.converted_pose[start_:end_],
+                              current_trial.model_offsets,
+                              current_trial.probably_missing_grf[start_:end_],
+                              current_trial.sub_and_trial_name,
+                              current_trial.dset_name)
+                )
+
+            print('Divided {} {} into {} trials, {} due to linear acc, {} due to euler angle vel, {} due to rot mat vel'.format(
+                current_trial.dset_name, current_trial.sub_and_trial_name,
+                len(trial_data_list), len(pos_break_point), len(euler_angle_break_point), len(rot_mat_break_point)))
+            return trial_data_list
+        else:
+            return [current_trial]
 
 
 class TrialData:
-    def __init__(self, converted_pose, model_offsets, probably_missing_grf, trial_name, subject_name):
+    def __init__(self, converted_pose, model_offsets, probably_missing_grf, sub_and_trial_name, dset_name):
         self.converted_pose = converted_pose
         self.model_offsets = model_offsets
         self.probably_missing_grf = probably_missing_grf
-        self.trial_name = trial_name
-        self.subject_name = subject_name
+        self.sub_and_trial_name = sub_and_trial_name
+        self.dset_name = dset_name
         self.length = converted_pose.shape[0]
+
+    def get_attributes(self):
+        return {'sub_and_trial_name': self.sub_and_trial_name, 'dset_name': self.dset_name}
 
 
 class MotionModel:
@@ -215,10 +325,7 @@ class MotionModel:
         self.repr_dim = repr_dim
 
         feature_dim = 35 if use_baseline_feats else 4800
-
-        horizon_seconds = 3
-        FPS = 20
-        self.horizon = horizon = horizon_seconds * FPS
+        self.horizon = horizon = 90     # [!] sampling rate * win size in seconds
 
         self.accelerator.wait_for_everyone()
 
@@ -284,28 +391,15 @@ class MotionModel:
         return self.accelerator.prepare(*objects)
 
     def train_loop(self, opt):
-        # load datasets
-        train_tensor_dataset_path = os.path.join(
-            opt.processed_data_dir, f"train_tensor_dataset.pkl"
+        if opt.log_with_wandb:
+            wandb.init(project=opt.wandb_pj_name, name=opt.exp_name, dir="wandb_logs")
+        train_dataset = MotionDataset(
+            data_path=opt.data_path,
+            train=True,
+            target_sampling_rate=opt.target_sampling_rate,
+            joints_3d=opt.joints_3d,
+            osim_dof_columns=opt.osim_dof_columns,
         )
-        test_tensor_dataset_path = os.path.join(
-            opt.processed_data_dir, f"test_tensor_dataset.pkl"
-        )
-        if (
-                not opt.no_cache
-                and os.path.isfile(train_tensor_dataset_path)
-                and os.path.isfile(test_tensor_dataset_path)
-        ):
-            train_dataset = pickle.load(open(train_tensor_dataset_path, "rb"))
-        else:
-            train_dataset = MotionDataset(
-                data_path=opt.data_path,
-                backup_path=opt.processed_data_dir,
-                train=True,
-                force_reload=opt.force_reload,
-                joints_3d=opt.joints_3d,
-                osim_dof_columns=opt.osim_dof_columns,
-            )
         # set normalizer
         self.normalizer = train_dataset.normalizer
         self.diffusion.set_normalizer(self.normalizer)
@@ -325,19 +419,18 @@ class MotionModel:
         train_data_loader = self.accelerator.prepare(train_data_loader)
         # boot up multi-gpu training. test dataloader is only on main process
         load_loop = (
-            partial(tqdm, position=1, desc="Batch")
+            partial(tqdm, position=1, desc="Batch")     # , miniters=int(223265/100)
             if self.accelerator.is_main_process
             else lambda x: x
         )
         if self.accelerator.is_main_process:
             save_dir = str(increment_path(Path(opt.project) / opt.exp_name))
             opt.exp_name = save_dir.split("/")[-1]
-            if opt.log_with_wandb:
-                wandb.init(project=opt.wandb_pj_name, name=opt.exp_name, dir="wandb_logs")
             save_dir = Path(save_dir)
             wdir = save_dir / "weights"
             wdir.mkdir(parents=True, exist_ok=True)
 
+        sub_and_trial_names, dset_names = train_dataset.get_attributes_of_trials()
         self.accelerator.wait_for_everyone()
         for epoch in range(1, opt.epochs + 1):
             print(f'epoch: {epoch} / {opt.epochs}')
@@ -346,45 +439,42 @@ class MotionModel:
             avg_loss_fk = 0
             avg_loss_drift = 0
             avg_loss_slide = 0
+
+            joint_loss = np.zeros([opt.model_states_column_names.__len__()])
+            dataset_loss_record = np.zeros([train_dataset.trial_num])
+
             # train
             self.train()            # switch to train mode.
 
-            for step, x in enumerate(
-                    load_loop(train_data_loader)
-            ):
-                total_loss, losses = self.diffusion(
-                    x, None, t_override=None
-                )
+            for step, x in enumerate(load_loop(train_data_loader)):
+                total_loss, losses = self.diffusion(x, None, t_override=None)
                 self.optim.zero_grad()
                 self.accelerator.backward(total_loss)
 
                 self.optim.step()
 
-                # ema update and train loss update only on main
-                if self.accelerator.is_main_process:
-                    avg_loss_simple += losses[0].detach().cpu().numpy()
-                    avg_loss_vel += losses[1].detach().cpu().numpy()
-                    avg_loss_fk += losses[2].detach().cpu().numpy()
-                    avg_loss_drift += losses[3].detach().cpu().numpy()
-                    avg_loss_slide += losses[4].detach().cpu().numpy()
-                    if step % opt.ema_interval == 0:
-                        self.diffusion.ema.update_model_average(
-                            self.diffusion.master_model, self.diffusion.model
-                        )
+                if opt.log_with_wandb:
+                    # ema update and train loss update only on main
+                    if self.accelerator.is_main_process:
+                        avg_loss_simple += losses[0].detach().cpu().numpy()
+                        avg_loss_vel += losses[1].detach().cpu().numpy()
+                        avg_loss_fk += losses[2].detach().cpu().numpy()
+                        avg_loss_drift += losses[3].detach().cpu().numpy()
+                        avg_loss_slide += losses[4].detach().cpu().numpy()
+
+                        joint_loss += losses[5].detach().mean(axis=0).mean(axis=0).cpu().numpy()
+                        dataset_loss_record[x[2].cpu()] += losses[5].detach().mean(axis=1).mean(axis=1).cpu().numpy()
+
+                        if step % opt.ema_interval == 0:
+                            self.diffusion.ema.update_model_average(self.diffusion.master_model, self.diffusion.model)
 
             self.accelerator.wait_for_everyone()
 
-            if (epoch % 1) == 0:
+            if epoch > 2:       # [!]
                 self.accelerator.wait_for_everyone()
                 # save only if on main thread
                 if self.accelerator.is_main_process:
                     self.eval()
-                    loss_val_name_pairs = [
-                        (avg_loss_simple, 'simple'), (avg_loss_vel, 'vel'), (avg_loss_fk, 'forward kinematics'),
-                        (avg_loss_drift, 'drift'), (avg_loss_slide, 'slide')]
-                    if opt.log_with_wandb:
-                        log_dict = {name: loss / len(train_data_loader) for loss, name in loss_val_name_pairs}
-                        wandb.log(log_dict)
                     ckpt = {
                         "ema_state_dict": self.diffusion.master_model.state_dict(),
                         "model_state_dict": self.accelerator.unwrap_model(
@@ -393,9 +483,28 @@ class MotionModel:
                         "optimizer_state_dict": self.optim.state_dict(),
                         "normalizer": self.normalizer,
                     }
+                    if opt.log_with_wandb:
+                        loss_val_name_pairs_terms = [
+                            (avg_loss_simple / len(train_data_loader), 'simple'), (avg_loss_vel / len(train_data_loader), 'vel'),
+                            (avg_loss_fk / len(train_data_loader), 'forward kinematics'), (avg_loss_drift / len(train_data_loader), 'drift'),
+                            (avg_loss_slide / len(train_data_loader), 'slide')]
+
+                        loss_val_name_pairs_joints = [(loss_, joint_) for joint_, loss_ in zip(opt.model_states_column_names, joint_loss)]
+
+                        loss_dset = {dset: [0, 0] for dset in train_dataset.dset_set}
+                        for dset_name, trial_loss in zip(dset_names, dataset_loss_record):
+                            if trial_loss == 0:
+                                continue        # if 0, then the trial is not used for training, thus skipping
+                            loss_dset[dset_name] = [loss_dset[dset_name][0] + trial_loss, loss_dset[dset_name][1] + 1]
+
+                        loss_val_name_pairs_dset = [(loss_count[0] / loss_count[1], dset_name)
+                                                    for dset_name, loss_count in loss_dset.items()]
+
+                        log_dict = {name: loss for loss, name in loss_val_name_pairs_dset + loss_val_name_pairs_joints + loss_val_name_pairs_terms}
+                        wandb.log(log_dict)
 
             # if epoch % 100 == 0 or epoch == opt.epochs:
-            if (epoch % 100) == 0:
+            if (epoch % 50) == 0:
                 torch.save(ckpt, os.path.join(wdir, f"train-{epoch}.pt"))
                 print(f"[MODEL SAVED at Epoch {epoch}]")
         if self.accelerator.is_main_process and opt.log_with_wandb:
@@ -830,7 +939,7 @@ class GaussianDiffusion(nn.Module):
         return sample
 
     def p_losses(self, x, cond, t):
-        x_start, model_offsets = x
+        x_start, model_offsets, _ = x
         noise = torch.randn_like(x_start)
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
 
@@ -874,15 +983,14 @@ class GaussianDiffusion(nn.Module):
         loss_slide = self.loss_fn(foot_vel_pred, foot_vel_pred * 0, reduction="none")
         loss_slide = loss_slide * extract(self.p2_loss_weight, t, loss_slide.shape[1:])
 
-        losses = (
+        losses = [
             1. * loss_simple.mean(),         # TODO tune this
             1. * loss_vel.mean(),
             1. * loss_fk.mean(),
             1. * loss_drift.mean(),
             # 1. * loss_floor_penetration.mean(),
-            100. * loss_slide.mean(),
-        )
-        return sum(losses), losses
+            100. * loss_slide.mean()]
+        return sum(losses), losses + [loss_simple]
 
     def loss(self, x, cond, t_override=None):
         batch_size = len(x[0])
