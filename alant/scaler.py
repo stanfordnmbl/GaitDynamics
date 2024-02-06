@@ -23,7 +23,7 @@ class StandardScaler:
         "clip": ["boolean"],
     }
 
-    def __init__(self, _, clip=False, copy=True):
+    def __init__(self, copy=True):
         self.copy = copy
 
     def _reset(self):
@@ -72,7 +72,7 @@ class MinMaxScaler:
         "clip": ["boolean"],
     }
 
-    def __init__(self, feature_range=(0, 1), *, copy=True, clip=True):
+    def __init__(self, feature_range=(-1, 1), *, copy=True, clip=True):
         self.feature_range = feature_range
         self.copy = copy
         self.clip = clip
@@ -122,11 +122,9 @@ class MinMaxScaler:
     def transform(self, X):
         X *= self.scale_.to(X.device)
         X += self.min_.to(X.device)
-        if self.clip:
-            torch.clip(X, self.feature_range[0], self.feature_range[1], out=X)
         return X
 
     def inverse_transform(self, X):
-        X -= self.min_[-X.shape[1] :].to(X.device)
-        X /= self.scale_[-X.shape[1] :].to(X.device)
+        X -= self.min_.to(X.device)
+        X /= self.scale_.to(X.device)
         return X

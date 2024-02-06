@@ -1,5 +1,6 @@
 {
   "batch_size": 32,
-  "b3d_path": "/mnt/d/Local/Data/MotionPriorData/train/"
+  "pseudo_dataset_len": 100,
+  "b3d_path": "/mnt/d/Local/Data/MotionPriorData/"
 }
 

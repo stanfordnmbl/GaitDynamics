@@ -1,3 +1,4 @@
+import math
 import numpy as np
 import pandas as pd
 import multiprocessing
@@ -15,7 +16,6 @@ from model.adan import Adan
 from model.dance_decoder import DanceDecoder
 from alant.vis import SMPLSkeleton
 import os
-import pickle
 import torch
 import copy
 import torch.nn as nn
@@ -23,8 +23,11 @@ from model.utils import extract, make_beta_schedule, linear_resample_data, updat
 from typing import Any, List
 import nimblephysics as nimble
 from alant.alan_consts import *
-from alant.quaternion import euler_from_6v, euler_to_6v
+from alant.quaternion import euler_from_6v, euler_to_6v, rotation_6d_to_matrix, matrix_to_rotation_6d
 from alant.alan_osim_fk import get_model_offsets, get_knee_rotation_coefficients, forward_kinematics
+from nimblephysics import NimbleGUI
+import time
+import more_itertools as mit
 
 
 def convert_addb_state_to_model_input(pose_df, joints_3d):
@@ -35,7 +38,8 @@ def convert_addb_state_to_model_input(pose_df, joints_3d):
 
     # remove frozen dof
     for frozen_col in FROZEN_DOFS:
-        pose_df = pose_df.drop(frozen_col, axis=1)
+        if frozen_col in pose_df.columns:
+            pose_df = pose_df.drop(frozen_col, axis=1)
 
     # convert euler to 6v
     for joint_name, joints_with_3_dof in joints_3d.items():
@@ -45,9 +49,6 @@ def convert_addb_state_to_model_input(pose_df, joints_3d):
         for i in range(6):
             pose_df[joint_name + '_' + str(i)] = joint_6v[:, i]
 
-    # TODO: Might need to check if 1D joints are continuous
-    # <!--Orientation of the joint in the parent body specified in the parent reference frame.
-    # Euler XYZ body-fixed rotation angles are used to express the orientation. Default is (0,0,0).-->
     return pose_df
 
 
@@ -89,17 +90,23 @@ class MotionDataset(Dataset):
             data_path: str,
             train: bool,
             joints_3d: dict,
-            osim_dof_columns: List[str],
             target_sampling_rate,
-            augment_4_moving_directions: bool = False,
+            opt,
+            reset_moving_direction_flag: bool = True,
             normalizer: Any = None,
-            trial_start_num = 0,
-            max_trial_num = None
+            trial_start_num=0,
+            max_trial_num=None,
+            divide_jittery=True,
+            specific_dset=None
     ):
         self.data_path = data_path
         self.trial_start_num = trial_start_num
         self.target_sampling_rate = target_sampling_rate
         self.window_len = int(target_sampling_rate * 1.5)     # 1.5 seconds for each window
+        self.reset_moving_direction_flag = reset_moving_direction_flag
+        self.opt = opt
+        self.divide_jittery = divide_jittery
+        self.specific_dset = specific_dset
 
         self.train = train
         self.name = "Train" if self.train else "Test"
@@ -107,20 +114,26 @@ class MotionDataset(Dataset):
         self.dset_set = set()
 
         print("Loading dataset...")
-        self.load_addb(joints_3d, osim_dof_columns, max_trial_num)  # Call this last
+        self.load_addb(joints_3d, opt, max_trial_num)
+
+        # self.visualize_loaded(opt, self.trials)       # !!!
 
         self.trial_num = len(self.trials)
         total_hour = sum([trial.length for trial in self.trials]) / self.target_sampling_rate / 60 / 60
         total_clip_num = sum([trial.length for trial in self.trials]) / self.target_sampling_rate / 3
         print(f"In total, {self.trial_num} trials, {total_hour} hours, {total_clip_num} clips not considering overlapping")
 
-        # [!] randomly get 10000 samples for normalization
         if train:
-            data_concat = torch.cat([self[0][0] for _ in range(10000)], dim=0)      # [!] randomly get 10000 samples for normalization
+            data_concat = torch.cat([trial_.converted_pose for trial_ in self.trials], dim=0)
             print("normalizing training data")
-            self.normalizer = Normalizer(data_concat)
 
-            # # [debug] check data continuity
+            # non_6v_col_loc = [i for i, col in enumerate(opt.model_states_column_names) if
+            #                   'force' in col or 'pelvis_t' in col or 'knee' in col or 'ankle' in col]
+            # self.normalizer = Normalizer(data_concat, non_6v_col_loc)
+
+            self.normalizer = Normalizer(data_concat, range(data_concat.shape[1]))            # Norm center and force
+
+            # # [debug] check data continuity    # TODO: Might need to check if 1D joints are continuous
             # import matplotlib.pyplot as plt
             # for trial in self.trials:
             #     plt.figure()
@@ -169,15 +182,191 @@ class MotionDataset(Dataset):
         for i in range(self.trial_num):
             self.trials[i].converted_pose = torch.tensor(self.normalizer.normalize(self.trials[i].converted_pose)).float().detach()
 
+        # # [debug]
+        # data_concat = torch.cat([trial_.converted_pose for trial_ in self.trials], dim=0)
+        # for i_col, col_name in enumerate(opt.model_states_column_names):
+        #     print(f'{col_name}, mean: {data_concat[:, i_col].mean()}, std: {data_concat[:, i_col].std()},'
+        #           f' max: {data_concat[:, i_col].max()}, min: {data_concat[:, i_col].min()}')
+
     def __len__(self):
-        return 100000        # [!] This num affects # of iterations in each epoch, use 100000
+        return self.opt.pseudo_dataset_len
 
     def __getitem__(self, _):
         i_trial = torch.randint(0, self.trial_num, (1,)).item()        # a random trial regardless of its length
         trial_length = self.trials[i_trial].length
         slice_index = torch.randint(0, trial_length - self.window_len+1, (1,)).item()
-        return (self.trials[i_trial].converted_pose[slice_index:slice_index+self.window_len, ...],
-                self.trials[i_trial].model_offsets, i_trial)
+
+        converted_pose = self.trials[i_trial].converted_pose[slice_index:slice_index+self.window_len, ...]
+        return (converted_pose, self.trials[i_trial].model_offsets, i_trial)
+
+    @staticmethod
+    def reset_moving_direction(converted_pose, converted_column_names):
+        converted_pose_clone = converted_pose.clone()
+        pelvis_orientation_col_loc = [converted_column_names.index(col) for col in [f'pelvis_{x}' for x in range(6)]]
+        p_pos_col_loc = [converted_column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
+        r_grf_col_loc = [converted_column_names.index(col) for col in ['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']]
+        l_grf_col_loc = [converted_column_names.index(col) for col in ['calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz']]
+
+        if len(pelvis_orientation_col_loc) != 6 or len(p_pos_col_loc) != 3 or len(r_grf_col_loc) != 3 or len(l_grf_col_loc) != 3:
+            raise ValueError('check column names')
+
+        pelvis_orientation = converted_pose_clone[:, pelvis_orientation_col_loc]
+        pelvis_orientation = rotation_6d_to_matrix(pelvis_orientation)
+        p_pos = converted_pose_clone[:, p_pos_col_loc]
+        r_grf = converted_pose_clone[:, r_grf_col_loc]
+        l_grf = converted_pose_clone[:, l_grf_col_loc]
+
+        angle = math.atan2(- pelvis_orientation[0][0, 2], pelvis_orientation[0][2, 2])
+        rot_mat = torch.tensor([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]]).float()
+
+        pelvis_orientation_rotated = torch.matmul(rot_mat, pelvis_orientation)
+        p_pos_rotated = torch.matmul(rot_mat, p_pos.unsqueeze(2)).squeeze(2)
+        r_grf_rotated = torch.matmul(rot_mat, r_grf.unsqueeze(2)).squeeze(2)
+        l_grf_rotated = torch.matmul(rot_mat, l_grf.unsqueeze(2)).squeeze(2)
+
+        converted_pose_clone[:, pelvis_orientation_col_loc] = matrix_to_rotation_6d(pelvis_orientation_rotated.float())
+        converted_pose_clone[:, p_pos_col_loc] = p_pos_rotated.float()
+        converted_pose_clone[:, r_grf_col_loc] = r_grf_rotated.float()
+        converted_pose_clone[:, l_grf_col_loc] = l_grf_rotated.float()
+
+        return converted_pose_clone
+
+    @staticmethod
+    def apply_random_moving_direction(converted_pose, converted_column_names, angle=np.random.rand()*2*np.pi):
+        pelvis_orientation_col_loc = [converted_column_names.index(col) for col in [f'pelvis_{x}' for x in range(6)]]
+        p_pos_col_loc = [converted_column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
+        r_grf_col_loc = [converted_column_names.index(col) for col in ['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']]
+        l_grf_col_loc = [converted_column_names.index(col) for col in ['calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz']]
+
+        if len(pelvis_orientation_col_loc) != 6 or len(p_pos_col_loc) != 3 or len(r_grf_col_loc) != 3 or len(l_grf_col_loc) != 3:
+            raise ValueError('check column names')
+
+        pelvis_orientation = converted_pose[:, pelvis_orientation_col_loc]
+        pelvis_orientation = rotation_6d_to_matrix(pelvis_orientation)
+        p_pos = converted_pose[:, p_pos_col_loc]
+        r_grf = converted_pose[:, r_grf_col_loc]
+        l_grf = converted_pose[:, l_grf_col_loc]
+
+        rot_mat = torch.tensor([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]]).float()
+
+        pelvis_orientation_rotated = torch.matmul(rot_mat, pelvis_orientation)
+        p_pos_rotated = torch.matmul(rot_mat, p_pos.unsqueeze(2)).squeeze(2)
+        r_grf_rotated = torch.matmul(rot_mat, r_grf.unsqueeze(2)).squeeze(2)
+        l_grf_rotated = torch.matmul(rot_mat, l_grf.unsqueeze(2)).squeeze(2)
+
+        # converted_pose = copy.deepcopy(converted_pose)
+        converted_pose[:, pelvis_orientation_col_loc] = matrix_to_rotation_6d(pelvis_orientation_rotated.float())
+        converted_pose[:, p_pos_col_loc] = p_pos_rotated.float()
+        converted_pose[:, r_grf_col_loc] = r_grf_rotated.float()
+        converted_pose[:, l_grf_col_loc] = l_grf_rotated.float()
+
+        return converted_pose
+
+    @staticmethod
+    def augment_one_trial_to_4_moving_directions(trials, converted_column_names):
+        trials_augmented = []
+        rot_mat_to_apply = [
+            torch.tensor([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]]).float()
+            for angle in [0.5*np.pi, np.pi, 1.5*np.pi]
+        ]
+
+        pelvis_orientation_col_loc = [converted_column_names.index(col) for col in [f'pelvis_{x}' for x in range(6)]]
+        pelvis_position_col_loc = [converted_column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
+        r_grf_col_loc = [converted_column_names.index(col) for col in ['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']]
+        l_grf_col_loc = [converted_column_names.index(col) for col in ['calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz']]
+
+        if len(pelvis_orientation_col_loc) != 6:
+            raise ValueError('pelvis column number incorrect')
+        for trial_ in trials:
+            trials_augmented.append(trial_)
+
+            pelvis_orientation = trial_.converted_pose[:, pelvis_orientation_col_loc]
+            pelvis_orientation = rotation_6d_to_matrix(pelvis_orientation)
+            pelvis_position = trial_.converted_pose[:, pelvis_position_col_loc]
+            r_grf = trial_.converted_pose[:, r_grf_col_loc]
+            l_grf = trial_.converted_pose[:, l_grf_col_loc]
+
+            for rot_mat in rot_mat_to_apply:
+                pelvis_orientation_rotated = torch.matmul(rot_mat, pelvis_orientation)
+                pelvis_position_rotated = torch.matmul(rot_mat, pelvis_position.unsqueeze(2)).squeeze(2)
+                r_grf_rotated = torch.matmul(rot_mat, r_grf.unsqueeze(2)).squeeze(2)
+                l_grf_rotated = torch.matmul(rot_mat, l_grf.unsqueeze(2)).squeeze(2)
+
+                converted_pose = copy.deepcopy(trial_.converted_pose)
+                converted_pose[:, pelvis_orientation_col_loc] = matrix_to_rotation_6d(pelvis_orientation_rotated.float())
+                converted_pose[:, pelvis_position_col_loc] = pelvis_position_rotated.float()
+                converted_pose[:, r_grf_col_loc] = r_grf_rotated.float()
+                converted_pose[:, l_grf_col_loc] = l_grf_rotated.float()
+
+                augmented_trial = TrialData(converted_pose,
+                                            trial_.model_offsets,
+                                            trial_.contact_bodies,
+                                            trial_.sub_and_trial_name,
+                                            trial_.dset_name)
+
+                trials_augmented.append(augmented_trial)
+        return trials_augmented
+
+    def get_all_trials(self):
+        windows = []
+        for i_trial, trial_ in enumerate(self.trials):
+            trial_len = trial_.length
+            for i in range(0, trial_len - self.window_len + 1, self.window_len):
+                windows.append((trial_.converted_pose[i:i+self.window_len, ...], self.trials[i_trial].model_offsets, i_trial))
+            # The last window is probably overlapping with the previous one.
+            windows.append((trial_.converted_pose[trial_len-self.window_len:, ...], self.trials[i_trial].model_offsets, i_trial))
+
+        return windows
+
+    def visualize_loaded(self, opt, trials):
+        pose_converted = [trial.converted_pose.reshape([1, -1, trial.converted_pose.shape[1]]) for trial in trials]
+
+        pose_col_loc = [i_dof for i_dof, dof in enumerate(opt.osim_dof_columns) if '_force_' not in dof]
+        force_col_loc = [i_dof for i_dof, dof in enumerate(opt.osim_dof_columns) if '_force_' in dof]
+
+        pose_list = [inverse_convert_addb_state_to_model_input(
+            pose, self.opt.model_states_column_names, self.opt.joints_3d, self.opt.osim_dof_columns) for pose in pose_converted]
+
+        geometry = '/mnt/d/Local/AddBiom/vmu-suit/ml_and_simulation/data/Geometry/'
+        print('Using Geometry folder: '+geometry)
+        geometry = os.path.abspath(geometry)
+        if not geometry.endswith('/'):
+            geometry += '/'
+            print(' > Converted to absolute path: '+geometry)
+
+        customOsim: nimble.biomechanics.OpenSimFile = nimble.biomechanics.OpenSimParser.parseOsim(
+            '/mnt/d/Local/Data/MotionPriorData/model_and_geometry/unscaled_generic_no_arm.osim')
+        skel = customOsim.skeleton
+
+        world = nimble.simulation.World()
+        gui = NimbleGUI(world)
+        gui.serve(8090)
+
+        while True:
+            gui.nativeAPI().createText('trial num', 'Trial: ', [1200, 200], [250, 50])
+            for i_trial in range(len(pose_list)):
+                gui.nativeAPI().setTextContents('trial num', 'Trial: ' + trials[i_trial].sub_and_trial_name)
+                states = pose_list[i_trial]
+                for i in range(states.shape[1]):
+                    poses = states[0, i, pose_col_loc]
+                    skel.setPositions(poses.reshape([-1, 1]))
+                    for i_f, contact_body in enumerate(['calcn_r', 'calcn_l']):
+                        body_pos = skel.getBodyNode(contact_body).getWorldTransform().translation()
+                        forces = states[0, i, force_col_loc[3 * i_f:3 * (i_f + 1)]]
+                        gui.nativeAPI().createLine(f'line_{i_f}', [body_pos, body_pos + 0.1 * forces.numpy()], color=[1, 0., 0., 1])
+                    gui.nativeAPI().renderSkeleton(skel)
+                    time.sleep(0.005)
+            # for i in range(pose_list[0].shape[1]):        # visualize multiple skeletons
+            #     for j in range(len(pose_list)):
+            #         q = pose_list[j][0, i]
+            #         skel.setPositions(q[pose_col_loc])
+            #         for i_f, contact_body in enumerate(['calcn_r', 'calcn_l']):
+            #             body_pos = skel.getBodyNode(contact_body).getWorldTransform().translation()
+            #             forces = q[force_col_loc[3 * i_f:3 * (i_f + 1)]]
+            #             gui.nativeAPI().createLine(f'line_{j}_{i_f}', [body_pos, body_pos + 0.1 * forces.numpy()], color=[1, 0., 0., 1])
+            #         gui.nativeAPI().renderSkeleton(skel, str(j))
+            #         time.sleep(0.007)
+
 
     def get_attributes_of_trials(self):
         attributes = [trial.get_attributes() for trial in self.trials]
@@ -185,18 +374,30 @@ class MotionDataset(Dataset):
         dset_names = [attribute['dset_name'] for attribute in attributes]
         return sub_and_trial_names, dset_names
 
-    def load_addb(self, joints_3d, osim_dof_columns, max_trial_num):
+    def load_addb(self, joints_3d, opt, max_trial_num):
         subject_paths = []
         if os.path.isdir(self.data_path):
             for root, dirs, files in os.walk(self.data_path):
                 for file in files:
+                    file_path = os.path.join(root, file)
                     if file.endswith(".b3d"):
-                        subject_paths.append(os.path.join(root, file))
+                        subject_paths.append(file_path)
 
         self.trials = []
         for i_sub, subject_path in enumerate(subject_paths):
             # Add the skeleton to the list of skeletons
-            subject = nimble.biomechanics.SubjectOnDisk(subject_path)
+
+            if self.specific_dset and self.specific_dset not in subject_path:
+                continue
+
+            try:
+                subject = nimble.biomechanics.SubjectOnDisk(subject_path)
+            except RuntimeError:
+                print(f'Loading subject {subject_path} failed, skipping')
+                continue
+            subject_mass = subject.getMassKg()
+            contact_bodies = subject.getGroundForceBodies()
+            print(f'Loading subject: {subject_path}, mass: {subject_mass} kg')
 
             skel = subject.readSkel(0, geometryFolder=os.path.dirname(os.path.realpath(__file__)) + "/../../data/Geometry/")
             model_offsets = get_model_offsets(skel).float()
@@ -205,7 +406,8 @@ class MotionDataset(Dataset):
             if dset_name == '':
                 dset_name = subject_name.split('_')[0]
 
-            for trial_index in range(self.trial_start_num, subject.getNumTrials()):
+            trial_start_num_ = self.trial_start_num if self.trial_start_num >= 0 else max(0, subject.getNumTrials() + self.trial_start_num)
+            for trial_index in tqdm(range(trial_start_num_, subject.getNumTrials())):
                 sub_and_trial_name = subject_name + '_' + subject.getTrialName(trial_index)
                 trial_length = subject.getTrialLength(trial_index)
                 probably_missing: List[bool] = [reason != nimble.biomechanics.MissingGRFReason.notMissingGRF for reason
@@ -219,36 +421,67 @@ class MotionDataset(Dataset):
                 except IndexError:
                     print(f'{subject_name}, {trial_index} has no processing passes, skipping')
                     continue
-                pose = [frame.pos for frame in first_passes]
+                poses = [frame.pos for frame in first_passes]
+                if opt.include_force:
+                    forces = [frame.groundContactForce / subject_mass for frame in first_passes]
+                    if len(forces[0]) != 6:
+                        continue        # only include data with 2 contact bodies.
+                    states = np.concatenate([np.array(poses), np.array(forces)], axis=1)
+
+                    grf_flag_counts = list(mit.run_length.encode(probably_missing))
+                    max_has_grf_count = -1
+                    max_has_grf_idx = -1
+                    for idx, (val, count) in enumerate(grf_flag_counts):
+                        if not val and max_has_grf_count < count:
+                            max_has_grf_count = count
+                            max_has_grf_idx = idx
+                    elems_before_idx = sum((idx[1] for idx in grf_flag_counts[:max_has_grf_idx]))
+                    states = states[elems_before_idx:elems_before_idx+max_has_grf_count, :]
+                else:
+                    states = np.array(poses)
 
                 sampling_rate = 1 / subject.getTrialTimestep(trial_index)
-                if (len(pose) / sampling_rate * self.target_sampling_rate) < self.window_len + 2:
-                    # print(f'Subject {subject_name} trial {sub_and_trial_name} has {round(len(pose) / sampling_rate, 1)} s data (less than 3 s), skipping')
+                if (states.shape[0] / sampling_rate * self.target_sampling_rate) < self.window_len + 2:
+                    # print(f'Subject {subject_name} trial {sub_and_trial_name} has {round(len(states) / sampling_rate, 1)} s data (less than 3 s), skipping')
                     continue
-                pose = linear_resample_data(np.array(pose), sampling_rate, self.target_sampling_rate)
+                states = linear_resample_data(states, sampling_rate, self.target_sampling_rate)
 
-                pose_df = pd.DataFrame(pose, columns=osim_dof_columns)
-                pose_df = convert_addb_state_to_model_input(pose_df, joints_3d)
-                converted_column_names = list(pose_df.columns)
+                states_df = pd.DataFrame(states, columns=opt.osim_dof_columns)
+                states_df = convert_addb_state_to_model_input(states_df, joints_3d)
+                self.converted_column_names = list(states_df.columns)
 
-                pose = torch.tensor(pose_df.values)
+                states = torch.tensor(states_df.values).float()
 
-                current_trial = TrialData(pose, model_offsets, probably_missing, sub_and_trial_name, dset_name)
-                divide_jittery = True
-                if divide_jittery:
-                    current_trials = self.divide_jittery_trials(current_trial, converted_column_names)
+                current_trials = [TrialData(states, model_offsets, contact_bodies, sub_and_trial_name, dset_name)]
+
+                # functions for cleaning up the data
+                current_trials = self.remove_excessive_lumbar_rotation_trials(current_trials, self.converted_column_names)
+                if self.divide_jittery:
+                    current_trials = self.divide_jittery_trials(current_trials, self.converted_column_names)
+
+                if self.reset_moving_direction_flag:
                     for trial_ in current_trials:
-                        self.trials.append(trial_)
-                        self.dset_set.add(dset_name)
-                else:
-                    self.trials.append(current_trial)
+                        trial_.converted_pose = self.reset_moving_direction(trial_.converted_pose, self.converted_column_names)
+
+                for trial_ in current_trials:
+                    self.trials.append(trial_)
                     self.dset_set.add(dset_name)
 
                 if max_trial_num is not None and len(self.trials) >= max_trial_num:
                     return
+            print('Current trial num: {}'.format(len(self.trials)))
         # self.trial_length_probability = torch.tensor([1000 / trial.length for trial in self.trials]).float()
 
-    def divide_jittery_trials(self, current_trial, converted_column_names):
+    def remove_excessive_lumbar_rotation_trials(self, trials, converted_column_names):
+        lumbar_rotation_col_loc = converted_column_names.index('lumbar_rotation')
+        new_trials = []
+        for trial_ in trials:
+            if torch.abs(torch.mean(trial_.converted_pose[:, lumbar_rotation_col_loc])) > np.deg2rad(45):
+                continue
+            new_trials.append(trial_)
+        return new_trials
+
+    def divide_jittery_trials(self, trials, converted_column_names):
         """ If one sample have abnormal acceleration or angular velocity, divide the trial into two from this sample."""
         linear_acc_limit = 320          # 320 m/s^2
         angular_v_limit = np.deg2rad(2000)          # 2000 deg/s
@@ -259,44 +492,46 @@ class MotionDataset(Dataset):
         rot_mat_col = [col for col in converted_column_names if '_0' in col or '_1' in col or '_2' in col or '_3'
                        in col or '_4' in col or '_5' in col]
         rot_mat_col_loc = [converted_column_names.index(col) for col in rot_mat_col]
-        euler_angle_col = [col for col in converted_column_names if (col not in pos_col and col not in rot_mat_col)]
+        euler_angle_col = [col for col in converted_column_names if 'angle' in col or 'elbow' in col or 'pro_sup' in
+                           col or 'wrist' in col]
         euler_angle_col_loc = [converted_column_names.index(col) for col in euler_angle_col]
 
-        vel, acc = update_d_dd(current_trial.converted_pose, 1 / self.target_sampling_rate)
-        pos_break_point = np.where(acc[:, pos_col_loc] > linear_acc_limit)[0]
-        euler_angle_break_point = np.where(vel[:, euler_angle_col_loc] > angular_v_limit)[0]
-        rot_mat_break_point = np.where(vel[:, rot_mat_col_loc] > rot_mat_angular_v_limit)[0]
-        break_point_list = list(set(np.concatenate([pos_break_point, euler_angle_break_point, rot_mat_break_point]).flatten()))
-        break_point_list.sort()
+        trial_data_list = []
+        for current_trial in trials:
+            vel, acc = update_d_dd(current_trial.converted_pose, 1 / self.target_sampling_rate)
+            pos_break_point = np.where(acc[:, pos_col_loc] > linear_acc_limit)[0]
+            euler_angle_break_point = np.where(vel[:, euler_angle_col_loc] > angular_v_limit)[0]
+            rot_mat_break_point = np.where(vel[:, rot_mat_col_loc] > rot_mat_angular_v_limit)[0]
+            break_point_list = list(set(np.concatenate([pos_break_point, euler_angle_break_point, rot_mat_break_point]).flatten()))
+            break_point_list.sort()
 
-        if len(break_point_list) > 0:
-            trial_data_list = []
-            break_point_list = [0] + break_point_list + [current_trial.length]
-            for i_clip in range(len(break_point_list) - 1):
-                start_, end_ = break_point_list[i_clip] + 2, break_point_list[i_clip+1] - 2
-                if end_ - start_ < self.window_len:
-                    continue
-                trial_data_list.append(
-                    TrialData(current_trial.converted_pose[start_:end_],
-                              current_trial.model_offsets,
-                              current_trial.probably_missing_grf[start_:end_],
-                              current_trial.sub_and_trial_name,
-                              current_trial.dset_name)
-                )
+            if len(break_point_list) > 0:
+                break_point_list = [0] + break_point_list + [current_trial.length]
+                for i_clip in range(len(break_point_list) - 1):
+                    start_, end_ = break_point_list[i_clip] + 2, break_point_list[i_clip+1] - 2
+                    if end_ - start_ < self.window_len:
+                        continue
+                    trial_data_list.append(
+                        TrialData(current_trial.converted_pose[start_:end_],
+                                  current_trial.model_offsets,
+                                  current_trial.contact_bodies,
+                                  current_trial.sub_and_trial_name,
+                                  current_trial.dset_name)
+                    )
 
-            print('Divided {} {} into {} trials, {} due to linear acc, {} due to euler angle vel, {} due to rot mat vel'.format(
-                current_trial.dset_name, current_trial.sub_and_trial_name,
-                len(trial_data_list), len(pos_break_point), len(euler_angle_break_point), len(rot_mat_break_point)))
-            return trial_data_list
-        else:
-            return [current_trial]
+                print('Divided {} {} into {} trials, {} due to linear acc, {} due to euler angle vel, {} due to rot mat vel'.format(
+                    current_trial.dset_name, current_trial.sub_and_trial_name,
+                    len(trial_data_list), len(pos_break_point), len(euler_angle_break_point), len(rot_mat_break_point)))
+            else:
+                trial_data_list = [current_trial]
+        return trial_data_list
 
 
 class TrialData:
-    def __init__(self, converted_pose, model_offsets, probably_missing_grf, sub_and_trial_name, dset_name):
+    def __init__(self, converted_pose, model_offsets, contact_bodies, sub_and_trial_name, dset_name):
         self.converted_pose = converted_pose
         self.model_offsets = model_offsets
-        self.probably_missing_grf = probably_missing_grf
+        self.contact_bodies = contact_bodies
         self.sub_and_trial_name = sub_and_trial_name
         self.dset_name = dset_name
         self.length = converted_pose.shape[0]
@@ -394,11 +629,13 @@ class MotionModel:
         if opt.log_with_wandb:
             wandb.init(project=opt.wandb_pj_name, name=opt.exp_name, dir="wandb_logs")
         train_dataset = MotionDataset(
-            data_path=opt.data_path,
+            data_path=opt.data_path_train,
             train=True,
             target_sampling_rate=opt.target_sampling_rate,
             joints_3d=opt.joints_3d,
-            osim_dof_columns=opt.osim_dof_columns,
+            # trial_start_num=-2,
+            # max_trial_num=1,
+            opt=opt,
         )
         # set normalizer
         self.normalizer = train_dataset.normalizer
@@ -470,7 +707,7 @@ class MotionModel:
 
             self.accelerator.wait_for_everyone()
 
-            if epoch > 2:       # [!]
+            if epoch > -1:       # [!]
                 self.accelerator.wait_for_everyone()
                 # save only if on main thread
                 if self.accelerator.is_main_process:
@@ -504,11 +741,52 @@ class MotionModel:
                         wandb.log(log_dict)
 
             # if epoch % 100 == 0 or epoch == opt.epochs:
-            if (epoch % 50) == 0:
+            if (epoch % 200) == 0:
                 torch.save(ckpt, os.path.join(wdir, f"train-{epoch}.pt"))
                 print(f"[MODEL SAVED at Epoch {epoch}]")
         if self.accelerator.is_main_process and opt.log_with_wandb:
             wandb.run.finish()
+
+    def eval_loop(self, opt, input_wins, num_of_generation_per_window=1):
+        self.eval()
+        state_true = [win[0] for win in input_wins]
+        state_true = torch.stack(state_true)
+        knee_ankle_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'ankle' in col or 'knee' in col]
+        hip_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'hip' in col]
+        # grf_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'force' in col]
+        kinematic_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'force' not in col]
+
+        masks = torch.zeros_like(state_true)      # 0 for masking, 1 for unmasking
+        mask_level = 2      # -1 for masking all, 0 for knee + ankle, 1 for knee + ankle + hip, 2 for full kinematics
+        if mask_level == -1:
+            pass
+        elif mask_level == 0:
+            masks[:, :, knee_ankle_col_loc] = 1
+        elif mask_level == 1:
+            masks[:, :, knee_ankle_col_loc + hip_col_loc] = 1
+        elif mask_level == 2:
+            masks[:, :, kinematic_col_loc] = 1
+
+        constraint = {'mask': masks, 'value': state_true.clone()}
+
+        shape = (state_true.shape[0], self.horizon, self.repr_dim)
+        cond = torch.ones(state_true.shape[0])
+        cond = cond.to(self.accelerator.device)
+        state_pred_list = [self.diffusion.generate_samples(
+            shape,
+            cond,
+            self.normalizer,
+            opt,
+            mode="inpaint",
+            constraint=constraint)
+            for _ in range(num_of_generation_per_window)]
+
+        state_true = self.normalizer.unnormalize(state_true)
+        state_true = state_true.detach().cpu()
+
+        state_true = inverse_convert_addb_state_to_model_input(state_true, opt.model_states_column_names,
+                                                               opt.joints_3d, opt.osim_dof_columns)
+        return state_true, state_pred_list
 
 
 class EMA:
@@ -540,7 +818,7 @@ class GaussianDiffusion(nn.Module):
             n_timestep=1000,
             schedule="linear",
             loss_type="l1",
-            clip_denoised=True,
+            clip_denoised=False,
             predict_epsilon=True,
             guidance_weight=3,
             use_p2=False,
@@ -648,10 +926,10 @@ class GaussianDiffusion(nn.Module):
                 extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape)
         )
 
-    def model_predictions(self, x, cond, t, weight=None, clip_x_start = False):
+    def model_predictions(self, x, cond, t, weight=None, clip_x_start=False):
         weight = weight if weight is not None else self.guidance_weight
         model_output = self.model.guided_forward(x, cond, t, weight)
-        maybe_clip = partial(torch.clamp, min = -1., max = 1.) if clip_x_start else identity
+        maybe_clip = partial(torch.clamp, min=-1., max=1.) if clip_x_start else identity
 
         x_start = model_output
         x_start = maybe_clip(x_start)
@@ -822,6 +1100,45 @@ class GaussianDiffusion(nn.Module):
         return x
 
     @torch.no_grad()
+    def inpaint_ddim_loop(self, shape, cond, noise=None, constraint=None, return_diffusion=False, start_point=None):
+        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 1
+
+        times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
+        times = list(reversed(times.int().tolist()))
+        time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
+
+        x = torch.randn(shape, device = device)
+        cond = cond.to(device)
+
+        mask = constraint["mask"].to(device)  # batch x horizon x channels
+        value = constraint["value"].to(device)  # batch x horizon x channels
+
+        for time, time_next in tqdm(time_pairs, desc='sampling loop time step'):
+            time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
+            pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
+
+            if time_next < 0:
+                x = x_start
+                return x
+
+            alpha = self.alphas_cumprod[time]
+            alpha_next = self.alphas_cumprod[time_next]
+
+            sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
+            c = (1 - alpha_next - sigma ** 2).sqrt()
+
+            noise = torch.randn_like(x)
+
+            x = x_start * alpha_next.sqrt() + \
+                c * pred_noise + \
+                sigma * noise
+
+            timesteps = torch.full((batch,), time_next, device=device, dtype=torch.long)
+            value_ = self.q_sample(value, timesteps) if (time > 0) else x
+            x = value_ * mask + (1.0 - mask) * x
+        return x
+
+    @torch.no_grad()
     def inpaint_loop(
             self,
             shape,
@@ -960,6 +1277,9 @@ class GaussianDiffusion(nn.Module):
         loss_vel = self.loss_fn(model_out[:, 1:, 3:] - model_out[:, :-1, 3:], target[:, 1:, 3:] - target[:, :-1, 3:], reduction="none")
         loss_vel = loss_vel * extract(self.p2_loss_weight, t, loss_vel.shape)
 
+        loss_drift = self.loss_fn(model_out[..., :3], target[..., :3], reduction="none")
+        loss_drift = loss_drift * extract(self.p2_loss_weight, t, loss_drift.shape)
+
         osim_states_pred = self.normalizer.unnormalize(model_out)
         osim_states_pred = inverse_convert_addb_state_to_model_input(osim_states_pred, self.opt.model_states_column_names, self.opt.joints_3d, self.opt.osim_dof_columns)
         foot_locations_pred, joint_locations_pred, segment_orientations_pred = forward_kinematics(osim_states_pred, model_offsets)
@@ -971,21 +1291,18 @@ class GaussianDiffusion(nn.Module):
         # loss_fk = reduce(loss_fk, "b ... -> b (...)", "mean")
         loss_fk = loss_fk * extract(self.p2_loss_weight, t, loss_fk.shape[1:])
 
-        loss_drift = self.loss_fn(model_out[..., :3], target[..., :3], reduction="none")
-        loss_drift = loss_drift * extract(self.p2_loss_weight, t, loss_drift.shape)
-
         # loss_floor_penetration = self.loss_fn(foot_locations_pred[..., 1], foot_locations_true[..., 1], reduction="none")
         # loss_floor_penetration = loss_floor_penetration * extract(self.p2_loss_weight, t, loss_floor_penetration.shape)
 
-        foot_vel_pred = (foot_locations_pred[..., 1:, :] - foot_locations_pred[..., :-1, :]).abs()
-        stance_based_on_foot_vel = (torch.norm(foot_vel_pred, dim=-1) < 0.001)[..., None].expand(-1, -1, -1, 3)       # TODO tune this. Tom used 0.003 (0.3 m/s)
-        foot_vel_pred[~stance_based_on_foot_vel] = 0
-        loss_slide = self.loss_fn(foot_vel_pred, foot_vel_pred * 0, reduction="none")
+        foot_acc_pred = (foot_locations_pred[..., 2:, :] - 2 * foot_locations_pred[..., 1:-1, :] + foot_locations_pred[..., :-2, :]).abs() * 10000
+        stance_based_on_foot_vel = (torch.norm(foot_acc_pred, dim=-1) < 0.3)[..., None].expand(-1, -1, -1, 3)       # TODO tune this. (0.3 m/s2)
+        foot_acc_pred[~stance_based_on_foot_vel] = 0
+        loss_slide = self.loss_fn(foot_acc_pred, foot_acc_pred * 0, reduction="none")
         loss_slide = loss_slide * extract(self.p2_loss_weight, t, loss_slide.shape[1:])
 
         losses = [
             1. * loss_simple.mean(),         # TODO tune this
-            1. * loss_vel.mean(),
+            0 * loss_vel.mean(),
             1. * loss_fk.mean(),
             1. * loss_drift.mean(),
             # 1. * loss_floor_penetration.mean(),
@@ -1025,7 +1342,8 @@ class GaussianDiffusion(nn.Module):
     ):
         if isinstance(shape, tuple):
             if mode == "inpaint":
-                func_class = self.inpaint_loop
+                # func_class = self.inpaint_loop
+                func_class = self.inpaint_ddim_loop
             elif mode == "normal":
                 func_class = self.ddim_sample
             elif mode == "long":
@@ -1045,6 +1363,8 @@ class GaussianDiffusion(nn.Module):
             samples = shape
 
         samples = normalizer.unnormalize(samples.detach().cpu())
+        samples = samples.detach().cpu()
+
         samples = inverse_convert_addb_state_to_model_input(samples, opt.model_states_column_names,
                                                             opt.joints_3d, opt.osim_dof_columns)
         return samples

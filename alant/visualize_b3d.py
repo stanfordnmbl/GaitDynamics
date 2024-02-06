@@ -1,7 +1,7 @@
-
 import os
 from typing import List
 import nimblephysics as nimble
+import numpy as np
 from nimblephysics import NimbleGUI
 import time
 
@@ -15,9 +15,7 @@ def visualize(dataset_b3d_path):
         print(' > Converted to absolute path: '+geometry)
 
     subject: nimble.biomechanics.SubjectOnDisk = nimble.biomechanics.SubjectOnDisk(dataset_b3d_path)
-
     skel = subject.readSkel(0, geometryFolder=geometry)
-
     world = nimble.simulation.World()
 
     gui = NimbleGUI(world)
@@ -27,7 +25,7 @@ def visualize(dataset_b3d_path):
 
     while True:
         print('Num trials: ' + str(subject.getNumTrials()))
-        for i_trial in range(subject.getNumTrials()):
+        for i_trial in range(0, subject.getNumTrials()):
             print('Trial: ' + str(i_trial))
             num_frames = subject.getTrialLength(i_trial)
             trial_name = subject.getTrialName(i_trial)
@@ -39,8 +37,8 @@ def visualize(dataset_b3d_path):
                 time.sleep(0.008)
 
 
-sub_name = 'Moore2015_Formatted_No_Arm_subject10'
-path = '/mnt/d/Local/Data/MotionPriorData/train/b3d_no_arm/'
+sub_name = 'subject2'
+path = '/mnt/d/Local/Data/MotionPriorData/b3d_no_arm/cleaned/'
 if __name__ == "__main__":
     dataset_b3d_path = path + sub_name + '.b3d'
     visualize(dataset_b3d_path)

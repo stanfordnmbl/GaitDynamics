@@ -24,22 +24,23 @@ def increment_path(path, exist_ok=False, sep="", mkdir=False):
 
 
 class Normalizer:
-    def __init__(self, data):
+    def __init__(self, data, cols_to_normalize):
         flat = data.reshape(-1, data.shape[-1])
-        self.norm_cap = 10
-        self.scaler = MinMaxScaler((-self.norm_cap, self.norm_cap), clip=False)
-        self.scaler.fit(flat)
+        self.scaler = StandardScaler()
+        self.scaler.fit(flat[:, cols_to_normalize])
+        self.cols_to_normalize = cols_to_normalize
 
     def normalize(self, x):
-        # batch, seq, ch = x.shape
-        # x = x.reshape(-1, ch)
-        return self.scaler.transform(x)
+        x = x.clone()
+        x[:, self.cols_to_normalize] = self.scaler.transform(x[:, self.cols_to_normalize])
+        return x
 
     def unnormalize(self, x):
         batch, seq, ch = x.shape
+        x = x.clone()
         x = x.reshape(-1, ch)
-        x = torch.clip(x, -self.norm_cap, self.norm_cap)  # clip to force compatibility
-        return self.scaler.inverse_transform(x).reshape((batch, seq, ch))
+        x[:, self.cols_to_normalize] = self.scaler.inverse_transform(x[:, self.cols_to_normalize])
+        return x.reshape((batch, seq, ch))
 
 
 def vectorize_many(data):
