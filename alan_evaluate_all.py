@@ -17,6 +17,7 @@ def loop_all(opt):
     model = MotionModel(opt, repr_dim)
     dset_list = DATASETS
     results_true, results_pred = {}, {}
+    is_output_label = torch.zeros([90, 29])
 
     for dset in dset_list:
         test_dataset = MotionDataset(
@@ -28,6 +29,8 @@ def loop_all(opt):
             opt=opt,
             divide_jittery=False,
             specific_dset=dset,
+            # max_trial_num=1,     # !!!
+            # trial_start_num=5
         )
         wins = test_dataset.get_all_trials()
         if len(wins) == 0:
@@ -38,9 +41,42 @@ def loop_all(opt):
 
         state_pred_list = [[] for _ in range(skel_num-1)]
         for i_win in range(0, len(wins), opt.batch_size):
-            _, state_pred_list_batch = model.eval_loop(opt, wins[i_win:i_win+opt.batch_size], num_of_generation_per_window=skel_num-1)
-            for i_skel in range(skel_num-1):
-                state_pred_list[i_skel] += state_pred_list_batch[i_skel]
+
+            state_true = [win[0] for win in wins[i_win:i_win+opt.batch_size]]
+            state_true = torch.stack(state_true)
+
+            if da_to_test == 0:
+                # For GRF estimation
+                masks = torch.zeros_like(state_true)      # 0 for masking, 1 for unmasking
+                masks[:, :, kinematic_diffusion_col_loc] = 1
+                is_output_label[:, grf_osim_col_loc] = 1
+                _, state_pred_list_batch = model.eval_loop(opt, state_true, masks, num_of_generation_per_window=skel_num-1)
+                for i_skel in range(skel_num-1):
+                    state_pred_list[i_skel] += state_pred_list_batch[i_skel]
+                save_name = 'downstream_grf'
+
+            elif da_to_test == 1:
+                # For future motion prediction
+                # end_of_known = 70
+                masks = torch.zeros_like(state_true)      # 0 for masking, 1 for unmasking
+                masks[:, :, kinematic_diffusion_col_loc] = 1
+                masks[:, end_of_known:, :] = 0
+                is_output_label[end_of_known:, ] = 1
+
+                _, state_pred_list_batch = model.eval_loop(opt, state_true, masks, num_of_generation_per_window=skel_num-1)
+                for i_skel in range(skel_num-1):
+                    state_pred_list[i_skel] += state_pred_list_batch[i_skel]
+                save_name = f'downstream_future_motion_{end_of_known}'
+
+            elif da_to_test == 2:
+                # For reconstruct kinematics
+                is_output_label = None
+                masks = torch.zeros_like(state_true)      # 0 for masking, 1 for unmasking
+                masks[:, :, cols_to_mask[mask_key]] = 1
+                _, state_pred_list_batch = model.eval_loop(opt, state_true, masks, num_of_generation_per_window=skel_num-1)
+                for i_skel in range(skel_num-1):
+                    state_pred_list[i_skel] += state_pred_list_batch[i_skel]
+                save_name = f'downstream_reconstruct_kinematics_{mask_key}'
 
         for i_skel in range(skel_num-1):
             assert len(state_pred_list[i_skel]) == len(wins)
@@ -63,18 +99,42 @@ def loop_all(opt):
             results_true[trial_.dset_name].update({trial_.sub_and_trial_name: state_true_trial})
             results_pred[trial_.dset_name].update({trial_.sub_and_trial_name: state_pred_trial})
 
-    pickle.dump([results_true, results_pred, opt.osim_dof_columns], open(f"figures/results/results_true_pred_{test_data_name}.pkl", "wb"))
+    pickle.dump([results_true, results_pred, opt.osim_dof_columns, is_output_label],
+                open(f"figures/results/{save_name}.pkl", "wb"))
 
 
 if __name__ == "__main__":
-    skel_num = 2
+    skel_num = 4
     opt = parse_opt()
-    test_data_name = '0124'
 
-    # opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'1000'}.pt"
-    opt.checkpoint = opt.data_path_parent + f"../code/runs/train/{'norm_all3'}/weights/train-{'3000'}.pt"
+    # opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'3000'}.pt"
+    opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'norm_all3'}/weights/train-{'3000'}.pt"
 
-    loop_all(opt)
+    knee_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'knee' in col]
+    ankle_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'ankle' in col]
+    hip_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'hip' in col]
+    kinematic_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'force' not in col]
+    grf_osim_col_loc = [i_col for i_col, col in enumerate(opt.osim_dof_columns) if 'force' in col]
+    cols_to_mask = {
+        'ankle': knee_diffusion_col_loc,
+        'knee': knee_diffusion_col_loc,
+        'hip': hip_diffusion_col_loc,
+        'knee_ankle': knee_diffusion_col_loc + ankle_diffusion_col_loc,
+        'knee_ankle_hip': knee_diffusion_col_loc + ankle_diffusion_col_loc + hip_diffusion_col_loc
+    }
+
+    # da_to_test = 0
+    # loop_all(opt)
+
+    # da_to_test = 1
+    # for end_of_known in range(70, 91, 2):
+    #     print('end_of_known: ', end_of_known)
+    #     loop_all(opt)
+
+    da_to_test = 2
+    for mask_key in cols_to_mask.keys():
+        print('mask_key: ', mask_key)
+        loop_all(opt)
 
 
 
