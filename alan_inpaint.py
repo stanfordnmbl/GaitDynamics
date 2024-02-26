@@ -19,8 +19,6 @@ def inpaint(opt):
     test_dataset = MotionDataset(
         data_path=b3d_path,
         train=False,
-        joints_3d=opt.joints_3d,
-        target_sampling_rate=opt.target_sampling_rate,
         normalizer=model.normalizer,
         trial_start_num=-2,            # [!]
         # max_trial_num=1,
@@ -29,19 +27,8 @@ def inpaint(opt):
     )
     wins = [test_dataset[i] for i in range(render_count)]
 
-    state_true, state_pred_list = model.eval_loop(opt, wins, num_of_generation_per_window=skel_num-1)
-
-    # # [!]
-    # plt.figure()
-    # plt.plot(state_true[:, :, -1].flatten())
-    # plt.plot(state_pred_list[0][:, :, -1].flatten())
-    # plt.figure()
-    # plt.plot(state_true[:, :, -2].flatten())
-    # plt.plot(state_pred_list[0][:, :, -2].flatten())
-    # plt.figure()
-    # plt.plot(state_true[:, :, -3].flatten())
-    # plt.plot(state_pred_list[0][:, :, -3].flatten())
-    # plt.show()
+    # masks = torch.zeros_like(wins[0][0])
+    # state_true, state_pred_list = model.eval_loop(opt, wins, masks, num_of_generation_per_window=skel_num-1)
 
 
     model_name = 'unscaled_generic_no_arm' if not opt.with_arm else 'unscaled_generic_with_arm'

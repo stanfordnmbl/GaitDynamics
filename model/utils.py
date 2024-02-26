@@ -14,6 +14,14 @@ def linear_resample_data(trial_data, original_fre, target_fre):
     return trial_data_resampled
 
 
+def linear_resample_data_as_num_of_dp(data_raw, target_dp):
+    x, step = np.linspace(0., 1., data_raw.shape[0], retstep=True)
+    new_x = np.linspace(0., 1., target_dp)
+    f = interp1d(x, data_raw, axis=0)
+    data_resampled = f(new_x)
+    return data_resampled
+
+
 def update_d_dd(q, dt):
     dq = np.zeros(q.shape)
     dq[1:] = (q[1:] - q[:-1]) / dt

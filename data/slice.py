@@ -44,7 +44,6 @@ def slice_and_process_motion(joint_orientations, root_translation, frame_rate, t
             print('joint_orientations_slice out of range:: ' + file_name)
 
         # downsample joint_orientations_slice and root_translation_slice from the frame_rate to 20Hz using linear interpolation without using numpy.interp
-        # TODO: implement with SLERP instead of linear interpolation (should not matter all that much)
         joint_orientations_slice_resampled = np.zeros((int(length * target_frame_rate), joint_orientations_slice.shape[1], joint_orientations_slice.shape[2]))
         root_translation_slice_resampled = np.zeros((int(length * target_frame_rate), root_translation_slice.shape[1]))
         for i in range(joint_orientations_slice.shape[1]):

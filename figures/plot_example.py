@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 
 
 test_data_name = '0124'
-results_true, results_pred, columns = pickle.load(open(f"results/results_true_pred_{test_data_name}.pkl", "rb"))
+results_true, results_pred, columns, _ =\
+    pickle.load(open(f"results/results_true_pred_{test_data_name}.pkl", "rb"))
 
 params_of_interest = ['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']
 params_of_interest_col_loc = [columns.index(col) for col in params_of_interest]
@@ -12,9 +13,6 @@ params_of_interest_col_loc = [columns.index(col) for col in params_of_interest]
 dset_list = list(results_true.keys())
 
 for dset in dset_list:
-    if 'Moore' not in dset:
-        continue
-
     true_ = np.concatenate(list(results_true[dset].values()))[:, params_of_interest_col_loc]
     pred_ = np.concatenate(list(results_pred[dset].values()))[:, params_of_interest_col_loc]
 

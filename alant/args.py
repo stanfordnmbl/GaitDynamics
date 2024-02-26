@@ -14,8 +14,8 @@ def parse_opt():
     parser.add_argument("--log_with_wandb", type=bool, default=True, help="log with wandb")
     parser.add_argument("--epochs", type=int, default=5000)
     parser.add_argument("--target_sampling_rate", type=int, default=60)
+    parser.add_argument("--window_len", type=float, default=1.5)
 
-    parser.add_argument("--include_force", type=bool, default=True, help="whether to include force as part of the state variables")
     parser.add_argument("--project", default="runs/train", help="project/name")
     parser.add_argument(
         "--processed_data_dir",
@@ -55,24 +55,19 @@ def parse_opt():
 def set_with_arm_opt(opt, with_arm):
     if with_arm:
         opt.with_arm = True
-        opt.osim_dof_columns = copy.deepcopy(OSIM_DOF_ALL)
+        opt.osim_dof_columns = copy.deepcopy(OSIM_DOF_ALL+FORCE_ALL)
         opt.joints_3d = JOINTS_3D_ALL
         data_path = opt.data_path_parent + '/b3d_with_arm/'
         opt.model_states_column_names = copy.deepcopy(MODEL_STATES_COLUMN_NAMES_WITH_ARM)
     else:
         opt.with_arm = False
-        opt.osim_dof_columns = copy.deepcopy(OSIM_DOF_ALL[:23])
-        opt.joints_3d = {key_: value_ for key_, value_ in JOINTS_3D_ALL.items() if key_ in ['pelvis', 'hip_r', 'hip_l']}
+        opt.osim_dof_columns = copy.deepcopy(OSIM_DOF_ALL[:23]+FORCE_ALL)
+        opt.joints_3d = {key_: value_ for key_, value_ in JOINTS_3D_ALL.items() if key_ in ['pelvis', 'hip_r', 'hip_l', 'lumbar']}
         # data_path = opt.data_path_parent + '/for_check/'
         data_path = opt.data_path_parent + '/b3d_no_arm/'
         opt.model_states_column_names = copy.deepcopy(MODEL_STATES_COLUMN_NAMES_NO_ARM)
 
     opt.data_path_train = data_path + 'train_cleaned/'
     opt.data_path_test = data_path + 'test_cleaned/'
-
-    if opt.include_force and np.all(['_force_' not in col for col in opt.osim_dof_columns]):
-        opt.osim_dof_columns = opt.osim_dof_columns + FORCE_ALL
-        pelvis_0_col_loc = opt.model_states_column_names.index('pelvis_0')
-        opt.model_states_column_names[pelvis_0_col_loc: pelvis_0_col_loc] = FORCE_ALL       # TODO: Error prone
 
 
