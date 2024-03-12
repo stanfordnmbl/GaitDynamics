@@ -13,8 +13,8 @@ def parse_opt():
     parser.add_argument("--with_arm", type=bool, default=False, help="whether osim model has arm DoFs")
     parser.add_argument("--log_with_wandb", type=bool, default=True, help="log with wandb")
     parser.add_argument("--epochs", type=int, default=5000)
-    parser.add_argument("--target_sampling_rate", type=int, default=60)
-    parser.add_argument("--window_len", type=float, default=1.5)
+    parser.add_argument("--target_sampling_rate", type=int, default=int(60*1.2))     # !!!
+    parser.add_argument("--window_len", type=int, default=90)
 
     parser.add_argument("--project", default="runs/train", help="project/name")
     parser.add_argument(
@@ -29,6 +29,7 @@ def parse_opt():
         "--wandb_pj_name", type=str, default="MotionModel", help="project name"
     )
     parser.add_argument("--batch_size", type=int, default=machine_specific_config['batch_size'], help="batch size")
+    parser.add_argument("--batch_size_inference", type=int, default=128, help="batch size during inference")
     parser.add_argument("--pseudo_dataset_len", type=int, default=machine_specific_config['pseudo_dataset_len'], help="pseudo dataset length")
     parser.add_argument(
         "--force_reload", action="store_true", help="force reloads the datasets"

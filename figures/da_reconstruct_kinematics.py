@@ -39,7 +39,7 @@ def get_results(results_true, results_pred, results_bl):
 
 if __name__ == "__main__":
     test_data_name = f'downstream_reconstruct_kinematics_ankle'
-    results_true, results_pred, results_bl, columns, _ = \
+    results_true, results_pred, results_bl, columns, _, _, _ = \
         pickle.load(open(f"results/{test_data_name}.pkl", "rb"))
 
     name_pairs = {
@@ -52,7 +52,7 @@ if __name__ == "__main__":
 
     for mask_key, _ in name_pairs.items():
         test_data_name = f'downstream_reconstruct_kinematics_{mask_key}'
-        results_true, results_pred, results_bl, columns, _ = \
+        results_true, results_pred, results_bl, columns, _, _, _ = \
             pickle.load(open(f"results/{test_data_name}.pkl", "rb"))
         rmses_all_dset = get_results(results_true, results_pred, results_bl)
         print(f'{np.mean(rmses_all_dset):.2f} ± {np.std(rmses_all_dset):.2f}')

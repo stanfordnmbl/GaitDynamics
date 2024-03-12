@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 
 def get_results():
-    results_true, results_pred, results_bl, columns, _ =\
+    results_true, results_pred, results_bl, columns, _, _, _ =\
         pickle.load(open(f"results/{test_data_name}.pkl", "rb"))
     dset_list = list(results_true.keys())
 
@@ -18,7 +18,6 @@ def get_results():
     for dset in dset_list:
         if dset in EXCLUDE_FROM_ASB:
             continue
-        print(dset)
 
         bl_ = np.concatenate(list(results_bl[dset].values()))[:, params_of_interest_col_loc]
         in_gait_phase = np.all(bl_ != NOT_IN_GAIT_PHASE, axis=1)
@@ -26,6 +25,11 @@ def get_results():
 
         true_ = np.concatenate(list(results_true[dset].values()))[:, params_of_interest_col_loc][in_gait_phase]
         pred_ = np.concatenate(list(results_pred[dset].values()))[:, params_of_interest_col_loc][in_gait_phase]
+
+        # true_vals = [val_ * sub_heights[dset][key_] for key_, val_ in results_true[dset].items()]
+        # pred_vals = [val_ * sub_heights[dset][key_] for key_, val_ in results_pred[dset].items()]
+        # true_ = np.concatenate(true_vals)[:, params_of_interest_col_loc][in_gait_phase]
+        # pred_ = np.concatenate(pred_vals)[:, params_of_interest_col_loc][in_gait_phase]
 
         if True:
             plt.subplots(3, 1, figsize=(10, 8))

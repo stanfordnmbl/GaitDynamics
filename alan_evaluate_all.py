@@ -17,7 +17,7 @@ def loop_all(opt):
 
     model = MotionModel(opt, repr_dim)
     dset_list = DATASETS_NO_ARM
-    results_true, results_pred, results_bl = {}, {}, {}
+    results_true, results_pred, results_bl, sub_heights, sub_weights = {}, {}, {}, {}, {}
     is_output_label_array = torch.zeros([90, 29])
 
     for dset in dset_list:
@@ -43,10 +43,13 @@ def loop_all(opt):
         results_true.update({test_dataset.trials[0].dset_name: {}})
         results_pred.update({test_dataset.trials[0].dset_name: {}})
 
-        state_pred_list = [[] for _ in range(skel_num-1)]
-        for i_win in range(0, len(windows), opt.batch_size):
+        sub_heights[dset] = {trial_.sub_and_trial_name: trial_.sub_height for trial_ in test_dataset.trials}
+        sub_weights[dset] = {trial_.sub_and_trial_name: trial_.sub_weight for trial_ in test_dataset.trials}
 
-            state_true = [win[0] for win in windows[i_win:i_win+opt.batch_size]]
+        state_pred_list = [[] for _ in range(skel_num-1)]
+        for i_win in range(0, len(windows), opt.batch_size_inference):
+
+            state_true = [win[0] for win in windows[i_win:i_win+opt.batch_size_inference]]
             state_true = torch.stack(state_true)
 
             if da_to_test == 0:
@@ -109,7 +112,8 @@ def loop_all(opt):
             results_pred[dset][sub_and_trial] = np.concatenate(results_pred[dset][sub_and_trial], axis=0)
             results_bl[dset][sub_and_trial] = np.concatenate(results_bl[dset][sub_and_trial], axis=0)
 
-    pickle.dump([results_true, results_pred, results_bl, opt.osim_dof_columns, is_output_label_array],
+    pickle.dump([results_true, results_pred, results_bl, opt.osim_dof_columns, is_output_label_array,
+                 sub_heights, sub_weights],
                 open(f"figures/results/{save_name}.pkl", "wb"))
 
 
@@ -157,6 +161,7 @@ def get_baseline_val(dset, windows, trials):
 if __name__ == "__main__":
     skel_num = 4
     opt = parse_opt()
+    opt.guide_x_start_the_beginning_step = -10
 
     # opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'5000'}.pt"
     opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'norm_all4'}/weights/train-{'5000'}.pt"

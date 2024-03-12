@@ -20,7 +20,7 @@ import os
 import torch
 import copy
 import torch.nn as nn
-from model.utils import extract, make_beta_schedule, linear_resample_data, update_d_dd
+from model.utils import extract, make_beta_schedule, linear_resample_data, update_d_dd, fix_seed
 from typing import Any, List
 import nimblephysics as nimble
 from alant.alan_consts import *
@@ -31,6 +31,9 @@ import time
 import more_itertools as mit
 from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
+
+
+fix_seed()
 
 
 def convert_addb_state_to_model_input(pose_df, joints_3d):
@@ -103,7 +106,7 @@ class MotionDataset(Dataset):
         self.data_path = data_path
         self.trial_start_num = trial_start_num
         self.target_sampling_rate = opt.target_sampling_rate
-        self.window_len = int(opt.target_sampling_rate * opt.window_len)     # 1.5 seconds for each window
+        self.window_len = opt.window_len
         self.reset_moving_direction_flag = reset_moving_direction_flag
         self.opt = opt
         self.divide_jittery = divide_jittery
@@ -168,7 +171,7 @@ class MotionDataset(Dataset):
         else:
             self.normalizer = normalizer
         for i in range(self.trial_num):
-            self.trials[i].converted_pose = torch.tensor(self.normalizer.normalize(self.trials[i].converted_pose)).clone().detach().float()
+            self.trials[i].converted_pose = self.normalizer.normalize(self.trials[i].converted_pose).clone().detach().float()
 
         # # [debug]
         # data_concat = torch.cat([trial_.converted_pose for trial_ in self.trials], dim=0)
@@ -250,51 +253,48 @@ class MotionDataset(Dataset):
 
         return converted_pose
 
-    @staticmethod
-    def augment_one_trial_to_4_moving_directions(trials, converted_column_names):
-        trials_augmented = []
-        rot_mat_to_apply = [
-            torch.tensor([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]]).float()
-            for angle in [0.5*np.pi, np.pi, 1.5*np.pi]
-        ]
-
-        pelvis_orientation_col_loc = [converted_column_names.index(col) for col in [f'pelvis_{x}' for x in range(6)]]
-        pelvis_position_col_loc = [converted_column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
-        r_grf_col_loc = [converted_column_names.index(col) for col in ['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']]
-        l_grf_col_loc = [converted_column_names.index(col) for col in ['calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz']]
-
-        if len(pelvis_orientation_col_loc) != 6:
-            raise ValueError('pelvis column number incorrect')
-        for trial_ in trials:
-            trials_augmented.append(trial_)
-
-            pelvis_orientation = trial_.converted_pose[:, pelvis_orientation_col_loc]
-            pelvis_orientation = rotation_6d_to_matrix(pelvis_orientation)
-            pelvis_position = trial_.converted_pose[:, pelvis_position_col_loc]
-            r_grf = trial_.converted_pose[:, r_grf_col_loc]
-            l_grf = trial_.converted_pose[:, l_grf_col_loc]
-
-            for rot_mat in rot_mat_to_apply:
-                pelvis_orientation_rotated = torch.matmul(rot_mat, pelvis_orientation)
-                pelvis_position_rotated = torch.matmul(rot_mat, pelvis_position.unsqueeze(2)).squeeze(2)
-                r_grf_rotated = torch.matmul(rot_mat, r_grf.unsqueeze(2)).squeeze(2)
-                l_grf_rotated = torch.matmul(rot_mat, l_grf.unsqueeze(2)).squeeze(2)
-
-                converted_pose = copy.deepcopy(trial_.converted_pose)
-                converted_pose[:, pelvis_orientation_col_loc] = matrix_to_rotation_6d(pelvis_orientation_rotated.float())
-                converted_pose[:, pelvis_position_col_loc] = pelvis_position_rotated.float()
-                converted_pose[:, r_grf_col_loc] = r_grf_rotated.float()
-                converted_pose[:, l_grf_col_loc] = l_grf_rotated.float()
-
-                augmented_trial = TrialData(converted_pose,
-                                            trial_.raw_states,
-                                            trial_.model_offsets,
-                                            trial_.contact_bodies,
-                                            trial_.sub_and_trial_name,
-                                            trial_.dset_name)
-
-                trials_augmented.append(augmented_trial)
-        return trials_augmented
+    # @staticmethod
+    # def augment_one_trial_to_4_moving_directions(trials, converted_column_names):
+    #     trials_augmented = []
+    #     rot_mat_to_apply = [
+    #         torch.tensor([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]]).float()
+    #         for angle in [0.5*np.pi, np.pi, 1.5*np.pi]
+    #     ]
+    #
+    #     pelvis_orientation_col_loc = [converted_column_names.index(col) for col in [f'pelvis_{x}' for x in range(6)]]
+    #     pelvis_position_col_loc = [converted_column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
+    #     r_grf_col_loc = [converted_column_names.index(col) for col in ['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']]
+    #     l_grf_col_loc = [converted_column_names.index(col) for col in ['calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz']]
+    #
+    #     if len(pelvis_orientation_col_loc) != 6:
+    #         raise ValueError('pelvis column number incorrect')
+    #     for trial_ in trials:
+    #         trials_augmented.append(trial_)
+    #
+    #         pelvis_orientation = trial_.converted_pose[:, pelvis_orientation_col_loc]
+    #         pelvis_orientation = rotation_6d_to_matrix(pelvis_orientation)
+    #         pelvis_position = trial_.converted_pose[:, pelvis_position_col_loc]
+    #         r_grf = trial_.converted_pose[:, r_grf_col_loc]
+    #         l_grf = trial_.converted_pose[:, l_grf_col_loc]
+    #
+    #         for rot_mat in rot_mat_to_apply:
+    #             pelvis_orientation_rotated = torch.matmul(rot_mat, pelvis_orientation)
+    #             pelvis_position_rotated = torch.matmul(rot_mat, pelvis_position.unsqueeze(2)).squeeze(2)
+    #             r_grf_rotated = torch.matmul(rot_mat, r_grf.unsqueeze(2)).squeeze(2)
+    #             l_grf_rotated = torch.matmul(rot_mat, l_grf.unsqueeze(2)).squeeze(2)
+    #
+    #             converted_pose = copy.deepcopy(trial_.converted_pose)
+    #             converted_pose[:, pelvis_orientation_col_loc] = matrix_to_rotation_6d(pelvis_orientation_rotated.float())
+    #             converted_pose[:, pelvis_position_col_loc] = pelvis_position_rotated.float()
+    #             converted_pose[:, r_grf_col_loc] = r_grf_rotated.float()
+    #             converted_pose[:, l_grf_col_loc] = l_grf_rotated.float()
+    #
+    #             augmented_trial = TrialData(converted_pose,
+    #                                         **trial_.get_attributes_for_reinitialization()
+    #                                         )
+    #
+    #             trials_augmented.append(augmented_trial)
+    #     return trials_augmented
 
     def get_all_wins(self):
         windows = []
@@ -311,8 +311,8 @@ class MotionDataset(Dataset):
 
     def get_all_gait_cycles_and_set_gait_phase_label(self):
         stance_vgrf_thd = 1    # 100% of body mass. Needs to be large because some datasets are noisy.
-        stance_len_thds = [int(self.opt.target_sampling_rate * 0.1), int(self.opt.target_sampling_rate * self.opt.window_len * 0.8)]      # 0.1 s to 1 s
-        cycle_len_thds = [int(self.opt.target_sampling_rate * 0.2), int(self.opt.target_sampling_rate * self.opt.window_len)]      # 0.2 s to 1.5 s
+        stance_len_thds = [int(self.opt.target_sampling_rate * 0.1), int(self.opt.window_len * 0.8)]      # 0.1 s to 1 s
+        cycle_len_thds = [int(self.opt.target_sampling_rate * 0.2), int(self.opt.window_len)]      # 0.2 s to 1.5 s
 
         cycles_ = []
         for i_trial, trial_ in enumerate(self.trials):
@@ -422,9 +422,9 @@ class MotionDataset(Dataset):
             except RuntimeError:
                 print(f'Loading subject {subject_path} failed, skipping')
                 continue
-            subject_mass = subject.getMassKg()
+            sub_mass = subject.getMassKg()
             contact_bodies = subject.getGroundForceBodies()
-            print(f'Loading subject: {subject_path}, mass: {subject_mass} kg')
+            print(f'Loading subject: {subject_path}')
 
             skel = subject.readSkel(0, geometryFolder=os.path.dirname(os.path.realpath(__file__)) + "/../../data/Geometry/")
             model_offsets = get_model_offsets(skel).float()
@@ -450,7 +450,7 @@ class MotionDataset(Dataset):
                     continue
                 poses = [frame.pos for frame in first_passes]
 
-                forces = [frame.groundContactForce / subject_mass for frame in first_passes]
+                forces = [frame.groundContactForce / sub_mass for frame in first_passes]
                 if len(forces[0]) != 6:
                     continue        # only include data with 2 contact bodies.
                 states = np.concatenate([np.array(poses), np.array(forces)], axis=1)
@@ -482,7 +482,8 @@ class MotionDataset(Dataset):
 
                 converted_states = torch.tensor(states_df.values).float()
 
-                current_trials = [TrialData(converted_states, states, model_offsets, contact_bodies, sub_and_trial_name, dset_name)]
+                current_trials = [TrialData(converted_states, states, model_offsets, contact_bodies, sub_and_trial_name,
+                                            subject.getHeightM(), subject.getMassKg(), dset_name)]
 
                 # functions for cleaning up the data
                 if self.divide_jittery:
@@ -507,8 +508,8 @@ class MotionDataset(Dataset):
 
     def divide_jittery_trials(self, trials, converted_column_names):
         """ If one sample have abnormal acceleration or angular velocity, divide the trial into two from this sample."""
-        linear_acc_limit = 320          # 320 m/s^2
-        angular_v_limit = np.deg2rad(2000)          # 2000 deg/s
+        linear_acc_limit = 3          # 320 m/s^2      !!!
+        angular_v_limit = np.deg2rad(20)          # 2000 deg/s
         rot_mat_angular_v_limit = angular_v_limit               # use the same limit because sin(x) ~= x for small x
 
         pos_col = [col for col in converted_column_names if '_tx' in col or '_ty' in col or '_tz' in col]
@@ -537,11 +538,9 @@ class MotionDataset(Dataset):
                         continue
                     trial_data_list.append(
                         TrialData(current_trial.converted_pose[start_:end_],
-                                  current_trial.raw_states,
-                                  current_trial.model_offsets,
-                                  current_trial.contact_bodies,
-                                  current_trial.sub_and_trial_name,
-                                  current_trial.dset_name)
+                                  current_trial.raw_states[start_:end_],
+                                  *current_trial.get_attributes_for_reinitialization()
+                                  )
                     )
 
                 print('Divided {} {} into {} trials, {} due to linear acc, {} due to euler angle vel, {} due to rot mat vel'.format(
@@ -572,18 +571,31 @@ class GaitCycles:
 
 
 class TrialData:
-    def __init__(self, converted_states, raw_states, model_offsets, contact_bodies, sub_and_trial_name, dset_name, trial_gait_phase_label=None):
+    def __init__(self, converted_states, raw_states, model_offsets, contact_bodies, sub_and_trial_name,
+                 sub_height, sub_weight, dset_name, trial_gait_phase_label=None):
         self.converted_pose = converted_states
         self.raw_states = raw_states
         self.model_offsets = model_offsets
         self.contact_bodies = contact_bodies
         self.sub_and_trial_name = sub_and_trial_name
+        self.sub_height = sub_height
+        self.sub_weight = sub_weight
         self.dset_name = dset_name
         self.length = converted_states.shape[0]
         self.trial_gait_phase_label = trial_gait_phase_label
 
     def get_attributes(self):
-        return {'sub_and_trial_name': self.sub_and_trial_name, 'dset_name': self.dset_name}
+        return {'sub_and_trial_name': self.sub_and_trial_name, 'dset_name': self.dset_name,
+                'sub_height': self.sub_height, 'sub_weight': self.sub_weight}
+
+    def get_attributes_for_reinitialization(self):
+        return [
+            self.model_offsets,
+            self.contact_bodies,
+            self.sub_and_trial_name,
+            self.sub_height,
+            self.sub_weight,
+            self.dset_name]
 
 
 class MotionModel:
@@ -606,7 +618,7 @@ class MotionModel:
         self.repr_dim = repr_dim
 
         feature_dim = 35 if use_baseline_feats else 4800
-        self.horizon = horizon = 90     # [!] sampling rate * win size in seconds
+        self.horizon = horizon = opt.window_len
 
         self.accelerator.wait_for_everyone()
 
@@ -678,7 +690,7 @@ class MotionModel:
             data_path=opt.data_path_train,
             train=True,
             # trial_start_num=-2,
-            # max_trial_num=10,            # !!!
+            max_trial_num=2,            # !!!
             opt=opt,
         )
         # set normalizer
@@ -791,9 +803,15 @@ class MotionModel:
         if self.accelerator.is_main_process and opt.log_with_wandb:
             wandb.run.finish()
 
-    def eval_loop(self, opt, state_true, masks, num_of_generation_per_window=1):
+    def eval_loop(self, opt, state_true, masks, value_diff_thd=None, value_diff_weight=None, num_of_generation_per_window=1):
         self.eval()
-        constraint = {'mask': masks, 'value': state_true.clone()}
+        # if value_diff_thd is None:
+        #     value_diff_thd = torch.zeros([state_true.shape[2]])
+        # if value_diff_weight is None:
+        #     value_diff_weight = torch.ones([state_true.shape[2]])
+
+        constraint = {'mask': masks, 'value': state_true.clone(), 'value_diff_thd': value_diff_thd,
+                      'value_diff_weight': value_diff_weight}
 
         shape = (state_true.shape[0], self.horizon, self.repr_dim)
         cond = torch.ones(state_true.shape[0])
@@ -1125,7 +1143,7 @@ class GaussianDiffusion(nn.Module):
                 x[1:, :half] = x[:-1, half:]
         return x
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def inpaint_ddim_loop(self, shape, cond, noise=None, constraint=None, return_diffusion=False, start_point=None):
         batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 1
 
@@ -1133,15 +1151,71 @@ class GaussianDiffusion(nn.Module):
         times = list(reversed(times.int().tolist()))
         time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
 
-        x = torch.randn(shape, device = device)
+        x = torch.randn(shape, device=device)
         cond = cond.to(device)
 
         mask = constraint["mask"].to(device)  # batch x horizon x channels
         value = constraint["value"].to(device)  # batch x horizon x channels
+        if constraint["value_diff_thd"] is not None:
+            value_diff_thd = constraint["value_diff_thd"].to(device)  # channels
+            value_diff_weight = constraint["value_diff_weight"].to(device)  # channels
 
         for time, time_next in tqdm(time_pairs, desc='sampling loop time step'):
             time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
-            pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
+
+            if time > self.opt.guide_x_start_the_beginning_step:
+                with torch.no_grad():
+                    pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
+
+            else:
+                # # only once
+                # lr_ = 0.01
+                # x.requires_grad_()
+                # pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
+                # value_diff = torch.subtract(x_start, value * mask)
+                # loss = torch.relu(value_diff.abs() - value_diff_thd) * mask
+                # grad = torch.autograd.grad([loss.sum()], [x])[0]
+                # print(loss.sum())
+                # x.detach()
+                # x_start = x_start - lr_ * grad
+
+                # Multiple guided steps
+                lr_ = 0.02
+                n_guided_steps = 10
+                x.requires_grad_()
+
+                # # DEBUG
+                # x_start_list = []
+
+                for step_ in range(n_guided_steps):
+                    pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
+
+                    # # DEBUG
+                    # if step_ % 5 == 0:
+                    #     x_start_list.append(x_start.detach().clone().cpu().numpy())
+
+                    value_diff = torch.subtract(x_start, value * mask)
+                    loss = torch.relu(value_diff.abs() - value_diff_thd) * value_diff_weight * mask
+
+                    # temp = pd.DataFrame(loss[0].detach().clone().cpu().numpy(), columns=self.opt.model_states_column_names)
+
+                    grad = torch.autograd.grad([loss.sum()], [x])[0]
+                    x = x - lr_ * grad
+                x_start = x_start - lr_ * grad
+                x.detach()
+
+                # # DEBUG
+                # x_start_list.append(x_start.detach().clone().cpu().numpy())
+                # cols = ['calcn_r_force_vy', 'calcn_l_force_vy']
+                # for col in cols:
+                #     col_loc = self.opt.model_states_column_names.index(col)
+                #     plt.figure()
+                #     for x_start_val in x_start_list:
+                #         plt.plot(x_start_val[0, :, col_loc])
+                #     plt.plot(value[0, :, col_loc].detach().cpu().numpy(), 'black', linewidth=2, alpha=0.3, label='True')
+                #     plt.title(col)
+                # plt.show()
+
 
             if time_next < 0:
                 x = x_start

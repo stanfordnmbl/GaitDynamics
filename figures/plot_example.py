@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 
 
 test_data_name = '0124'
-results_true, results_pred, columns, _ =\
+results_true, results_pred, columns, _, _, _ =\
     pickle.load(open(f"results/results_true_pred_{test_data_name}.pkl", "rb"))
 
 params_of_interest = ['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']

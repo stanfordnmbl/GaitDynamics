@@ -4,6 +4,13 @@ import torch
 from torch import nn
 from scipy.interpolate import interp1d
 import scipy.interpolate as interpo
+import random
+
+
+def fix_seed():
+    torch.manual_seed(0)
+    random.seed(0)
+    np.random.seed(0)
 
 
 def linear_resample_data(trial_data, original_fre, target_fre):

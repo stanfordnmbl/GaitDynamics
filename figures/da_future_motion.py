@@ -17,7 +17,7 @@ step = 2
 
 for end_of_known in range(start_loc, end_loc, step):
     test_data_name = f'downstream_future_motion_{end_of_known}'
-    results_true, results_pred, results_bl, columns, is_output_label =\
+    results_true, results_pred, results_bl, columns, is_output_label, _, _ =\
         pickle.load(open(f"results/{test_data_name}.pkl", "rb"))
 
     window_len = is_output_label.shape[0]
