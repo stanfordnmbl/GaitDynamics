@@ -1,7 +1,7 @@
 from alant.args import parse_opt, set_with_arm_opt
 import torch
 import os
-from alant.alan_consts import DATASETS_NO_ARM, NOT_IN_GAIT_PHASE
+from alant.alan_consts import DATASETS_NO_ARM, NOT_IN_GAIT_PHASE, DATASETS_ASB
 from model.alan_model import MotionModel, MotionDataset
 from model.utils import linear_resample_data_as_num_of_dp
 from model.alan_model import inverse_convert_addb_state_to_model_input
@@ -16,7 +16,7 @@ def loop_all(opt):
     set_with_arm_opt(opt, repr_dim == 56)
 
     model = MotionModel(opt, repr_dim)
-    dset_list = DATASETS_NO_ARM
+    dset_list = DATASETS_ASB
     results_true, results_pred, results_bl, sub_heights, sub_weights = {}, {}, {}, {}, {}
     is_output_label_array = torch.zeros([90, 29])
 
@@ -123,7 +123,7 @@ def save_average_gait(dset):
         train=True,
         specific_dset=dset,
         opt=opt,
-        # max_trial_num=2,     # !!!
+        # max_trial_num=3,     # !!!
         # trial_start_num=2,   # !!!
     )
     if not train_dataset:
@@ -131,8 +131,13 @@ def save_average_gait(dset):
     cycles_ = train_dataset.get_all_gait_cycles_and_set_gait_phase_label()
     if len(cycles_) == 0:
         return
-    gait_cycles_resampled = [item_.gait_cycle_raw_resampled for item_ in cycles_]
+    gait_cycles_resampled = [item_.gait_cycle_resampled for item_ in cycles_]
     average_gait_cycle = torch.mean(torch.stack(gait_cycles_resampled), dim=0)
+
+    average_gait_cycle = inverse_convert_addb_state_to_model_input(
+        train_dataset.normalizer.unnormalize(average_gait_cycle.unsqueeze(0)),
+        model_states_column_names=opt.model_states_column_names,
+        joints_3d=opt.joints_3d, osim_dof_columns=opt.osim_dof_columns).squeeze().numpy()
 
     pickle.dump(average_gait_cycle, open(f"figures/results/average_gait_cycle_{dset}.pkl", "wb"))
 
@@ -142,8 +147,6 @@ def get_baseline_val(dset, windows, trials):
         return None
     average_gait_cycle = pickle.load(open(f"figures/results/average_gait_cycle_{dset}.pkl", "rb"))
 
-    resampled = linear_resample_data_as_num_of_dp(average_gait_cycle, 1001)     # TODO average_gait_cycle should be 1001
-
     bl_pred = {dset: {}}
 
     for win in windows:
@@ -151,7 +154,7 @@ def get_baseline_val(dset, windows, trials):
         gait_phase_label = win[3]
         if trials[i_trial].sub_and_trial_name not in bl_pred[dset].keys():
             bl_pred[dset].update({trials[i_trial].sub_and_trial_name: []})
-        bl_pred_current_win = resampled[gait_phase_label]
+        bl_pred_current_win = average_gait_cycle[gait_phase_label]
         bl_pred_current_win[gait_phase_label == NOT_IN_GAIT_PHASE] = NOT_IN_GAIT_PHASE
         bl_pred[dset][trials[i_trial].sub_and_trial_name].append(bl_pred_current_win)
 
@@ -161,10 +164,10 @@ def get_baseline_val(dset, windows, trials):
 if __name__ == "__main__":
     skel_num = 4
     opt = parse_opt()
-    opt.guide_x_start_the_beginning_step = -10
+    opt.guide_x_start_the_beginning_step = -10      # negative value means no guidance
 
     # opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'5000'}.pt"
-    opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'norm_all4'}/weights/train-{'5000'}.pt"
+    opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'vel_as_first_three2'}/weights/train-{'5000'}.pt"
 
     knee_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'knee' in col]
     ankle_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'ankle' in col]
@@ -179,7 +182,7 @@ if __name__ == "__main__":
         'knee_ankle_hip': knee_diffusion_col_loc + ankle_diffusion_col_loc + hip_diffusion_col_loc
     }
 
-    # for dset in DATASETS_NO_ARM:
+    # for dset in ['Han2023_Formatted_No_Arm']:
     #     save_average_gait(dset)
 
     # da_to_test = 0

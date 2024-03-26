@@ -9,11 +9,11 @@ import numpy as np
 def parse_opt():
     machine_specific_config = json.load(open(os.path.dirname(os.path.realpath(__file__)) + '/machine_specific_config.json', 'r'))
     parser = argparse.ArgumentParser()
-    parser.add_argument("--exp_name", default="norm_all", help="save to project/name")
+    parser.add_argument("--exp_name", default="vel_as_first_three", help="save to project/name")
     parser.add_argument("--with_arm", type=bool, default=False, help="whether osim model has arm DoFs")
     parser.add_argument("--log_with_wandb", type=bool, default=True, help="log with wandb")
     parser.add_argument("--epochs", type=int, default=5000)
-    parser.add_argument("--target_sampling_rate", type=int, default=int(60*1.2))     # !!!
+    parser.add_argument("--target_sampling_rate", type=int, default=60)
     parser.add_argument("--window_len", type=int, default=90)
 
     parser.add_argument("--project", default="runs/train", help="project/name")
@@ -56,13 +56,13 @@ def parse_opt():
 def set_with_arm_opt(opt, with_arm):
     if with_arm:
         opt.with_arm = True
-        opt.osim_dof_columns = copy.deepcopy(OSIM_DOF_ALL+FORCE_ALL)
+        opt.osim_dof_columns = copy.deepcopy(OSIM_DOF_ALL + KINETICS_ALL)
         opt.joints_3d = JOINTS_3D_ALL
         data_path = opt.data_path_parent + '/b3d_with_arm/'
         opt.model_states_column_names = copy.deepcopy(MODEL_STATES_COLUMN_NAMES_WITH_ARM)
     else:
         opt.with_arm = False
-        opt.osim_dof_columns = copy.deepcopy(OSIM_DOF_ALL[:23]+FORCE_ALL)
+        opt.osim_dof_columns = copy.deepcopy(OSIM_DOF_ALL[:23] + KINETICS_ALL)
         opt.joints_3d = {key_: value_ for key_, value_ in JOINTS_3D_ALL.items() if key_ in ['pelvis', 'hip_r', 'hip_l', 'lumbar']}
         # data_path = opt.data_path_parent + '/for_check/'
         data_path = opt.data_path_parent + '/b3d_no_arm/'

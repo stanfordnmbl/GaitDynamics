@@ -1,7 +1,6 @@
 import math
 import numpy as np
 import pandas as pd
-import multiprocessing
 from functools import partial
 import torch.nn.functional as F
 import wandb
@@ -20,7 +19,8 @@ import os
 import torch
 import copy
 import torch.nn as nn
-from model.utils import extract, make_beta_schedule, linear_resample_data, update_d_dd, fix_seed
+from model.utils import extract, make_beta_schedule, linear_resample_data, update_d_dd, fix_seed, nan_helper, \
+    from_foot_loc_to_foot_vel, moving_average_filtering, data_filter
 from typing import Any, List
 import nimblephysics as nimble
 from alant.alan_consts import *
@@ -120,7 +120,12 @@ class MotionDataset(Dataset):
         print("Loading dataset...")
         self.load_addb(opt, max_trial_num)
 
-        # self.visualize_loaded(opt, self.trials)       # !!!
+        # functions for cleaning up the data
+        if self.divide_jittery:
+            self.trials = self.divide_jittery_trials(self.trials, opt.model_states_column_names)
+        self.guess_vel_and_replace_txtytz()
+
+        # self.visualize_loaded(opt, self.trials)
 
         self.trial_num = len(self.trials)
         if self.trial_num == 0:
@@ -178,6 +183,70 @@ class MotionDataset(Dataset):
         # for i_col, col_name in enumerate(opt.model_states_column_names):
         #     print(f'{col_name}, mean: {data_concat[:, i_col].mean()}, std: {data_concat[:, i_col].std()},'
         #           f' max: {data_concat[:, i_col].max()}, min: {data_concat[:, i_col].min()}')
+
+    def guess_vel_and_replace_txtytz(self):
+        def get_vel_and_reset(r_foot_vel_buffer_, l_foot_vel_buffer_, vel_from_t_, i_trial):
+            r_foot_vel = np.concatenate(r_foot_vel_buffer_, axis=0)
+            l_foot_vel = np.concatenate(l_foot_vel_buffer_, axis=0)
+
+            for vel in [r_foot_vel, l_foot_vel]:
+                nans, x = nan_helper(vel)
+                if not np.sum(nans[:, 0]) == vel.shape[0]:
+                    for axis in range(3):
+                        vel[nans[:, axis], axis] = np.interp(x(nans[:, axis]), x(~nans[:, axis]), vel[~nans[:, axis], axis])
+                        vel[:, axis] = moving_average_filtering(vel[:, axis], 11)
+                        # vel[:, axis] = data_filter(vel[:, axis], 10, self.target_sampling_rate)
+
+            r_foot_vel[np.isnan(r_foot_vel)] = l_foot_vel[np.isnan(r_foot_vel)]
+            l_foot_vel[np.isnan(l_foot_vel)] = r_foot_vel[np.isnan(l_foot_vel)]
+            average_foot_vel = (r_foot_vel + l_foot_vel) / 2
+
+            vel_from_t = np.concatenate(vel_from_t_, axis=0)
+            for axis in range(3):
+                vel_from_t[:, axis] = moving_average_filtering(vel_from_t[:, axis], 11)
+            # vel_from_t = data_filter(vel_from_t, 10, self.target_sampling_rate)
+
+            average_foot_vel[np.isnan(average_foot_vel)] = - vel_from_t[np.isnan(average_foot_vel)]
+            walking_vel = torch.from_numpy(vel_from_t - average_foot_vel)
+
+            current_index = walking_vel.shape[0]
+            current_trial = i_trial
+            pelvis_pos_loc = [self.converted_column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
+            while current_index > 0:
+                self.trials[current_trial].converted_pose[:, pelvis_pos_loc] = walking_vel[current_index-self.trials[current_trial].length:current_index]
+                current_index -= self.trials[current_trial].length
+                current_trial -= 1
+
+            assert current_index == 0
+
+            # plt.figure()
+            # plt.plot(walking_vel)
+            # # plt.figure()
+            # # plt.plot(vel_from_t[:, 0])
+            # # plt.plot(r_foot_vel[:, 0])
+            # # plt.plot(l_foot_vel[:, 0])
+            # plt.title(self.trials[i_trial].dset_name + self.trials[i_trial].sub_and_trial_name)
+            # plt.show()
+            return [], [], []
+
+        for i_trial, trial in enumerate(self.trials):
+            if i_trial == 0:
+                current_sub_trial_name = trial.sub_and_trial_name.split('_segment_')[0]
+                r_foot_vel_buffer, l_foot_vel_buffer, vel_from_t = [], [], []
+
+            if not trial.sub_and_trial_name.split('_segment_')[0] == current_sub_trial_name:
+                r_foot_vel_buffer, l_foot_vel_buffer, vel_from_t = get_vel_and_reset(r_foot_vel_buffer, l_foot_vel_buffer, vel_from_t, i_trial-1)
+                current_sub_trial_name = trial.sub_and_trial_name.split('_segment_')[0]
+
+            print(trial.sub_and_trial_name)
+            r_foot_vel_buffer.append(trial.mtp_r_vel)
+            l_foot_vel_buffer.append(trial.mtp_l_vel)
+            vel_from_t_trial = np.diff(trial.converted_pose[:, 0:3], axis=0) * self.target_sampling_rate
+            vel_from_t_trial = np.concatenate([vel_from_t_trial, vel_from_t_trial[-1][None, :]], axis=0)
+            vel_from_t.append(vel_from_t_trial)
+
+        if len(self.trials) > 0:
+            get_vel_and_reset(r_foot_vel_buffer, l_foot_vel_buffer, vel_from_t, i_trial)
 
     def __len__(self):
         return self.opt.pseudo_dataset_len
@@ -290,7 +359,6 @@ class MotionDataset(Dataset):
     #             converted_pose[:, l_grf_col_loc] = l_grf_rotated.float()
     #
     #             augmented_trial = TrialData(converted_pose,
-    #                                         **trial_.get_attributes_for_reinitialization()
     #                                         )
     #
     #             trials_augmented.append(augmented_trial)
@@ -338,10 +406,9 @@ class MotionDataset(Dataset):
                 if stance_start[i_start+1] - self.window_len < 0:
                     continue
                 gait_cycle_converted = trial_.converted_pose[stance_start[i_start]:stance_start[i_start+1]]
-                gait_cycle_raw = trial_.raw_states[stance_start[i_start]:stance_start[i_start+1]]
                 trial_gait_phase_label[stance_start[i_start]:stance_start[i_start+1]] = np.linspace(0, 1000, stance_start[i_start+1]-stance_start[i_start])
                 cycles_.append(GaitCycles(
-                    gait_cycle_converted, gait_cycle_raw, (stance_start[i_start], stance_start[i_start+1]),
+                    gait_cycle_converted, (stance_start[i_start], stance_start[i_start+1]),
                     trial_.sub_and_trial_name, trial_.dset_name))
             self.trials[i_trial].trial_gait_phase_label = trial_gait_phase_label
         return cycles_
@@ -435,6 +502,7 @@ class MotionDataset(Dataset):
 
             trial_start_num_ = self.trial_start_num if self.trial_start_num >= 0 else max(0, subject.getNumTrials() + self.trial_start_num)
             for trial_index in tqdm(range(trial_start_num_, subject.getNumTrials())):
+                sampling_rate = 1 / subject.getTrialTimestep(trial_index)
                 sub_and_trial_name = subject_name + '_' + subject.getTrialName(trial_index)
                 trial_length = subject.getTrialLength(trial_index)
                 probably_missing: List[bool] = [reason != nimble.biomechanics.MissingGRFReason.notMissingGRF for reason
@@ -449,11 +517,17 @@ class MotionDataset(Dataset):
                     print(f'{subject_name}, {trial_index} has no processing passes, skipping')
                     continue
                 poses = [frame.pos for frame in first_passes]
-
                 forces = [frame.groundContactForce / sub_mass for frame in first_passes]
                 if len(forces[0]) != 6:
                     continue        # only include data with 2 contact bodies.
-                states = np.concatenate([np.array(poses), np.array(forces)], axis=1)
+
+                # This is to compensate an AddBiomechanics bug that first GRF is always 0.
+                if (forces[0] == 0).all():
+                    print(f'Compensating... an AddB bug, {subject_name}, {trial_index} has 0 GRF at the first frame.', end='')
+                    forces[0] = forces[1]
+
+                poses, forces = np.array(poses), np.array(forces)
+                states = np.concatenate([poses, forces], axis=1)
 
                 grf_flag_counts = list(mit.run_length.encode(probably_missing))
                 max_has_grf_count = -1
@@ -468,7 +542,6 @@ class MotionDataset(Dataset):
                 if self.reset_moving_direction_flag:
                     states = self.reset_moving_direction(states, opt.osim_dof_columns)
 
-                sampling_rate = 1 / subject.getTrialTimestep(trial_index)
                 if (states.shape[0] / sampling_rate * self.target_sampling_rate) < self.window_len + 2:
                     # print(f'Subject {subject_name} trial {sub_and_trial_name} has {round(len(states) / sampling_rate, 1)} s data (less than 3 s), skipping')
                     continue
@@ -476,22 +549,20 @@ class MotionDataset(Dataset):
                 if not self.is_lumbar_rotation_reasonable(states, opt.osim_dof_columns):
                     continue
 
+                foot_locations, _, _ = forward_kinematics(states[:, :-len(KINETICS_ALL)], model_offsets)
+                mtp_r_loc, mtp_l_loc = foot_locations[1].squeeze().cpu().numpy(), foot_locations[3].squeeze().cpu().numpy()
+                mtp_r_vel = from_foot_loc_to_foot_vel(mtp_r_loc, states[:, -len(KINETICS_ALL):][:, 1], self.target_sampling_rate)
+                mtp_l_vel = from_foot_loc_to_foot_vel(mtp_l_loc, states[:, -len(KINETICS_ALL):][:, 4], self.target_sampling_rate)
+
                 states_df = pd.DataFrame(states, columns=opt.osim_dof_columns)
                 states_df = convert_addb_state_to_model_input(states_df, opt.joints_3d)
                 self.converted_column_names = list(states_df.columns)
 
                 converted_states = torch.tensor(states_df.values).float()
 
-                current_trials = [TrialData(converted_states, states, model_offsets, contact_bodies, sub_and_trial_name,
-                                            subject.getHeightM(), subject.getMassKg(), dset_name)]
-
-                # functions for cleaning up the data
-                if self.divide_jittery:
-                    current_trials = self.divide_jittery_trials(current_trials, self.converted_column_names)
-
-                for trial_ in current_trials:
-                    self.trials.append(trial_)
-                    self.dset_set.add(dset_name)
+                self.trials.append(TrialData(converted_states, model_offsets, contact_bodies, sub_and_trial_name,
+                                             subject.getHeightM(), subject.getMassKg(), dset_name, mtp_r_vel, mtp_l_vel))
+                self.dset_set.add(dset_name)
 
                 if max_trial_num is not None and len(self.trials) >= max_trial_num:
                     return
@@ -508,8 +579,8 @@ class MotionDataset(Dataset):
 
     def divide_jittery_trials(self, trials, converted_column_names):
         """ If one sample have abnormal acceleration or angular velocity, divide the trial into two from this sample."""
-        linear_acc_limit = 3          # 320 m/s^2      !!!
-        angular_v_limit = np.deg2rad(20)          # 2000 deg/s
+        linear_acc_limit = 320          # 320 m/s^2
+        angular_v_limit = np.deg2rad(2000)          # 2000 deg/s
         rot_mat_angular_v_limit = angular_v_limit               # use the same limit because sin(x) ~= x for small x
 
         pos_col = [col for col in converted_column_names if '_tx' in col or '_ty' in col or '_tz' in col]
@@ -538,8 +609,9 @@ class MotionDataset(Dataset):
                         continue
                     trial_data_list.append(
                         TrialData(current_trial.converted_pose[start_:end_],
-                                  current_trial.raw_states[start_:end_],
-                                  *current_trial.get_attributes_for_reinitialization()
+                                  *current_trial.get_attributes_for_reinitialization(),
+                                  current_trial.mtp_r_vel[start_:end_],
+                                  current_trial.mtp_l_vel[start_:end_]
                                   )
                     )
 
@@ -547,34 +619,33 @@ class MotionDataset(Dataset):
                     current_trial.dset_name, current_trial.sub_and_trial_name,
                     len(trial_data_list), len(pos_break_point), len(euler_angle_break_point), len(rot_mat_break_point)))
             else:
-                trial_data_list = [current_trial]
+                trial_data_list.append(current_trial)
         return trial_data_list
 
 
 class GaitCycles:
-    def __init__(self, gait_cycle_converted, gait_cycle_raw, index_pair, sub_and_trial_name, dset_name):
+    def __init__(self, gait_cycle_converted, index_pair, sub_and_trial_name, dset_name):
         self.sub_and_trial_name = sub_and_trial_name
         self.dset_name = dset_name
         self.gait_cycle = gait_cycle_converted
-        self.gait_cycle_raw = gait_cycle_raw
+        # self.gait_cycle_raw = gait_cycle_raw
         self.gait_cycle_len = gait_cycle_converted.shape[0]
         self.index_pair = index_pair
-        self.gait_cycle_raw_resampled = torch.from_numpy(self.resample_to_100_steps(gait_cycle_raw))
+        self.gait_cycle_resampled = torch.from_numpy(self.resample_to_1000_timesteps(gait_cycle_converted))
 
     @staticmethod
-    def resample_to_100_steps(data_raw):
+    def resample_to_1000_timesteps(data_raw):
         x, step = np.linspace(0., 1., data_raw.shape[0], retstep=True)
-        new_x = np.linspace(0., .99, 100)
+        new_x = np.linspace(0., .99, 1001)
         f = interp1d(x, data_raw, axis=0)
         data_resampled = f(new_x)
         return data_resampled
 
 
 class TrialData:
-    def __init__(self, converted_states, raw_states, model_offsets, contact_bodies, sub_and_trial_name,
-                 sub_height, sub_weight, dset_name, trial_gait_phase_label=None):
+    def __init__(self, converted_states, model_offsets, contact_bodies, sub_and_trial_name,
+                 sub_height, sub_weight, dset_name, mtp_r_vel, mtp_l_vel, trial_gait_phase_label=None):
         self.converted_pose = converted_states
-        self.raw_states = raw_states
         self.model_offsets = model_offsets
         self.contact_bodies = contact_bodies
         self.sub_and_trial_name = sub_and_trial_name
@@ -582,6 +653,10 @@ class TrialData:
         self.sub_weight = sub_weight
         self.dset_name = dset_name
         self.length = converted_states.shape[0]
+        self.mtp_r_vel = mtp_r_vel
+        self.mtp_l_vel = mtp_l_vel
+        assert self.mtp_r_vel.shape[0] == self.length
+        assert self.mtp_l_vel.shape[0] == self.length
         self.trial_gait_phase_label = trial_gait_phase_label
 
     def get_attributes(self):
@@ -689,8 +764,8 @@ class MotionModel:
         train_dataset = MotionDataset(
             data_path=opt.data_path_train,
             train=True,
-            # trial_start_num=-2,
-            max_trial_num=2,            # !!!
+            # trial_start_num=-1,
+            # max_trial_num=3,            # !!!
             opt=opt,
         )
         # set normalizer
@@ -699,12 +774,10 @@ class MotionModel:
 
         # data loaders
         # decide number of workers based on cpu count
-        num_cpus = multiprocessing.cpu_count()
         train_data_loader = DataLoader(
             train_dataset,
             batch_size=opt.batch_size,
             shuffle=True,
-            # num_workers=min(int(num_cpus * 0.75), 32),            # causes error on slurm
             pin_memory=True,
             drop_last=True,
         )

@@ -5,12 +5,55 @@ from torch import nn
 from scipy.interpolate import interp1d
 import scipy.interpolate as interpo
 import random
+from scipy.signal import filtfilt, butter
+
+
+def data_filter(data, cut_off_fre, sampling_fre, filter_order=4):
+    fre = cut_off_fre / (sampling_fre / 2)
+    b, a = butter(filter_order, fre, 'lowpass')
+    if len(data.shape) == 1:
+        data_filtered = filtfilt(b, a, data)
+    else:
+        data_filtered = filtfilt(b, a, data, axis=0)
+    return data_filtered
 
 
 def fix_seed():
     torch.manual_seed(0)
     random.seed(0)
     np.random.seed(0)
+
+
+def nan_helper(y):
+    """Helper to handle indices and logical indices of NaNs.
+
+    Input:
+        - y, 1d numpy array with possible NaNs
+    Output:
+        - nans, logical indices of NaNs
+        - index, a function, with signature indices= index(logical_indices),
+          to convert logical indices of NaNs to 'equivalent' indices
+    """
+
+    return np.isnan(y), lambda z: z.nonzero()[0]
+
+
+def moving_average_filtering(x, N):
+    x_padded = np.pad(x, (N//2, N-1-N//2), mode='edge')
+    cumsum = np.cumsum(np.insert(x_padded, 0, 0))
+    return (cumsum[N:] - cumsum[:-N]) / float(N)
+
+
+def from_foot_loc_to_foot_vel(mtp_loc, foot_grf, sampling_rate):
+    grf_thd = 2           # 2 times of body mass Kg
+    foot_vel = np.diff(mtp_loc, axis=0) * sampling_rate
+    foot_vel = np.concatenate([foot_vel, foot_vel[-1][None, :]], axis=0)
+    low_grf_loc = foot_grf < grf_thd
+    foot_vel[low_grf_loc, :] = np.nan
+    # nans, x = nan_helper(foot_vel)
+    # if not sum(nans[:, 0]) == foot_vel.shape[0]:
+    #     foot_vel[nans] = np.interp(x(nans), x(~nans), foot_vel[~nans])
+    return foot_vel
 
 
 def linear_resample_data(trial_data, original_fre, target_fre):

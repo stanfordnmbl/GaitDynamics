@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 
 def get_results():
-    results_true, results_pred, results_bl, columns, _, _, _ =\
+    results_true, results_pred, results_bl, columns, _, _, _, =\
         pickle.load(open(f"results/{test_data_name}.pkl", "rb"))
     dset_list = list(results_true.keys())
 
@@ -51,6 +51,8 @@ def get_results():
         rmse_ap.append(scores[0]['rmse'])
         rmse_v.append(scores[1]['rmse'])
         rmses_ml.append(scores[2]['rmse'])
+
+        print('{}, {:.2f}'.format(dset, scores[1]['rmse']))
 
     print(f'{np.mean(rmses_ml_bl):.2f} ± {np.std(rmses_ml_bl):.2f}')
     print(f'{np.mean(rmses_ml):.2f} ± {np.std(rmses_ml):.2f}')

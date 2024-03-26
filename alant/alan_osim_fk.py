@@ -1,4 +1,5 @@
 import numpy
+import numpy as np
 import data.rotation_conversions as rotation_conversions
 import torch
 
@@ -85,6 +86,15 @@ def forward_kinematics(pose, offsets, with_arm=False):
     31: elbow_l
     32: radioulnar_l
     """
+    if isinstance(pose, np.ndarray):
+        pose = torch.from_numpy(pose)
+    pose = pose.to(torch.device('cuda:0'))      # TODO: Error-prone
+    if len(pose.shape) == 2:
+        pose = pose[None, ...]
+    if len(offsets.shape) == 3:
+        offsets = offsets[None, ...]
+
+    offsets = offsets.to(pose.device)
     offsets = offsets[:, None, ...]
     batch_shape = pose.shape[:-1]
     batch_shape_list = []

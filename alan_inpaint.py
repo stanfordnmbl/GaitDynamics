@@ -20,7 +20,8 @@ def inpaint(opt):
         data_path=b3d_path,
         train=False,
         normalizer=model.normalizer,
-        trial_start_num=-2,            # [!]
+        max_trial_num=5,
+        trial_start_num=0,
         # max_trial_num=1,
         divide_jittery=False,
         opt=opt,
@@ -67,7 +68,7 @@ def inpaint(opt):
 
 
 li, carter, falisse, moore, tan2021, tan2022 = 'li', 'carter', 'falisse', 'moore', 'tan2021', 'tan2022'
-uhlrich, santos = 'uhlrich', 'santos'
+uhlrich, santos, vanderzee, wang = 'uhlrich', 'santos', 'vanderzee', 'wang'
 b3d_path = f'/mnt/d/Local/Data/MotionPriorData/{li}_dset/'
 
 if __name__ == "__main__":
