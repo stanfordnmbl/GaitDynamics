@@ -1,7 +1,7 @@
 import pickle
 from matplotlib.legend_handler import HandlerBase
-from alant.alan_consts import NOT_IN_GAIT_PHASE
-from fig_utils import get_scores, EXCLUDE_FROM_ASB, format_axis, FONT_DICT, LINE_WIDTH_THICK, save_fig
+from alant.alan_consts import NOT_IN_GAIT_PHASE, EXCLUDE_FROM_ASB
+from fig_utils import get_scores, format_axis, FONT_DICT, LINE_WIDTH_THICK, save_fig
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -11,8 +11,8 @@ params_of_interest_sets = {'Ankle': ['ankle_angle_r'],
                            'Hip': ['hip_flexion_r']}
 average_all_end_loc = {key_: [] for key_ in params_of_interest_sets.keys()}
 bl_val = {}
-start_loc = 70
-end_loc = 90
+start_loc = 130
+end_loc = 150
 step = 2
 
 for end_of_known in range(start_loc, end_loc, step):
@@ -65,10 +65,9 @@ for end_of_known in range(start_loc, end_loc, step):
 
             average_dset = np.mean(np.array(list(rmse_time_steps.values())))
             average_dset_bl = np.mean(np.array(list(rmse_time_steps_bl.values())))
-            print(param_name, dset)
-            print(average_dset)
             average_dset_all.append(average_dset)
             average_dset_bl_all.append(average_dset_bl)
+            print(f'{dset}, {average_dset:.2f}, {average_dset_bl:.2f}')
 
             verbose = False
             if verbose:

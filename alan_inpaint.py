@@ -67,9 +67,9 @@ def inpaint(opt):
                 time.sleep(0.05)
 
 
-li, carter, falisse, moore, tan2021, tan2022 = 'li', 'carter', 'falisse', 'moore', 'tan2021', 'tan2022'
+li, camargo, carter, falisse, moore, tan2021, tan2022 = 'li', 'camargo', 'carter', 'falisse', 'moore', 'tan2021', 'tan2022'
 uhlrich, santos, vanderzee, wang = 'uhlrich', 'santos', 'vanderzee', 'wang'
-b3d_path = f'/mnt/d/Local/Data/MotionPriorData/{li}_dset/'
+b3d_path = f'/mnt/d/Local/Data/MotionPriorData/{tan2022}_dset/'
 
 if __name__ == "__main__":
     skel_num = 2

@@ -8,9 +8,6 @@ from scipy.signal import find_peaks
 import json
 
 
-# Hammer2013 only have 2 windows, too sensitive. Han is not a pure gait dataset.
-EXCLUDE_FROM_ASB = ['Hammer2013_Formatted_No_Arm', 'Han2023_Formatted_No_Arm']
-
 FONT_SIZE_LARGE = 15
 FONT_SIZE = 13
 FONT_SIZE_SMALL = 11

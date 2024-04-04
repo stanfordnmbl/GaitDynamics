@@ -42,12 +42,13 @@ FROZEN_DOFS = ['subtalar_angle_r', 'mtp_angle_r', 'subtalar_angle_l', 'mtp_angle
 DSET_SHORT_NAMES = ['Camargo2021', 'Carter2023', 'Fregly2012', 'Hammer2013', 'Han2023', 'Li2021', 'Moore2015',
                     'Santos2017', 'Tan2022', 'Tiziana2019', 'Uhlrich2023', 'vanderZee2022', 'Wang2023']
 DATASETS_NO_ARM = [name_ + '_Formatted_No_Arm' for name_ in DSET_SHORT_NAMES]
-DATASETS_ASB = [name_ + '_Formatted_No_Arm' for name_ in [
-    'Camargo2021', 'Carter2023', 'Hammer2013', 'Han2023', 'Moore2015', 'Tan2022', 'vanderZee2022', 'Wang2023']]
 
 NOT_IN_GAIT_PHASE = -1000
 
-
+# Carter GRF are too noisy
+# Hammer2013 only have 2 windows, too sensitive.
+# Han is not a pure gait dataset.
+EXCLUDE_FROM_ASB = ['Carter2023_Formatted_No_Arm', 'Hammer2013_Formatted_No_Arm', 'Han2023_Formatted_No_Arm']
 
 
 

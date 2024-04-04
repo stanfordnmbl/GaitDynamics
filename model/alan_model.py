@@ -11,7 +11,6 @@ from tqdm import tqdm
 from torch.utils.data import Dataset
 from pathlib import Path
 from alant.preprocess import increment_path, Normalizer
-from data.rotation_conversions import euler_angles_to_matrix, matrix_to_euler_angles
 from model.adan import Adan
 from model.dance_decoder import DanceDecoder
 from alant.vis import SMPLSkeleton
@@ -20,11 +19,12 @@ import torch
 import copy
 import torch.nn as nn
 from model.utils import extract, make_beta_schedule, linear_resample_data, update_d_dd, fix_seed, nan_helper, \
-    from_foot_loc_to_foot_vel, moving_average_filtering, data_filter
+    from_foot_loc_to_foot_vel, moving_average_filtering, convert_addb_state_to_model_input, \
+    inverse_convert_addb_state_to_model_input, align_moving_direction, inverse_align_moving_direction
 from typing import Any, List
 import nimblephysics as nimble
 from alant.alan_consts import *
-from alant.quaternion import euler_from_6v, euler_to_6v, rotation_6d_to_matrix, matrix_to_rotation_6d
+from alant.quaternion import rotation_6d_to_matrix, matrix_to_rotation_6d
 from alant.alan_osim_fk import get_model_offsets, get_knee_rotation_coefficients, forward_kinematics
 from nimblephysics import NimbleGUI
 import time
@@ -34,48 +34,6 @@ import matplotlib.pyplot as plt
 
 
 fix_seed()
-
-
-def convert_addb_state_to_model_input(pose_df, joints_3d):
-    # shift root position to start in (x,y) = (0,0)
-    pose_df['pelvis_tx'] = pose_df['pelvis_tx'] - pose_df['pelvis_tx'][0]
-    pose_df['pelvis_ty'] = pose_df['pelvis_ty'] - pose_df['pelvis_ty'][0]
-    pose_df['pelvis_tz'] = pose_df['pelvis_tz'] - pose_df['pelvis_tz'][0]
-
-    # remove frozen dof
-    for frozen_col in FROZEN_DOFS:
-        if frozen_col in pose_df.columns:
-            pose_df = pose_df.drop(frozen_col, axis=1)
-
-    # convert euler to 6v
-    for joint_name, joints_with_3_dof in joints_3d.items():
-        joint_6v = euler_to_6v(torch.tensor(pose_df[joints_with_3_dof].values), "ZXY").numpy()
-        for joints_euler_name in joints_with_3_dof:
-            pose_df = pose_df.drop(joints_euler_name, axis=1)
-        for i in range(6):
-            pose_df[joint_name + '_' + str(i)] = joint_6v[:, i]
-
-    return pose_df
-
-
-def inverse_convert_addb_state_to_model_input(model_states, model_states_column_names, joints_3d, osim_dof_columns):
-    model_states_dict = {col: model_states[..., i] for i, col in enumerate(model_states_column_names) if col in osim_dof_columns}
-
-    # convert 6v to euler
-    for joint_name, joints_with_3_dof in joints_3d.items():
-        joint_name_6v = [joint_name + '_' + str(i) for i in range(6)]
-        index_ = [model_states_column_names.index(joint_name_6v[i]) for i in range(6)]
-        joint_euler = euler_from_6v(model_states[..., index_], "ZXY")
-
-        for i, joints_euler_name in enumerate(joints_with_3_dof):
-            model_states_dict[joints_euler_name] = joint_euler[..., i]
-
-    # add frozen dof back
-    for frozen_col in FROZEN_DOFS:
-        model_states_dict[frozen_col] = torch.zeros(model_states.shape[:2]).to(model_states.device)
-
-    osim_states = torch.stack([model_states_dict[col] for col in osim_dof_columns], dim=2).float()
-    return osim_states
 
 
 def identity(t, *args, **kwargs):
@@ -96,7 +54,7 @@ class MotionDataset(Dataset):
             data_path: str,
             train: bool,
             opt,
-            reset_moving_direction_flag: bool = True,
+            align_moving_direction_flag: bool = True,
             normalizer: Any = None,
             trial_start_num=0,
             max_trial_num=None,
@@ -107,7 +65,7 @@ class MotionDataset(Dataset):
         self.trial_start_num = trial_start_num
         self.target_sampling_rate = opt.target_sampling_rate
         self.window_len = opt.window_len
-        self.reset_moving_direction_flag = reset_moving_direction_flag
+        self.align_moving_direction_flag = align_moving_direction_flag
         self.opt = opt
         self.divide_jittery = divide_jittery
         self.specific_dset = specific_dset
@@ -206,7 +164,7 @@ class MotionDataset(Dataset):
                 vel_from_t[:, axis] = moving_average_filtering(vel_from_t[:, axis], 11)
             # vel_from_t = data_filter(vel_from_t, 10, self.target_sampling_rate)
 
-            average_foot_vel[np.isnan(average_foot_vel)] = - vel_from_t[np.isnan(average_foot_vel)]
+            average_foot_vel[np.isnan(average_foot_vel)] = 0        # Just fixed a bug here
             walking_vel = torch.from_numpy(vel_from_t - average_foot_vel)
 
             current_index = walking_vel.shape[0]
@@ -260,38 +218,6 @@ class MotionDataset(Dataset):
         return (converted_pose, self.trials[i_trial].model_offsets, i_trial)
 
     @staticmethod
-    def reset_moving_direction(poses, column_names):
-        converted_pose_clone = torch.from_numpy(poses).clone().float()
-        pelvis_orientation_col_loc = [column_names.index(col) for col in JOINTS_3D_ALL['pelvis']]
-        p_pos_col_loc = [column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
-        r_grf_col_loc = [column_names.index(col) for col in ['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']]
-        l_grf_col_loc = [column_names.index(col) for col in ['calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz']]
-
-        if len(pelvis_orientation_col_loc) != 3 or len(p_pos_col_loc) != 3 or len(r_grf_col_loc) != 3 or len(l_grf_col_loc) != 3:
-            raise ValueError('check column names')
-
-        pelvis_orientation = converted_pose_clone[:, pelvis_orientation_col_loc]
-        pelvis_orientation = euler_angles_to_matrix(pelvis_orientation, "ZXY")
-        p_pos = converted_pose_clone[:, p_pos_col_loc]
-        r_grf = converted_pose_clone[:, r_grf_col_loc]
-        l_grf = converted_pose_clone[:, l_grf_col_loc]
-
-        angle = math.atan2(- pelvis_orientation[0][0, 2], pelvis_orientation[0][2, 2])
-        rot_mat = torch.tensor([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]]).float()
-
-        pelvis_orientation_rotated = torch.matmul(rot_mat, pelvis_orientation)
-        p_pos_rotated = torch.matmul(rot_mat, p_pos.unsqueeze(2)).squeeze(2)
-        r_grf_rotated = torch.matmul(rot_mat, r_grf.unsqueeze(2)).squeeze(2)
-        l_grf_rotated = torch.matmul(rot_mat, l_grf.unsqueeze(2)).squeeze(2)
-
-        converted_pose_clone[:, pelvis_orientation_col_loc] = matrix_to_euler_angles(pelvis_orientation_rotated.float(), "ZXY")
-        converted_pose_clone[:, p_pos_col_loc] = p_pos_rotated.float()
-        converted_pose_clone[:, r_grf_col_loc] = r_grf_rotated.float()
-        converted_pose_clone[:, l_grf_col_loc] = l_grf_rotated.float()
-
-        return converted_pose_clone
-
-    @staticmethod
     def apply_random_moving_direction(converted_pose, converted_column_names, angle=np.random.rand()*2*np.pi):
         pelvis_orientation_col_loc = [converted_column_names.index(col) for col in [f'pelvis_{x}' for x in range(6)]]
         p_pos_col_loc = [converted_column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
@@ -322,49 +248,7 @@ class MotionDataset(Dataset):
 
         return converted_pose
 
-    # @staticmethod
-    # def augment_one_trial_to_4_moving_directions(trials, converted_column_names):
-    #     trials_augmented = []
-    #     rot_mat_to_apply = [
-    #         torch.tensor([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]]).float()
-    #         for angle in [0.5*np.pi, np.pi, 1.5*np.pi]
-    #     ]
-    #
-    #     pelvis_orientation_col_loc = [converted_column_names.index(col) for col in [f'pelvis_{x}' for x in range(6)]]
-    #     pelvis_position_col_loc = [converted_column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
-    #     r_grf_col_loc = [converted_column_names.index(col) for col in ['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']]
-    #     l_grf_col_loc = [converted_column_names.index(col) for col in ['calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz']]
-    #
-    #     if len(pelvis_orientation_col_loc) != 6:
-    #         raise ValueError('pelvis column number incorrect')
-    #     for trial_ in trials:
-    #         trials_augmented.append(trial_)
-    #
-    #         pelvis_orientation = trial_.converted_pose[:, pelvis_orientation_col_loc]
-    #         pelvis_orientation = rotation_6d_to_matrix(pelvis_orientation)
-    #         pelvis_position = trial_.converted_pose[:, pelvis_position_col_loc]
-    #         r_grf = trial_.converted_pose[:, r_grf_col_loc]
-    #         l_grf = trial_.converted_pose[:, l_grf_col_loc]
-    #
-    #         for rot_mat in rot_mat_to_apply:
-    #             pelvis_orientation_rotated = torch.matmul(rot_mat, pelvis_orientation)
-    #             pelvis_position_rotated = torch.matmul(rot_mat, pelvis_position.unsqueeze(2)).squeeze(2)
-    #             r_grf_rotated = torch.matmul(rot_mat, r_grf.unsqueeze(2)).squeeze(2)
-    #             l_grf_rotated = torch.matmul(rot_mat, l_grf.unsqueeze(2)).squeeze(2)
-    #
-    #             converted_pose = copy.deepcopy(trial_.converted_pose)
-    #             converted_pose[:, pelvis_orientation_col_loc] = matrix_to_rotation_6d(pelvis_orientation_rotated.float())
-    #             converted_pose[:, pelvis_position_col_loc] = pelvis_position_rotated.float()
-    #             converted_pose[:, r_grf_col_loc] = r_grf_rotated.float()
-    #             converted_pose[:, l_grf_col_loc] = l_grf_rotated.float()
-    #
-    #             augmented_trial = TrialData(converted_pose,
-    #                                         )
-    #
-    #             trials_augmented.append(augmented_trial)
-    #     return trials_augmented
-
-    def get_all_wins(self):
+    def get_all_wins_within_gait_cycle(self):
         windows = []
         _ = self.get_all_gait_cycles_and_set_gait_phase_label()
         for i_trial, trial_ in enumerate(self.trials):
@@ -375,6 +259,16 @@ class MotionDataset(Dataset):
                     windows.append((trial_.converted_pose[i:i+self.window_len, ...], self.trials[i_trial].model_offsets, i_trial, gait_phase_label))
             # # The last window is probably overlapping with the previous one.
             # windows.append((trial_.converted_pose[trial_len-self.window_len:, ...], self.trials[i_trial].model_offsets, i_trial))
+        return windows
+
+    def get_all_wins_regardless_gait_cycle(self):
+        windows = []
+        _ = self.get_all_gait_cycles_and_set_gait_phase_label()
+        for i_trial, trial_ in enumerate(self.trials):
+            trial_len = trial_.length
+            for i in range(0, trial_len - self.window_len + 1, self.window_len):
+                windows.append((trial_.converted_pose[i:i+self.window_len, ...], self.trials[i_trial].model_offsets, i_trial, self.window_len))
+            windows.append((trial_.converted_pose[trial_len-self.window_len:, ...], self.trials[i_trial].model_offsets, i_trial, trial_len - self.window_len - i))
         return windows
 
     def get_all_gait_cycles_and_set_gait_phase_label(self):
@@ -502,7 +396,7 @@ class MotionDataset(Dataset):
 
             trial_start_num_ = self.trial_start_num if self.trial_start_num >= 0 else max(0, subject.getNumTrials() + self.trial_start_num)
             for trial_index in tqdm(range(trial_start_num_, subject.getNumTrials())):
-                sampling_rate = 1 / subject.getTrialTimestep(trial_index)
+                sampling_rate = int(1 / subject.getTrialTimestep(trial_index))
                 sub_and_trial_name = subject_name + '_' + subject.getTrialName(trial_index)
                 trial_length = subject.getTrialLength(trial_index)
                 probably_missing: List[bool] = [reason != nimble.biomechanics.MissingGRFReason.notMissingGRF for reason
@@ -528,6 +422,8 @@ class MotionDataset(Dataset):
 
                 poses, forces = np.array(poses), np.array(forces)
                 states = np.concatenate([poses, forces], axis=1)
+                if not self.is_lumbar_rotation_reasonable(np.array(states), opt.osim_dof_columns):
+                    continue
 
                 grf_flag_counts = list(mit.run_length.encode(probably_missing))
                 max_has_grf_count = -1
@@ -539,15 +435,15 @@ class MotionDataset(Dataset):
                 elems_before_idx = sum((idx[1] for idx in grf_flag_counts[:max_has_grf_idx]))
                 states = states[elems_before_idx:elems_before_idx+max_has_grf_count, :]
 
-                if self.reset_moving_direction_flag:
-                    states = self.reset_moving_direction(states, opt.osim_dof_columns)
+                if self.align_moving_direction_flag:
+                    states, rot_mot = align_moving_direction(states, opt.osim_dof_columns)
+                else:
+                    rot_mot = torch.eye(3).float()
 
                 if (states.shape[0] / sampling_rate * self.target_sampling_rate) < self.window_len + 2:
-                    # print(f'Subject {subject_name} trial {sub_and_trial_name} has {round(len(states) / sampling_rate, 1)} s data (less than 3 s), skipping')
                     continue
-                states = linear_resample_data(states, sampling_rate, self.target_sampling_rate)
-                if not self.is_lumbar_rotation_reasonable(states, opt.osim_dof_columns):
-                    continue
+                if sampling_rate != self.target_sampling_rate:
+                    states = linear_resample_data(states, sampling_rate, self.target_sampling_rate)
 
                 foot_locations, _, _ = forward_kinematics(states[:, :-len(KINETICS_ALL)], model_offsets)
                 mtp_r_loc, mtp_l_loc = foot_locations[1].squeeze().cpu().numpy(), foot_locations[3].squeeze().cpu().numpy()
@@ -561,7 +457,8 @@ class MotionDataset(Dataset):
                 converted_states = torch.tensor(states_df.values).float()
 
                 self.trials.append(TrialData(converted_states, model_offsets, contact_bodies, sub_and_trial_name,
-                                             subject.getHeightM(), subject.getMassKg(), dset_name, mtp_r_vel, mtp_l_vel))
+                                             subject.getHeightM(), subject.getMassKg(), dset_name, rot_mot,
+                                             mtp_r_vel, mtp_l_vel))
                 self.dset_set.add(dset_name)
 
                 if max_trial_num is not None and len(self.trials) >= max_trial_num:
@@ -643,8 +540,8 @@ class GaitCycles:
 
 
 class TrialData:
-    def __init__(self, converted_states, model_offsets, contact_bodies, sub_and_trial_name,
-                 sub_height, sub_weight, dset_name, mtp_r_vel, mtp_l_vel, trial_gait_phase_label=None):
+    def __init__(self, converted_states, model_offsets, contact_bodies, sub_and_trial_name, sub_height, sub_weight,
+                 dset_name, rot_mat_for_moving_direction_alignment, mtp_r_vel, mtp_l_vel, trial_gait_phase_label=None):
         self.converted_pose = converted_states
         self.model_offsets = model_offsets
         self.contact_bodies = contact_bodies
@@ -658,6 +555,7 @@ class TrialData:
         assert self.mtp_r_vel.shape[0] == self.length
         assert self.mtp_l_vel.shape[0] == self.length
         self.trial_gait_phase_label = trial_gait_phase_label
+        self.rot_mat_for_moving_direction_alignment = rot_mat_for_moving_direction_alignment
 
     def get_attributes(self):
         return {'sub_and_trial_name': self.sub_and_trial_name, 'dset_name': self.dset_name,
@@ -670,7 +568,8 @@ class TrialData:
             self.sub_and_trial_name,
             self.sub_height,
             self.sub_weight,
-            self.dset_name]
+            self.dset_name,
+            self.rot_mat_for_moving_direction_alignment]
 
 
 class MotionModel:
@@ -704,13 +603,25 @@ class MotionModel:
             )
             self.normalizer = checkpoint["normalizer"]
 
+        # !!! change it back after the last run
+        # model = DanceDecoder(
+        #     nfeats=repr_dim,
+        #     seq_len=horizon,
+        #     latent_dim=512,
+        #     ff_size=1024,
+        #     num_layers=8,
+        #     num_heads=8,
+        #     dropout=0.1,
+        #     cond_feature_dim=feature_dim,
+        #     activation=F.gelu,
+        # )
         model = DanceDecoder(
             nfeats=repr_dim,
             seq_len=horizon,
-            latent_dim=512,
+            latent_dim=256,
             ff_size=1024,
-            num_layers=8,
-            num_heads=8,
+            num_layers=4,
+            num_heads=4,
             dropout=0.1,
             cond_feature_dim=feature_dim,
             activation=F.gelu,
@@ -725,7 +636,7 @@ class MotionModel:
             opt,
             # schedule="cosine",
             n_timestep=1000,
-            predict_epsilon=False,          # predict epsilon is usually True for diffusion models right???
+            predict_epsilon=False,
             loss_type="l2",
             use_p2=False,
             cond_drop_prob=0.25,
@@ -870,7 +781,7 @@ class MotionModel:
                         wandb.log(log_dict)
 
             # if epoch % 100 == 0 or epoch == opt.epochs:
-            if (epoch % 200) == 0:
+            if (epoch % 1000) == 0:
                 torch.save(ckpt, os.path.join(wdir, f"train-{epoch}.pt"))
                 print(f"[MODEL SAVED at Epoch {epoch}]")
         if self.accelerator.is_main_process and opt.log_with_wandb:
@@ -1216,9 +1127,8 @@ class GaussianDiffusion(nn.Module):
                 x[1:, :half] = x[:-1, half:]
         return x
 
-    # @torch.no_grad()
     def inpaint_ddim_loop(self, shape, cond, noise=None, constraint=None, return_diffusion=False, start_point=None):
-        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 1
+        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
 
         times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
         times = list(reversed(times.int().tolist()))
@@ -1312,7 +1222,87 @@ class GaussianDiffusion(nn.Module):
         return x
 
     @torch.no_grad()
-    def inpaint_loop(
+    def repaint_ddim_loop_convergence_issue(self, shape, cond, noise=None, constraint=None, return_diffusion=False, start_point=None):
+        """ Implemented the algorithm described in this paper: https://arxiv.org/pdf/2304.03760.pdf """
+        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
+
+        times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
+        times = list(reversed(times.int().tolist()))
+        time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
+
+        x_time = torch.randn(shape, device=device)
+        cond = cond.to(device)
+
+        mask = constraint["mask"].to(device)  # batch x horizon x channels
+        value = constraint["value"].to(device)  # batch x horizon x channels
+
+        for time, time_next in tqdm(time_pairs, desc='sampling loop time step'):
+            time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
+
+            u_rounds = 10
+            for u_ in range(u_rounds):
+
+                pred_noise, x_start, *_ = self.model_predictions(x_time, cond, time_cond, clip_x_start=self.clip_denoised)
+
+                x_start = value * mask + (1.0 - mask) * x_start
+
+                if u_ < u_rounds - 1:
+                    x_time = self.q_sample(x_start, time_cond)
+
+            alpha_next = self.alphas_cumprod[time_next]
+            x_time_next = x_start * alpha_next.sqrt() + (1 - alpha_next).sqrt() * pred_noise
+            x_time = x_time_next
+
+        return x_start
+
+    @torch.no_grad()
+    def inpaint_ddim_loop_not_working_2(self, shape, cond, noise=None, constraint=None, return_diffusion=False, start_point=None):
+        """
+        Tried to implement the ddim repaint described in this paper, but failed: https://arxiv.org/pdf/2401.04747.pdf
+        """
+        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
+
+        times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
+        times = list(reversed(times.int().tolist()))
+        time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
+
+        x_time = torch.randn(shape, device=device)
+        cond = cond.to(device)
+
+        mask = constraint["mask"].to(device)  # batch x horizon x channels
+        value = constraint["value"].to(device)  # batch x horizon x channels
+
+        plt.figure()
+
+        for time, time_next in tqdm(time_pairs, desc='sampling loop time step'):
+            time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
+
+            u_rounds = 10
+            for u_ in range(u_rounds):
+
+                if time_next > 0:
+                    timesteps = torch.full((batch,), time_next, device=device, dtype=torch.long)
+                    value_ = self.q_sample(value, timesteps)
+                else:
+                    value_ = value
+
+                pred_noise, x_start, *_ = self.model_predictions(x_time, cond, time_cond, clip_x_start=self.clip_denoised)
+
+                if time_next < 0:
+                    x = x_start
+                    return x
+
+                alpha_next = self.alphas_cumprod[time_next]
+                x_time_next = x_start * alpha_next.sqrt() + (1 - alpha_next).sqrt() * pred_noise
+                x_time_next = value_ * mask + (1.0 - mask) * x_time_next
+                if u_ != u_rounds - 1:
+                    x_time = torch.sqrt(1 - self.betas[time]) * x_time_next + torch.sqrt(self.betas[time]) * torch.randn_like(x_time)
+                else:
+                    x_time = x_time_next
+        return x_start
+
+    @torch.no_grad()
+    def inpaint_ddpm_loop(
             self,
             shape,
             cond,
@@ -1345,6 +1335,52 @@ class GaussianDiffusion(nn.Module):
 
             if return_diffusion:
                 diffusion.append(x)
+
+        if return_diffusion:
+            return x, diffusion
+        else:
+            return x
+
+    @torch.no_grad()
+    def repaint_ddpm_loop_not_working(
+            self,
+            shape,
+            cond,
+            noise=None,
+            constraint=None,
+            return_diffusion=False,
+            start_point=None,
+    ):
+        """ This is from the original repaint paper """
+        device = self.betas.device
+
+        batch_size = shape[0]
+        x = torch.randn(shape, device=device) if noise is None else noise.to(device)
+        cond = cond.to(device)
+        if return_diffusion:
+            diffusion = [x]
+
+        mask = constraint["mask"].to(device)  # batch x horizon x channels
+        value = constraint["value"].to(device)  # batch x horizon x channels
+
+        start_point = self.n_timestep if start_point is None else start_point
+        u_rounds = 10
+        for i in tqdm(reversed(range(0, start_point))):
+            for u_ in range(u_rounds):
+                timesteps = torch.full((batch_size,), i, device=device, dtype=torch.long)
+                x, _ = self.p_sample(x, cond, timesteps)
+                value_ = self.q_sample(value, timesteps - 1) if (i > 0) else x
+                x = value_ * mask + (1.0 - mask) * x
+
+                if i == 0:
+                    return x
+
+                if u_ < u_rounds - 1:
+                    # x = self.q_sample(x, timesteps)
+                    x = torch.sqrt(1 - self.betas[i-1]) * x + torch.sqrt(self.betas[i-1]) * torch.randn_like(x)
+
+                if return_diffusion:
+                    diffusion.append(x)
 
         if return_diffusion:
             return x, diffusion

@@ -10,6 +10,8 @@ __pycache__/
 *.pkl
 *.npy
 *.zip
+*.csv
+*.osim
 cached_features/
 custom_music/
 data/AMASS

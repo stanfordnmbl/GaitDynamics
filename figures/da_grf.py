@@ -1,6 +1,6 @@
 import pickle
-from alant.alan_consts import NOT_IN_GAIT_PHASE
-from fig_utils import get_scores, EXCLUDE_FROM_ASB
+from alant.alan_consts import NOT_IN_GAIT_PHASE, EXCLUDE_FROM_ASB
+from fig_utils import get_scores
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -25,11 +25,6 @@ def get_results():
 
         true_ = np.concatenate(list(results_true[dset].values()))[:, params_of_interest_col_loc][in_gait_phase]
         pred_ = np.concatenate(list(results_pred[dset].values()))[:, params_of_interest_col_loc][in_gait_phase]
-
-        # true_vals = [val_ * sub_heights[dset][key_] for key_, val_ in results_true[dset].items()]
-        # pred_vals = [val_ * sub_heights[dset][key_] for key_, val_ in results_pred[dset].items()]
-        # true_ = np.concatenate(true_vals)[:, params_of_interest_col_loc][in_gait_phase]
-        # pred_ = np.concatenate(pred_vals)[:, params_of_interest_col_loc][in_gait_phase]
 
         if True:
             plt.subplots(3, 1, figsize=(10, 8))

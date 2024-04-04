@@ -6,6 +6,112 @@ from scipy.interpolate import interp1d
 import scipy.interpolate as interpo
 import random
 from scipy.signal import filtfilt, butter
+from alant.quaternion import euler_from_6v, euler_to_6v
+from alant.alan_consts import JOINTS_3D_ALL, FROZEN_DOFS
+from data.rotation_conversions import euler_angles_to_matrix, matrix_to_euler_angles
+
+
+def convert_addb_state_to_model_input(pose_df, joints_3d):
+    # shift root position to start in (x,y) = (0,0)
+    pose_df['pelvis_tx'] = pose_df['pelvis_tx'] - pose_df['pelvis_tx'][0]
+    pose_df['pelvis_ty'] = pose_df['pelvis_ty'] - pose_df['pelvis_ty'][0]
+    pose_df['pelvis_tz'] = pose_df['pelvis_tz'] - pose_df['pelvis_tz'][0]
+
+    # remove frozen dof
+    for frozen_col in FROZEN_DOFS:
+        if frozen_col in pose_df.columns:
+            pose_df = pose_df.drop(frozen_col, axis=1)
+
+    # convert euler to 6v
+    for joint_name, joints_with_3_dof in joints_3d.items():
+        joint_6v = euler_to_6v(torch.tensor(pose_df[joints_with_3_dof].values), "ZXY").numpy()
+        for joints_euler_name in joints_with_3_dof:
+            pose_df = pose_df.drop(joints_euler_name, axis=1)
+        for i in range(6):
+            pose_df[joint_name + '_' + str(i)] = joint_6v[:, i]
+
+    return pose_df
+
+
+def inverse_convert_addb_state_to_model_input(model_states, model_states_column_names, joints_3d, osim_dof_columns):
+    model_states_dict = {col: model_states[..., i] for i, col in enumerate(model_states_column_names) if col in osim_dof_columns}
+
+    # convert 6v to euler
+    for joint_name, joints_with_3_dof in joints_3d.items():
+        joint_name_6v = [joint_name + '_' + str(i) for i in range(6)]
+        index_ = [model_states_column_names.index(joint_name_6v[i]) for i in range(6)]
+        joint_euler = euler_from_6v(model_states[..., index_], "ZXY")
+
+        for i, joints_euler_name in enumerate(joints_with_3_dof):
+            model_states_dict[joints_euler_name] = joint_euler[..., i]
+
+    # add frozen dof back
+    for frozen_col in FROZEN_DOFS:
+        model_states_dict[frozen_col] = torch.zeros(model_states.shape[:2]).to(model_states.device)
+
+    osim_states = torch.stack([model_states_dict[col] for col in osim_dof_columns], dim=2).float()
+    return osim_states
+
+
+def align_moving_direction(poses, column_names):
+    pose_clone = torch.from_numpy(poses).clone().float()
+    pelvis_orientation_col_loc = [column_names.index(col) for col in JOINTS_3D_ALL['pelvis']]
+    p_pos_col_loc = [column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
+    r_grf_col_loc = [column_names.index(col) for col in ['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']]
+    l_grf_col_loc = [column_names.index(col) for col in ['calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz']]
+
+    if len(pelvis_orientation_col_loc) != 3 or len(p_pos_col_loc) != 3 or len(r_grf_col_loc) != 3 or len(l_grf_col_loc) != 3:
+        raise ValueError('check column names')
+
+    pelvis_orientation = pose_clone[:, pelvis_orientation_col_loc]
+    pelvis_orientation = euler_angles_to_matrix(pelvis_orientation, "ZXY")
+    p_pos = pose_clone[:, p_pos_col_loc]
+    r_grf = pose_clone[:, r_grf_col_loc]
+    l_grf = pose_clone[:, l_grf_col_loc]
+
+    angle = math.atan2(- pelvis_orientation[0][0, 2], pelvis_orientation[0][2, 2])
+    rot_mat = torch.tensor([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]]).float()
+
+    pelvis_orientation_rotated = torch.matmul(rot_mat, pelvis_orientation)
+    p_pos_rotated = torch.matmul(rot_mat, p_pos.unsqueeze(2)).squeeze(2)
+    r_grf_rotated = torch.matmul(rot_mat, r_grf.unsqueeze(2)).squeeze(2)
+    l_grf_rotated = torch.matmul(rot_mat, l_grf.unsqueeze(2)).squeeze(2)
+
+    pose_clone[:, pelvis_orientation_col_loc] = matrix_to_euler_angles(pelvis_orientation_rotated.float(), "ZXY")
+    pose_clone[:, p_pos_col_loc] = p_pos_rotated.float()
+    pose_clone[:, r_grf_col_loc] = r_grf_rotated.float()
+    pose_clone[:, l_grf_col_loc] = l_grf_rotated.float()
+
+    return pose_clone, rot_mat
+
+
+def inverse_align_moving_direction(poses, column_names, rot_mat_to_reset):
+    pose_clone = torch.from_numpy(poses).clone().float()
+    pelvis_orientation_col_loc = [column_names.index(col) for col in JOINTS_3D_ALL['pelvis']]
+    p_pos_col_loc = [column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
+    r_grf_col_loc = [column_names.index(col) for col in ['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']]
+    l_grf_col_loc = [column_names.index(col) for col in ['calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz']]
+
+    if len(pelvis_orientation_col_loc) != 3 or len(p_pos_col_loc) != 3 or len(r_grf_col_loc) != 3 or len(l_grf_col_loc) != 3:
+        raise ValueError('check column names')
+
+    pelvis_orientation = pose_clone[:, pelvis_orientation_col_loc]
+    pelvis_orientation = euler_angles_to_matrix(pelvis_orientation, "ZXY")
+    p_pos = pose_clone[:, p_pos_col_loc]
+    r_grf = pose_clone[:, r_grf_col_loc]
+    l_grf = pose_clone[:, l_grf_col_loc]
+
+    pelvis_orientation_rotated = torch.matmul(rot_mat_to_reset, pelvis_orientation)
+    p_pos_rotated = torch.matmul(rot_mat_to_reset, p_pos.unsqueeze(2)).squeeze(2)
+    r_grf_rotated = torch.matmul(rot_mat_to_reset, r_grf.unsqueeze(2)).squeeze(2)
+    l_grf_rotated = torch.matmul(rot_mat_to_reset, l_grf.unsqueeze(2)).squeeze(2)
+
+    pose_clone[:, pelvis_orientation_col_loc] = matrix_to_euler_angles(pelvis_orientation_rotated.float(), "ZXY")
+    pose_clone[:, p_pos_col_loc] = p_pos_rotated.float()
+    pose_clone[:, r_grf_col_loc] = r_grf_rotated.float()
+    pose_clone[:, l_grf_col_loc] = l_grf_rotated.float()
+
+    return pose_clone
 
 
 def data_filter(data, cut_off_fre, sampling_fre, filter_order=4):

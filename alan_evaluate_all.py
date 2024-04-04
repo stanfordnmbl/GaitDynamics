@@ -1,9 +1,8 @@
 from alant.args import parse_opt, set_with_arm_opt
 import torch
 import os
-from alant.alan_consts import DATASETS_NO_ARM, NOT_IN_GAIT_PHASE, DATASETS_ASB
+from alant.alan_consts import DATASETS_NO_ARM, NOT_IN_GAIT_PHASE
 from model.alan_model import MotionModel, MotionDataset
-from model.utils import linear_resample_data_as_num_of_dp
 from model.alan_model import inverse_convert_addb_state_to_model_input
 import numpy as np
 import pickle
@@ -16,9 +15,9 @@ def loop_all(opt):
     set_with_arm_opt(opt, repr_dim == 56)
 
     model = MotionModel(opt, repr_dim)
-    dset_list = DATASETS_ASB
+    dset_list = DATASETS_NO_ARM
     results_true, results_pred, results_bl, sub_heights, sub_weights = {}, {}, {}, {}, {}
-    is_output_label_array = torch.zeros([90, 29])
+    is_output_label_array = torch.zeros([150, 29])
 
     for dset in dset_list:
         test_dataset = MotionDataset(
@@ -28,10 +27,10 @@ def loop_all(opt):
             opt=opt,
             divide_jittery=False,
             specific_dset=dset,
-            # max_trial_num=2,     # !!!
-            # trial_start_num=5,   # !!!
+            # max_trial_num=1,     # !!!
+            # trial_start_num=7,   # !!!
         )
-        windows = test_dataset.get_all_wins()
+        windows = test_dataset.get_all_wins_within_gait_cycle()
         if len(windows) == 0:
             continue
 
@@ -162,12 +161,12 @@ def get_baseline_val(dset, windows, trials):
 
 
 if __name__ == "__main__":
-    skel_num = 4
+    skel_num = 4            # !!!
     opt = parse_opt()
     opt.guide_x_start_the_beginning_step = -10      # negative value means no guidance
 
     # opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'5000'}.pt"
-    opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'vel_as_first_three2'}/weights/train-{'5000'}.pt"
+    opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'hz100_smaller_model'}/weights/train-{'5000'}.pt"
 
     knee_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'knee' in col]
     ankle_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'ankle' in col]
@@ -185,18 +184,18 @@ if __name__ == "__main__":
     # for dset in ['Han2023_Formatted_No_Arm']:
     #     save_average_gait(dset)
 
-    # da_to_test = 0
-    # loop_all(opt)
+    da_to_test = 0
+    loop_all(opt)
 
     # da_to_test = 1
-    # for end_of_known in range(70, 91, 2):
+    # for end_of_known in range(130, 151, 5):
     #     print('end_of_known: ', end_of_known)
     #     loop_all(opt)
 
-    da_to_test = 2
-    for mask_key in cols_to_mask.keys():
-        print('mask_key: ', mask_key)
-        loop_all(opt)
+    # da_to_test = 2
+    # for mask_key in cols_to_mask.keys():
+    #     print('mask_key: ', mask_key)
+    #     loop_all(opt)
 
 
 

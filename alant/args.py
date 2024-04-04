@@ -9,12 +9,12 @@ import numpy as np
 def parse_opt():
     machine_specific_config = json.load(open(os.path.dirname(os.path.realpath(__file__)) + '/machine_specific_config.json', 'r'))
     parser = argparse.ArgumentParser()
-    parser.add_argument("--exp_name", default="vel_as_first_three", help="save to project/name")
+    parser.add_argument("--exp_name", default="hz100_smaller_model", help="save to project/name")
     parser.add_argument("--with_arm", type=bool, default=False, help="whether osim model has arm DoFs")
     parser.add_argument("--log_with_wandb", type=bool, default=True, help="log with wandb")
     parser.add_argument("--epochs", type=int, default=5000)
-    parser.add_argument("--target_sampling_rate", type=int, default=60)
-    parser.add_argument("--window_len", type=int, default=90)
+    parser.add_argument("--target_sampling_rate", type=int, default=100)
+    parser.add_argument("--window_len", type=int, default=150)
 
     parser.add_argument("--project", default="runs/train", help="project/name")
     parser.add_argument(
