@@ -17,9 +17,10 @@ def loop_all(opt):
     model = MotionModel(opt, repr_dim)
     dset_list = DATASETS_NO_ARM
     results_true, results_pred, results_bl, sub_heights, sub_weights = {}, {}, {}, {}, {}
-    is_output_label_array = torch.zeros([150, 29])
+    is_output_label_array = torch.zeros([150, 35])
 
     for dset in dset_list:
+        print(dset)
         test_dataset = MotionDataset(
             data_path=opt.data_path_test,
             train=False,
@@ -28,7 +29,7 @@ def loop_all(opt):
             divide_jittery=False,
             specific_dset=dset,
             # max_trial_num=1,     # !!!
-            # trial_start_num=7,   # !!!
+            # trial_start_num=10,   # !!!
         )
         windows = test_dataset.get_all_wins_within_gait_cycle()
         if len(windows) == 0:
@@ -59,7 +60,7 @@ def loop_all(opt):
                 _, state_pred_list_batch = model.eval_loop(opt, state_true, masks, num_of_generation_per_window=skel_num-1)
                 for i_skel in range(skel_num-1):
                     state_pred_list[i_skel] += state_pred_list_batch[i_skel]
-                save_name = 'downstream_grf'
+                save_name = 'downstream_grf_minmax_scalar_no_repaint'
 
             elif da_to_test == 1:
                 # For future motion prediction
@@ -161,18 +162,18 @@ def get_baseline_val(dset, windows, trials):
 
 
 if __name__ == "__main__":
-    skel_num = 4            # !!!
+    skel_num = 4
     opt = parse_opt()
     opt.guide_x_start_the_beginning_step = -10      # negative value means no guidance
 
-    # opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'5000'}.pt"
-    opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'hz100_smaller_model'}/weights/train-{'5000'}.pt"
+    # opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'4000'}.pt"
+    opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'test_data_loader3'}/weights/train-{'4000'}.pt"
 
     knee_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'knee' in col]
     ankle_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'ankle' in col]
     hip_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'hip' in col]
     kinematic_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'force' not in col]
-    grf_osim_col_loc = [i_col for i_col, col in enumerate(opt.osim_dof_columns) if 'force' in col]
+    grf_osim_col_loc = [i_col for i_col, col in enumerate(opt.osim_dof_columns) if 'force' in col and 'moment' not in col]
     cols_to_mask = {
         'ankle': knee_diffusion_col_loc,
         'knee': knee_diffusion_col_loc,
@@ -181,7 +182,7 @@ if __name__ == "__main__":
         'knee_ankle_hip': knee_diffusion_col_loc + ankle_diffusion_col_loc + hip_diffusion_col_loc
     }
 
-    # for dset in ['Han2023_Formatted_No_Arm']:
+    # for dset in ['Tan2021_Formatted_No_Arm']:
     #     save_average_gait(dset)
 
     da_to_test = 0

@@ -16,7 +16,7 @@ OSIM_DOF_ALL = [
     'elbow_flex_l', 'pro_sup_l', 'wrist_flex_l', 'wrist_dev_l']
 
 
-KINETICS_ALL = [body + '_force_v' + axis for body in ['calcn_r', 'calcn_l'] for axis in ['x', 'y', 'z']]
+KINETICS_ALL = [body + modality + axis for body in ['calcn_r', 'calcn_l'] for modality in ['_force_v', '_force_moment'] for axis in ['x', 'y', 'z']]
 
 MODEL_STATES_COLUMN_NAMES_WITH_ARM = [
     'pelvis_tx', 'pelvis_ty', 'pelvis_tz', 'knee_angle_r', 'ankle_angle_r', 'knee_angle_l', 'ankle_angle_l',
@@ -38,9 +38,9 @@ for name_ in ['elbow_flex_r', 'pro_sup_r', 'elbow_flex_l', 'pro_sup_l', 'arm_r_0
 FROZEN_DOFS = ['subtalar_angle_r', 'mtp_angle_r', 'subtalar_angle_l', 'mtp_angle_l',
                'wrist_flex_r', 'wrist_dev_r', 'wrist_flex_l', 'wrist_dev_l']
 
-# 'Falisse2017' has 3 contact bodies, 'Tan2021' has incorrect missing_GRF label issues
-DSET_SHORT_NAMES = ['Camargo2021', 'Carter2023', 'Fregly2012', 'Hammer2013', 'Han2023', 'Li2021', 'Moore2015',
-                    'Santos2017', 'Tan2022', 'Tiziana2019', 'Uhlrich2023', 'vanderZee2022', 'Wang2023']
+# 'Falisse2017' has 3 contact bodies
+DSET_SHORT_NAMES = ['Camargo2021', 'Carter2023', 'Fregly2012', 'Falisse2017', 'Hammer2013', 'Han2023', 'Li2021', 'Moore2015',
+                    'Santos2017', 'Tan2021', 'Tan2022', 'Tiziana2019', 'Uhlrich2023', 'vanderZee2022', 'Wang2023']
 DATASETS_NO_ARM = [name_ + '_Formatted_No_Arm' for name_ in DSET_SHORT_NAMES]
 
 NOT_IN_GAIT_PHASE = -1000

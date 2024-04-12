@@ -9,8 +9,9 @@ import numpy as np
 def parse_opt():
     machine_specific_config = json.load(open(os.path.dirname(os.path.realpath(__file__)) + '/machine_specific_config.json', 'r'))
     parser = argparse.ArgumentParser()
-    parser.add_argument("--exp_name", default="hz100_smaller_model", help="save to project/name")
+    parser.add_argument("--exp_name", default="StandardScaler", help="save to project/name")
     parser.add_argument("--with_arm", type=bool, default=False, help="whether osim model has arm DoFs")
+    parser.add_argument("--with_kinematics_vel", type=bool, default=True, help="whether to include 1st derivative of kinematics")
     parser.add_argument("--log_with_wandb", type=bool, default=True, help="log with wandb")
     parser.add_argument("--epochs", type=int, default=5000)
     parser.add_argument("--target_sampling_rate", type=int, default=100)
@@ -64,9 +65,12 @@ def set_with_arm_opt(opt, with_arm):
         opt.with_arm = False
         opt.osim_dof_columns = copy.deepcopy(OSIM_DOF_ALL[:23] + KINETICS_ALL)
         opt.joints_3d = {key_: value_ for key_, value_ in JOINTS_3D_ALL.items() if key_ in ['pelvis', 'hip_r', 'hip_l', 'lumbar']}
-        # data_path = opt.data_path_parent + '/for_check/'
         data_path = opt.data_path_parent + '/b3d_no_arm/'
         opt.model_states_column_names = copy.deepcopy(MODEL_STATES_COLUMN_NAMES_NO_ARM)
+
+    if opt.with_kinematics_vel:
+        opt.model_states_column_names = opt.model_states_column_names + [
+            f'{col}_vel' for i_col, col in enumerate(opt.model_states_column_names) if col not in KINETICS_ALL]
 
     opt.data_path_train = data_path + 'train_cleaned/'
     opt.data_path_test = data_path + 'test_cleaned/'

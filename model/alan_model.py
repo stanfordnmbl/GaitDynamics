@@ -16,10 +16,11 @@ from model.dance_decoder import DanceDecoder
 from alant.vis import SMPLSkeleton
 import os
 import torch
+import random
 import copy
 import torch.nn as nn
 from model.utils import extract, make_beta_schedule, linear_resample_data, update_d_dd, fix_seed, nan_helper, \
-    from_foot_loc_to_foot_vel, moving_average_filtering, convert_addb_state_to_model_input, \
+    from_foot_loc_to_foot_vel, moving_average_filtering, convert_addb_state_to_model_input, identity, maybe_wrap, \
     inverse_convert_addb_state_to_model_input, align_moving_direction, inverse_align_moving_direction
 from typing import Any, List
 import nimblephysics as nimble
@@ -34,18 +35,6 @@ import matplotlib.pyplot as plt
 
 
 fix_seed()
-
-
-def identity(t, *args, **kwargs):
-    return t
-
-
-def wrap(x):
-    return {f"module.{key}": value for key, value in x.items()}
-
-
-def maybe_wrap(x, num):
-    return x if num == 1 else wrap(x)
 
 
 class MotionDataset(Dataset):
@@ -79,7 +68,7 @@ class MotionDataset(Dataset):
         self.load_addb(opt, max_trial_num)
 
         # functions for cleaning up the data
-        if self.divide_jittery:
+        if train and self.divide_jittery:
             self.trials = self.divide_jittery_trials(self.trials, opt.model_states_column_names)
         self.guess_vel_and_replace_txtytz()
 
@@ -87,6 +76,7 @@ class MotionDataset(Dataset):
 
         self.trial_num = len(self.trials)
         if self.trial_num == 0:
+            print("No trials loaded")
             return None
         total_hour = sum([trial.length for trial in self.trials]) / self.target_sampling_rate / 60 / 60
         total_clip_num = sum([trial.length for trial in self.trials]) / self.target_sampling_rate / 3
@@ -169,7 +159,7 @@ class MotionDataset(Dataset):
 
             current_index = walking_vel.shape[0]
             current_trial = i_trial
-            pelvis_pos_loc = [self.converted_column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
+            pelvis_pos_loc = [self.opt.model_states_column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
             while current_index > 0:
                 self.trials[current_trial].converted_pose[:, pelvis_pos_loc] = walking_vel[current_index-self.trials[current_trial].length:current_index]
                 current_index -= self.trials[current_trial].length
@@ -211,10 +201,16 @@ class MotionDataset(Dataset):
 
     def __getitem__(self, _):
         i_trial = torch.randint(0, self.trial_num, (1,)).item()        # a random trial regardless of its length
-        trial_length = self.trials[i_trial].length
-        slice_index = torch.randint(0, trial_length - self.window_len+1, (1,)).item()
+        slice_index = random.sample(self.trials[i_trial].available_win_start, 1)[0]
 
         converted_pose = self.trials[i_trial].converted_pose[slice_index:slice_index+self.window_len, ...]
+        if np.sum(self.trials[i_trial].probably_missing[slice_index:slice_index+self.window_len]):
+            print('Error: probably missing')
+            print(self.trials[i_trial].dset_name)
+            print(self.trials[i_trial].sub_and_trial_name)
+            print(self.trials[i_trial].probably_missing[slice_index:slice_index+self.window_len])
+            print(slice_index)
+            raise ValueError('probably missing')
         return (converted_pose, self.trials[i_trial].model_offsets, i_trial)
 
     @staticmethod
@@ -250,7 +246,7 @@ class MotionDataset(Dataset):
 
     def get_all_wins_within_gait_cycle(self):
         windows = []
-        _ = self.get_all_gait_cycles_and_set_gait_phase_label()
+        self.get_all_gait_cycles_and_set_gait_phase_label()
         for i_trial, trial_ in enumerate(self.trials):
             trial_len = trial_.length
             for i in range(0, trial_len - self.window_len + 1, self.window_len):
@@ -263,7 +259,6 @@ class MotionDataset(Dataset):
 
     def get_all_wins_regardless_gait_cycle(self):
         windows = []
-        _ = self.get_all_gait_cycles_and_set_gait_phase_label()
         for i_trial, trial_ in enumerate(self.trials):
             trial_len = trial_.length
             for i in range(0, trial_len - self.window_len + 1, self.window_len):
@@ -280,7 +275,7 @@ class MotionDataset(Dataset):
         for i_trial, trial_ in enumerate(self.trials):
             unnormalized_poses = self.normalizer.unnormalize(trial_.converted_pose.clone().unsqueeze(0))
             trial_gait_phase_label = np.full([unnormalized_poses.shape[1]], NOT_IN_GAIT_PHASE)
-            r_v_grf = unnormalized_poses[0, :, self.converted_column_names.index('calcn_r_force_vy')]
+            r_v_grf = unnormalized_poses[0, :, self.opt.model_states_column_names.index('calcn_r_force_vy')]
             r_v_grf = r_v_grf.cpu().numpy()
 
             stance_flag = np.abs(r_v_grf) > stance_vgrf_thd
@@ -384,6 +379,7 @@ class MotionDataset(Dataset):
                 print(f'Loading subject {subject_path} failed, skipping')
                 continue
             sub_mass = subject.getMassKg()
+            sub_height = subject.getHeightM()
             contact_bodies = subject.getGroundForceBodies()
             print(f'Loading subject: {subject_path}')
 
@@ -395,45 +391,63 @@ class MotionDataset(Dataset):
                 dset_name = subject_name.split('_')[0]
 
             trial_start_num_ = self.trial_start_num if self.trial_start_num >= 0 else max(0, subject.getNumTrials() + self.trial_start_num)
-            for trial_index in tqdm(range(trial_start_num_, subject.getNumTrials())):
-                sampling_rate = int(1 / subject.getTrialTimestep(trial_index))
-                sub_and_trial_name = subject_name + '_' + subject.getTrialName(trial_index)
-                trial_length = subject.getTrialLength(trial_index)
+            for trial_id in tqdm(range(trial_start_num_, subject.getNumTrials())):
+                sampling_rate = int(1 / subject.getTrialTimestep(trial_id))
+                sub_and_trial_name = subject_name + '__' + subject.getTrialName(trial_id)
+                trial_length = subject.getTrialLength(trial_id)
                 probably_missing: List[bool] = [reason != nimble.biomechanics.MissingGRFReason.notMissingGRF for reason
-                                                in subject.getMissingGRF(trial_index)]
+                                                in subject.getMissingGRF(trial_id)]
 
-                frames: nimble.biomechanics.FrameList = subject.readFrames(trial_index, 0, trial_length,
+                frames: nimble.biomechanics.FrameList = subject.readFrames(trial_id, 0, trial_length,
                                                                            includeSensorData=False,
                                                                            includeProcessingPasses=True)
                 try:
                     first_passes: List[nimble.biomechanics.FramePass] = [frame.processingPasses[0] for frame in frames]
                 except IndexError:
-                    print(f'{subject_name}, {trial_index} has no processing passes, skipping')
+                    print(f'{subject_name}, {trial_id} has no processing passes, skipping')
                     continue
                 poses = [frame.pos for frame in first_passes]
-                forces = [frame.groundContactForce / sub_mass for frame in first_passes]
+                forces = [frame.groundContactForce for frame in first_passes]
                 if len(forces[0]) != 6:
                     continue        # only include data with 2 contact bodies.
 
                 # This is to compensate an AddBiomechanics bug that first GRF is always 0.
                 if (forces[0] == 0).all():
-                    print(f'Compensating... an AddB bug, {subject_name}, {trial_index} has 0 GRF at the first frame.', end='')
+                    print(f'Compensating an AddB bug, {subject_name}, {trial_id} has 0 GRF at the first frame.', end='')
                     forces[0] = forces[1]
+                forces = np.array(forces)
 
-                poses, forces = np.array(poses), np.array(forces)
-                states = np.concatenate([poses, forces], axis=1)
+                cops = np.array([frame.groundContactCenterOfPressure for frame in first_passes])
+                foot_bodies = [skel.getBodyNode(name) for name in subject.getGroundForceBodies()]
+                foot_loc = []
+                for i_frame in range(len(cops)):
+                    skel.setPositions(poses[i_frame])
+                    foot_loc.append(np.concatenate([foot_body.getWorldTransform().translation() for foot_body in foot_bodies]))
+                foot_loc = np.array(foot_loc)
+                assert foot_loc.shape[1] == 6
+
+                force_v0, force_v1 = forces[:, :3], forces[:, 3:]
+                force_p0, force_p1 = (cops - foot_loc)[:, :3], (cops - foot_loc)[:, 3:]     # TODO test non-stair walking
+                force_moment0, force_moment1 = np.cross(force_p0, force_v0), np.cross(force_p1, force_v1)
+
+                # normal by weight or weight * height
+                force_v0, force_v1 = force_v0 / sub_mass, force_v1 / sub_mass
+                force_moment0, force_moment1 = force_moment0 / (sub_mass * sub_height), force_moment1 / (sub_mass * sub_height)
+
+                if np.max(np.abs([force_moment0, force_moment1])) > 15:
+                    print(f'{subject_name}, {trial_id} has abnormally large moment.')
+                    continue
+
+                states = np.concatenate([np.array(poses), force_v0, force_moment0, force_v1, force_moment1], axis=1)
                 if not self.is_lumbar_rotation_reasonable(np.array(states), opt.osim_dof_columns):
                     continue
 
                 grf_flag_counts = list(mit.run_length.encode(probably_missing))
-                max_has_grf_count = -1
-                max_has_grf_idx = -1
-                for idx, (val, count) in enumerate(grf_flag_counts):
-                    if not val and max_has_grf_count < count:
-                        max_has_grf_count = count
-                        max_has_grf_idx = idx
-                elems_before_idx = sum((idx[1] for idx in grf_flag_counts[:max_has_grf_idx]))
-                states = states[elems_before_idx:elems_before_idx+max_has_grf_count, :]
+
+                if len(grf_flag_counts) > 30:
+                    print(f'Compensating an AddB bug, {dset_name} - {subject_name} - {trial_id} notMissingGRF flag abnormally'
+                          f' flipped {len(grf_flag_counts)} times, thus setting all to True.', end='')
+                    probably_missing = [False] * len(probably_missing)
 
                 if self.align_moving_direction_flag:
                     states, rot_mot = align_moving_direction(states, opt.osim_dof_columns)
@@ -444,6 +458,7 @@ class MotionDataset(Dataset):
                     continue
                 if sampling_rate != self.target_sampling_rate:
                     states = linear_resample_data(states, sampling_rate, self.target_sampling_rate)
+                    probably_missing = linear_resample_data(np.array(probably_missing).astype(float), sampling_rate, self.target_sampling_rate).astype(bool)
 
                 foot_locations, _, _ = forward_kinematics(states[:, :-len(KINETICS_ALL)], model_offsets)
                 mtp_r_loc, mtp_l_loc = foot_locations[1].squeeze().cpu().numpy(), foot_locations[3].squeeze().cpu().numpy()
@@ -451,14 +466,17 @@ class MotionDataset(Dataset):
                 mtp_l_vel = from_foot_loc_to_foot_vel(mtp_l_loc, states[:, -len(KINETICS_ALL):][:, 4], self.target_sampling_rate)
 
                 states_df = pd.DataFrame(states, columns=opt.osim_dof_columns)
-                states_df = convert_addb_state_to_model_input(states_df, opt.joints_3d)
-                self.converted_column_names = list(states_df.columns)
+                states_df = convert_addb_state_to_model_input(states_df, opt.joints_3d, self.target_sampling_rate)
+                assert self.opt.model_states_column_names == list(states_df.columns)
 
                 converted_states = torch.tensor(states_df.values).float()
 
-                self.trials.append(TrialData(converted_states, model_offsets, contact_bodies, sub_and_trial_name,
-                                             subject.getHeightM(), subject.getMassKg(), dset_name, rot_mot,
-                                             mtp_r_vel, mtp_l_vel))
+                # assert converted_states.shape[0] == len(frames)
+                trial_data = TrialData(converted_states, probably_missing, model_offsets, contact_bodies,
+                                       sub_and_trial_name, trial_id, subject.getHeightM(), subject.getMassKg(),
+                                       dset_name, rot_mot, self.window_len, mtp_r_vel, mtp_l_vel)
+                if len(trial_data.available_win_start) > 0:
+                    self.trials.append(trial_data)
                 self.dset_set.add(dset_name)
 
                 if max_trial_num is not None and len(self.trials) >= max_trial_num:
@@ -480,7 +498,7 @@ class MotionDataset(Dataset):
         angular_v_limit = np.deg2rad(2000)          # 2000 deg/s
         rot_mat_angular_v_limit = angular_v_limit               # use the same limit because sin(x) ~= x for small x
 
-        pos_col = [col for col in converted_column_names if '_tx' in col or '_ty' in col or '_tz' in col]
+        pos_col = ['pelvis_tx', 'pelvis_ty', 'pelvis_tz']
         pos_col_loc = [converted_column_names.index(col) for col in pos_col]
         rot_mat_col = [col for col in converted_column_names if '_0' in col or '_1' in col or '_2' in col or '_3'
                        in col or '_4' in col or '_5' in col]
@@ -502,19 +520,17 @@ class MotionDataset(Dataset):
                 break_point_list = [0] + break_point_list + [current_trial.length]
                 for i_clip in range(len(break_point_list) - 1):
                     start_, end_ = break_point_list[i_clip] + 2, break_point_list[i_clip+1] - 2
-                    if end_ - start_ < self.window_len:
-                        continue
-                    trial_data_list.append(
-                        TrialData(current_trial.converted_pose[start_:end_],
-                                  *current_trial.get_attributes_for_reinitialization(),
-                                  current_trial.mtp_r_vel[start_:end_],
-                                  current_trial.mtp_l_vel[start_:end_]
-                                  )
-                    )
+                    trial_data = TrialData(current_trial.converted_pose[start_:end_],
+                                           current_trial.probably_missing[start_:end_],
+                                           *current_trial.get_attributes_for_reinitialization(),
+                                           current_trial.mtp_r_vel[start_:end_],
+                                           current_trial.mtp_l_vel[start_:end_])
+                    if len(trial_data.available_win_start) > 0:
+                        trial_data_list.append(trial_data)
 
                 print('Divided {} {} into {} trials, {} due to linear acc, {} due to euler angle vel, {} due to rot mat vel'.format(
-                    current_trial.dset_name, current_trial.sub_and_trial_name,
-                    len(trial_data_list), len(pos_break_point), len(euler_angle_break_point), len(rot_mat_break_point)))
+                      current_trial.dset_name, current_trial.sub_and_trial_name,
+                      len(trial_data_list), len(pos_break_point), len(euler_angle_break_point), len(rot_mat_break_point)))
             else:
                 trial_data_list.append(current_trial)
         return trial_data_list
@@ -540,9 +556,11 @@ class GaitCycles:
 
 
 class TrialData:
-    def __init__(self, converted_states, model_offsets, contact_bodies, sub_and_trial_name, sub_height, sub_weight,
-                 dset_name, rot_mat_for_moving_direction_alignment, mtp_r_vel, mtp_l_vel, trial_gait_phase_label=None):
+    def __init__(self, converted_states, probably_missing, model_offsets, contact_bodies, sub_and_trial_name, trial_id,
+                 sub_height, sub_weight, dset_name, rot_mat_for_moving_direction_alignment, window_len,
+                 mtp_r_vel, mtp_l_vel, trial_gait_phase_label=None):
         self.converted_pose = converted_states
+        self.probably_missing = probably_missing
         self.model_offsets = model_offsets
         self.contact_bodies = contact_bodies
         self.sub_and_trial_name = sub_and_trial_name
@@ -556,6 +574,18 @@ class TrialData:
         assert self.mtp_l_vel.shape[0] == self.length
         self.trial_gait_phase_label = trial_gait_phase_label
         self.rot_mat_for_moving_direction_alignment = rot_mat_for_moving_direction_alignment
+        self.window_len = window_len
+        self.available_win_start = self.set_available_win_start(window_len)
+        self.trial_id = trial_id
+
+    def set_available_win_start(self, window_len):
+        grf_flag_counts = list(mit.run_length.encode(self.probably_missing))
+        available_win_start = []
+        for idx, (val, count) in enumerate(grf_flag_counts):
+            if not val and count >= window_len:
+                elems_before_idx = sum((idx[1] for idx in grf_flag_counts[:idx]))
+                available_win_start.extend([i for i in range(elems_before_idx, elems_before_idx+count-window_len+1)])
+        return available_win_start
 
     def get_attributes(self):
         return {'sub_and_trial_name': self.sub_and_trial_name, 'dset_name': self.dset_name,
@@ -566,10 +596,13 @@ class TrialData:
             self.model_offsets,
             self.contact_bodies,
             self.sub_and_trial_name,
+            self.trial_id,
             self.sub_height,
             self.sub_weight,
             self.dset_name,
-            self.rot_mat_for_moving_direction_alignment]
+            self.rot_mat_for_moving_direction_alignment,
+            self.window_len
+        ]
 
 
 class MotionModel:
@@ -675,8 +708,8 @@ class MotionModel:
         train_dataset = MotionDataset(
             data_path=opt.data_path_train,
             train=True,
-            # trial_start_num=-1,
-            # max_trial_num=3,            # !!!
+            # trial_start_num=-3,
+            # max_trial_num=4,            # !!!
             opt=opt,
         )
         # set normalizer
@@ -774,8 +807,10 @@ class MotionModel:
                                 continue        # if 0, then the trial is not used for training, thus skipping
                             loss_dset[dset_name] = [loss_dset[dset_name][0] + trial_loss, loss_dset[dset_name][1] + 1]
 
-                        loss_val_name_pairs_dset = [(loss_count[0] / loss_count[1], dset_name)
-                                                    for dset_name, loss_count in loss_dset.items()]
+                        loss_val_name_pairs_dset = []
+                        for dset_name, loss_count in loss_dset.items():
+                            if loss_count[1] != 0:
+                                loss_val_name_pairs_dset.append((loss_count[0] / loss_count[1], dset_name))
 
                         log_dict = {name: loss for loss, name in loss_val_name_pairs_dset + loss_val_name_pairs_joints + loss_val_name_pairs_terms}
                         wandb.log(log_dict)
@@ -1199,7 +1234,6 @@ class GaussianDiffusion(nn.Module):
                 #     plt.title(col)
                 # plt.show()
 
-
             if time_next < 0:
                 x = x_start
                 return x
@@ -1239,7 +1273,7 @@ class GaussianDiffusion(nn.Module):
         for time, time_next in tqdm(time_pairs, desc='sampling loop time step'):
             time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
 
-            u_rounds = 10
+            u_rounds = 5
             for u_ in range(u_rounds):
 
                 pred_noise, x_start, *_ = self.model_predictions(x_time, cond, time_cond, clip_x_start=self.clip_denoised)
@@ -1256,7 +1290,7 @@ class GaussianDiffusion(nn.Module):
         return x_start
 
     @torch.no_grad()
-    def inpaint_ddim_loop_not_working_2(self, shape, cond, noise=None, constraint=None, return_diffusion=False, start_point=None):
+    def inpaint_ddim_loop_not_working_even_worse(self, shape, cond, noise=None, constraint=None, return_diffusion=False, start_point=None):
         """
         Tried to implement the ddim repaint described in this paper, but failed: https://arxiv.org/pdf/2401.04747.pdf
         """

@@ -61,7 +61,7 @@ def get_results():
     plt.show()
 
 
-test_data_name = 'downstream_grf'
+test_data_name = 'downstream_grf_standard_scalar_no_repaint'
 if __name__ == "__main__":
     get_results()
 

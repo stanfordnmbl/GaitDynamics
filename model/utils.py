@@ -1,5 +1,6 @@
 import math
 import numpy as np
+import pandas as pd
 import torch
 from torch import nn
 from scipy.interpolate import interp1d
@@ -9,9 +10,22 @@ from scipy.signal import filtfilt, butter
 from alant.quaternion import euler_from_6v, euler_to_6v
 from alant.alan_consts import JOINTS_3D_ALL, FROZEN_DOFS
 from data.rotation_conversions import euler_angles_to_matrix, matrix_to_euler_angles
+import matplotlib.pyplot as plt
 
 
-def convert_addb_state_to_model_input(pose_df, joints_3d):
+def identity(t, *args, **kwargs):
+    return t
+
+
+def wrap(x):
+    return {f"module.{key}": value for key, value in x.items()}
+
+
+def maybe_wrap(x, num):
+    return x if num == 1 else wrap(x)
+
+
+def convert_addb_state_to_model_input(pose_df, joints_3d, sampling_fre):
     # shift root position to start in (x,y) = (0,0)
     pose_df['pelvis_tx'] = pose_df['pelvis_tx'] - pose_df['pelvis_tx'][0]
     pose_df['pelvis_ty'] = pose_df['pelvis_ty'] - pose_df['pelvis_ty'][0]
@@ -30,11 +44,20 @@ def convert_addb_state_to_model_input(pose_df, joints_3d):
         for i in range(6):
             pose_df[joint_name + '_' + str(i)] = joint_6v[:, i]
 
-    return pose_df
+    vel_col_loc = [i for i, col in enumerate(pose_df.columns) if 'force' not in col]
+    vel_col_names = [f'{col}_vel' for i, col in enumerate(pose_df.columns) if 'force' not in col]
+    kinematics_np = pose_df.iloc[:, vel_col_loc].to_numpy().copy()
+    kinematics_np_filtered = data_filter(kinematics_np, 15, sampling_fre, 4)
+    kinematics_vel = np.stack([spline_fitting_1d(kinematics_np_filtered[:, i_col], range(kinematics_np_filtered.shape[0]), 1).ravel()
+                               for i_col in range(kinematics_np_filtered.shape[1])]).T
+
+    pose_vel_df = pd.DataFrame(np.concatenate([pose_df.values, kinematics_vel], axis=1), columns=list(pose_df.columns)+vel_col_names)
+    return pose_vel_df
 
 
 def inverse_convert_addb_state_to_model_input(model_states, model_states_column_names, joints_3d, osim_dof_columns):
-    model_states_dict = {col: model_states[..., i] for i, col in enumerate(model_states_column_names) if col in osim_dof_columns}
+    model_states_dict = {col: model_states[..., i] for i, col in enumerate(model_states_column_names) if
+                         col in osim_dof_columns}
 
     # convert 6v to euler
     for joint_name, joints_with_3_dof in joints_3d.items():
@@ -60,7 +83,8 @@ def align_moving_direction(poses, column_names):
     r_grf_col_loc = [column_names.index(col) for col in ['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']]
     l_grf_col_loc = [column_names.index(col) for col in ['calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz']]
 
-    if len(pelvis_orientation_col_loc) != 3 or len(p_pos_col_loc) != 3 or len(r_grf_col_loc) != 3 or len(l_grf_col_loc) != 3:
+    if len(pelvis_orientation_col_loc) != 3 or len(p_pos_col_loc) != 3 or len(r_grf_col_loc) != 3 or len(
+            l_grf_col_loc) != 3:
         raise ValueError('check column names')
 
     pelvis_orientation = pose_clone[:, pelvis_orientation_col_loc]
@@ -92,7 +116,8 @@ def inverse_align_moving_direction(poses, column_names, rot_mat_to_reset):
     r_grf_col_loc = [column_names.index(col) for col in ['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']]
     l_grf_col_loc = [column_names.index(col) for col in ['calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz']]
 
-    if len(pelvis_orientation_col_loc) != 3 or len(p_pos_col_loc) != 3 or len(r_grf_col_loc) != 3 or len(l_grf_col_loc) != 3:
+    if len(pelvis_orientation_col_loc) != 3 or len(p_pos_col_loc) != 3 or len(r_grf_col_loc) != 3 or len(
+            l_grf_col_loc) != 3:
         raise ValueError('check column names')
 
     pelvis_orientation = pose_clone[:, pelvis_orientation_col_loc]
@@ -145,13 +170,13 @@ def nan_helper(y):
 
 
 def moving_average_filtering(x, N):
-    x_padded = np.pad(x, (N//2, N-1-N//2), mode='edge')
+    x_padded = np.pad(x, (N // 2, N - 1 - N // 2), mode='edge')
     cumsum = np.cumsum(np.insert(x_padded, 0, 0))
     return (cumsum[N:] - cumsum[:-N]) / float(N)
 
 
 def from_foot_loc_to_foot_vel(mtp_loc, foot_grf, sampling_rate):
-    grf_thd = 2           # 2 times of body mass Kg
+    grf_thd = 2  # 2 times of body mass Kg
     foot_vel = np.diff(mtp_loc, axis=0) * sampling_rate
     foot_vel = np.concatenate([foot_vel, foot_vel[-1][None, :]], axis=0)
     low_grf_loc = foot_grf < grf_thd
@@ -164,7 +189,7 @@ def from_foot_loc_to_foot_vel(mtp_loc, foot_grf, sampling_rate):
 
 def linear_resample_data(trial_data, original_fre, target_fre):
     x, step = np.linspace(0., 1., trial_data.shape[0], retstep=True)
-    new_x = np.arange(0., 1., step*original_fre/target_fre)
+    new_x = np.arange(0., 1., step * original_fre / target_fre)
     f = interp1d(x, trial_data, axis=0)
     trial_data_resampled = f(new_x)
     return trial_data_resampled
@@ -186,9 +211,11 @@ def update_d_dd(q, dt):
     return dq, ddq
 
 
-def resample_via_spline_fitting(data_, step_to_resample):
-    tck, step = interpo.splprep(data_[:, :].T, u=data_[:, 0], s=0)
-    data_resampled = interpo.splev(step_to_resample, tck, der=0)
+def spline_fitting_1d(data_, step_to_resample, der=0):
+    assert len(data_.shape) == 1
+    data_ = data_.reshape(1, -1)
+    tck, step = interpo.splprep(data_, u=range(data_.shape[1]), s=0)
+    data_resampled = interpo.splev(step_to_resample, tck, der=der)
     data_resampled = np.column_stack(data_resampled)
     return data_resampled
 

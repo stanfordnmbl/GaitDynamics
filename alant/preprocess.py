@@ -26,7 +26,8 @@ def increment_path(path, exist_ok=False, sep="", mkdir=False):
 class Normalizer:
     def __init__(self, data, cols_to_normalize):
         flat = data.reshape(-1, data.shape[-1])
-        self.scaler = StandardScaler()
+        # self.scaler = MinMaxScaler(feature_range=(-10, 10))      # MinMaxScaler allows clipping
+        self.scaler = StandardScaler()      # StandardScaler converges faster
         self.scaler.fit(flat[:, cols_to_normalize])
         self.cols_to_normalize = cols_to_normalize
 

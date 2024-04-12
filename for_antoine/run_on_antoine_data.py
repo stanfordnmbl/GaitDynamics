@@ -61,8 +61,8 @@ class DatasetAntoine(MotionDataset):
             mtp_l_vel = from_foot_loc_to_foot_vel(mtp_l_loc, states[:, -len(KINETICS_ALL):][:, 4], self.target_sampling_rate)
 
             states_df = pd.DataFrame(states, columns=opt.osim_dof_columns)
-            states_df = convert_addb_state_to_model_input(states_df, opt.joints_3d)
-            self.converted_column_names = list(states_df.columns)
+            states_df = convert_addb_state_to_model_input(states_df, opt.joints_3d, self.target_sampling_rate)
+            assert states_df.columns == opt.model_states_column_names
 
             converted_states = torch.tensor(states_df.values).float()
 

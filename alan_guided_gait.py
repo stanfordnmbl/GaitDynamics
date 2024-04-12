@@ -45,7 +45,7 @@ def loop_all(opt):
 
             value_diff_thd = torch.zeros([len(opt.model_states_column_names)])     # TODO: for gait pattern manipulation, add soft boundaries and tune values
             value_diff_weight = torch.ones([len(opt.model_states_column_names)])
-            col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'calcn_r' in col]
+            col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'calcn_r_force' in col]
 
             value_diff_thd[:] = 1
             value_diff_thd[col_loc] = 0          # set tx ty tz to 0 for strict position constraint

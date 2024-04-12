@@ -20,17 +20,15 @@ def inpaint(opt):
         data_path=b3d_path,
         train=False,
         normalizer=model.normalizer,
-        max_trial_num=5,
-        trial_start_num=0,
-        # max_trial_num=1,
+        trial_start_num=32,
+        max_trial_num=1,
         divide_jittery=False,
         opt=opt,
     )
     wins = [test_dataset[i] for i in range(render_count)]
 
-    # masks = torch.zeros_like(wins[0][0])
-    # state_true, state_pred_list = model.eval_loop(opt, wins, masks, num_of_generation_per_window=skel_num-1)
-
+    masks = torch.zeros_like(wins[0][0])
+    state_true, state_pred_list = model.eval_loop(opt, wins, masks, num_of_generation_per_window=skel_num-1)
 
     model_name = 'unscaled_generic_no_arm' if not opt.with_arm else 'unscaled_generic_with_arm'
     customOsim: nimble.biomechanics.OpenSimFile = nimble.biomechanics.OpenSimParser.parseOsim(
@@ -69,12 +67,12 @@ def inpaint(opt):
 
 li, camargo, carter, falisse, moore, tan2021, tan2022 = 'li', 'camargo', 'carter', 'falisse', 'moore', 'tan2021', 'tan2022'
 uhlrich, santos, vanderzee, wang = 'uhlrich', 'santos', 'vanderzee', 'wang'
-b3d_path = f'/mnt/d/Local/Data/MotionPriorData/{tan2022}_dset/'
+b3d_path = f'/mnt/d/Local/Data/MotionPriorData/{camargo}_dset/'
 
 if __name__ == "__main__":
     skel_num = 2
     opt = parse_opt()
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + "/trained_models/train-3000.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + "/trained_models/train-5000.pt"
     inpaint(opt)
 
 

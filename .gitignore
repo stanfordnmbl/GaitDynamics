@@ -12,6 +12,8 @@ __pycache__/
 *.zip
 *.csv
 *.osim
+*.mot
+*.trc
 cached_features/
 custom_music/
 data/AMASS
