@@ -8,8 +8,8 @@ from scipy.interpolate import interp1d
 import scipy.interpolate as interpo
 import random
 from scipy.signal import filtfilt, butter
-from alant.quaternion import euler_from_6v, euler_to_6v
-from alant.alan_consts import JOINTS_3D_ALL, FROZEN_DOFS
+from data.quaternion import euler_from_6v, euler_to_6v
+from consts import JOINTS_3D_ALL, FROZEN_DOFS
 from data.rotation_conversions import euler_angles_to_matrix, matrix_to_euler_angles
 import matplotlib.pyplot as plt
 

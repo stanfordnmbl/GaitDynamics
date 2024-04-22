@@ -1,18 +1,9 @@
-from alant.args import parse_opt, set_with_arm_opt
+from args import parse_opt, set_with_arm_opt
 import torch
-from tqdm import tqdm
-import more_itertools as mit
-import os
-from alant.alan_consts import DATASETS_NO_ARM, NOT_IN_GAIT_PHASE
 import numpy as np
-from alant.alan_osim_fk import get_model_offsets, get_knee_rotation_coefficients, forward_kinematics
-import matplotlib.pyplot as plt
-import nimblephysics as nimble
-from model.alan_model import MotionModel, MotionDataset
+from model.model import MotionModel
 import os
 from fig_utils import show_skeletons
-from nimblephysics import NimbleGUI
-import time
 
 
 def generate_windows(name_, value_, win_num_per_condition=1):

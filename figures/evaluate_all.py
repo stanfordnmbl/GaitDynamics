@@ -1,9 +1,10 @@
-from alant.args import parse_opt, set_with_arm_opt
+from args import parse_opt, set_with_arm_opt
 import torch
 import os
-from alant.alan_consts import DATASETS_NO_ARM, NOT_IN_GAIT_PHASE
-from model.alan_model import MotionModel, MotionDataset
-from model.alan_model import inverse_convert_addb_state_to_model_input
+from consts import DATASETS_NO_ARM, NOT_IN_GAIT_PHASE
+from model.model import MotionModel
+from data.addb_dataset import MotionDataset
+from model.model import inverse_convert_addb_state_to_model_input
 import numpy as np
 import pickle
 import matplotlib.pyplot as plt
@@ -131,7 +132,7 @@ def loop_all(opt):
 
     pickle.dump([results_true, results_pred, results_pred_std, results_bl, opt.osim_dof_columns,
                  is_output_label_array, sub_heights, sub_weights],
-                open(f"figures/results/{save_name}.pkl", "wb"))
+                open(f"../figures/results/{save_name}.pkl", "wb"))
 
 
 def save_average_gait(dset):
@@ -155,13 +156,14 @@ def save_average_gait(dset):
         train_dataset.normalizer.unnormalize(average_gait_cycle.unsqueeze(0)), opt.model_states_column_names,
         opt.joints_3d, opt.osim_dof_columns, pos_vec=[0, 0, 0]).squeeze().numpy()
 
-    pickle.dump(average_gait_cycle, open(f"figures/results/average_gait_cycle_{dset}.pkl", "wb"))
+    pickle.dump(average_gait_cycle, open(f"../figures/results/average_gait_cycle_{dset}.pkl", "wb"))
 
 
 def get_baseline_val(dset, windows, trials):
-    if not os.path.exists(f"figures/results/average_gait_cycle_{dset}.pkl"):
+    if not os.path.exists(f"../figures/results/average_gait_cycle_{dset}.pkl"):
+        print(f"average_gait_cycle_{dset}.pkl does not exist")
         return None
-    average_gait_cycle = pickle.load(open(f"figures/results/average_gait_cycle_{dset}.pkl", "rb"))
+    average_gait_cycle = pickle.load(open(f"../figures/results/average_gait_cycle_{dset}.pkl", "rb"))
 
     bl_pred = {dset: {}}
 
@@ -182,8 +184,8 @@ if __name__ == "__main__":
     opt = parse_opt()
     opt.guide_x_start_the_beginning_step = -10      # negative value means no guidance
 
-    # opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'5000'}.pt"
-    opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'AddSubtalar2'}/weights/train-{'5000'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'100'}.pt"
+    # opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'AddSubtalar2'}/weights/train-{'5000'}.pt"
 
     knee_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'knee' in col]
     ankle_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'ankle' in col]

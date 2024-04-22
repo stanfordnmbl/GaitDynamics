@@ -1,7 +1,8 @@
-from alant.args import parse_opt, set_with_arm_opt
+from args import parse_opt, set_with_arm_opt
 import torch
 import os
-from model.alan_model import MotionModel, MotionDataset
+from model.model import MotionModel
+from data.addb_dataset import MotionDataset
 from fig_utils import show_skeletons, set_up_gui
 import matplotlib.pyplot as plt
 from model.utils import inverse_convert_addb_state_to_model_input
@@ -112,7 +113,7 @@ if __name__ == "__main__":
     opt = parse_opt()
     opt.guide_x_start_the_beginning_step = 1000
 
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'5000_'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'100'}.pt"
 
     loop_all(opt)
 

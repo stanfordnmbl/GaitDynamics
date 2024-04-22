@@ -1,11 +1,12 @@
-from alant.args import parse_opt, set_with_arm_opt
+from args import parse_opt, set_with_arm_opt
 import torch
 import os
-from alant.alan_consts import DATASETS_NO_ARM, NOT_IN_GAIT_PHASE, KINETICS_ALL, OSIM_DOF_ALL
-from model.alan_model import MotionModel, MotionDataset, TrialData
+from consts import KINETICS_ALL, OSIM_DOF_ALL
+from model.model import MotionModel
+from data.addb_dataset import MotionDataset, TrialData
 from model.utils import convert_addb_state_to_model_input, inverse_convert_addb_state_to_model_input, align_moving_direction
 from model.utils import linear_resample_data_as_num_of_dp, from_foot_loc_to_foot_vel, linear_resample_data
-from alant.alan_osim_fk import get_model_offsets, forward_kinematics
+from data.osim_fk import get_model_offsets, forward_kinematics
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -146,7 +147,7 @@ if __name__ == "__main__":
     opt = parse_opt()
     opt.guide_x_start_the_beginning_step = -10      # negative value means no guidance
 
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'5000'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'100'}.pt"
 
     kinematic_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'force' not in col]
     grf_osim_col_loc = [i_col for i_col, col in enumerate(opt.osim_dof_columns) if 'force' in col]

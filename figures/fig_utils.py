@@ -1,11 +1,8 @@
-import copy
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.metrics import r2_score, mean_squared_error as mse
 from scipy.stats import pearsonr
-import pandas as pd
 from scipy.signal import find_peaks
-import json
 import nimblephysics as nimble
 from nimblephysics import NimbleGUI
 import time

@@ -1,6 +1,6 @@
 import pickle
 import numpy as np
-from alant.alan_consts import NOT_IN_GAIT_PHASE, EXCLUDE_FROM_ASB
+from consts import NOT_IN_GAIT_PHASE, EXCLUDE_FROM_ASB
 import matplotlib.pyplot as plt
 
 

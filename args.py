@@ -1,9 +1,7 @@
 import argparse
-import copy
 import json
 import os
-from alant.alan_consts import *
-import numpy as np
+from consts import *
 
 
 def parse_opt():

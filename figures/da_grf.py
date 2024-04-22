@@ -1,5 +1,5 @@
 import pickle
-from alant.alan_consts import NOT_IN_GAIT_PHASE, EXCLUDE_FROM_ASB
+from consts import NOT_IN_GAIT_PHASE, EXCLUDE_FROM_ASB
 from fig_utils import get_scores
 import numpy as np
 import matplotlib.pyplot as plt
