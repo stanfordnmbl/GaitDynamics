@@ -14,6 +14,7 @@ def parse_opt():
     parser.add_argument("--epochs", type=int, default=5000)
     parser.add_argument("--target_sampling_rate", type=int, default=100)
     parser.add_argument("--window_len", type=int, default=150)
+    parser.add_argument("--guide_x_start_the_beginning_step", type=int, default=-10)      # negative value means no guidance
 
     parser.add_argument("--project", default="runs/train", help="project/name")
     parser.add_argument(

@@ -142,16 +142,18 @@ def loop_all(opt):
         plt.show()
 
 
+""" 
+Before running this script, create a "trained_models folder in the root directory, put the trained model in it, 
+and install all the dependencies.
+"""
+
+
 if __name__ == "__main__":
     skel_num = 4
     opt = parse_opt()
-    opt.guide_x_start_the_beginning_step = -10      # negative value means no guidance
-
     opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'100'}.pt"
-
     kinematic_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'force' not in col]
     grf_osim_col_loc = [i_col for i_col, col in enumerate(opt.osim_dof_columns) if 'force' in col]
-
     loop_all(opt)
 
 
