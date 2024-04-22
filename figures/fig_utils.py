@@ -6,6 +6,9 @@ from scipy.stats import pearsonr
 import pandas as pd
 from scipy.signal import find_peaks
 import json
+import nimblephysics as nimble
+from nimblephysics import NimbleGUI
+import time
 
 
 FONT_SIZE_LARGE = 15
@@ -17,6 +20,39 @@ FONT_DICT_SMALL = {'fontsize': FONT_SIZE_SMALL}
 FONT_DICT_X_SMALL = {'fontsize': 15}
 LINE_WIDTH = 1.5
 LINE_WIDTH_THICK = 2
+
+
+def set_up_gui(opt, names):
+    model_name = 'unscaled_generic_no_arm' if not opt.with_arm else 'unscaled_generic_with_arm'
+    customOsim: nimble.biomechanics.OpenSimFile = nimble.biomechanics.OpenSimParser.parseOsim(
+        f'/mnt/d/Local/Data/MotionPriorData/model_and_geometry/{model_name}.osim')
+    skels = [customOsim.skeleton for _ in range(len(names))]
+
+    world = nimble.simulation.World()
+    world.setGravity([0, -9.81, 0])
+    gui = NimbleGUI(world)
+    gui.serve(8090)
+    gui.nativeAPI().createText('name', str(names), [1200, 200], [250, 50])
+    return gui, skels
+
+
+def show_skeletons(opt, name_states_dict, gui, skels):
+    pose_col_loc = [i_dof for i_dof, dof in enumerate(opt.osim_dof_columns) if '_force_' not in dof]
+    force_col_loc = [i_dof for i_dof, dof in enumerate(opt.osim_dof_columns) if '_force_' in dof and 'moment' not in dof]
+
+    num_frames = list(name_states_dict.values())[0].shape[0]
+    for i_frame in range(num_frames):
+        for i_skel, states in enumerate(list(name_states_dict.values())):
+            poses = states[i_frame, pose_col_loc]
+            poses[5] += 0.5 * i_skel
+            # poses[4] += 0.2 * i_skel
+            skels[i_skel].setPositions(poses)
+            gui.nativeAPI().renderSkeleton(skels[i_skel], prefix='skel' + str(i_skel))
+            for i_f, contact_body in enumerate(['calcn_r', 'calcn_l']):
+                body_pos = skels[i_skel].getBodyNode(contact_body).getWorldTransform().translation()
+                forces = states[i_frame, force_col_loc[3 * i_f:3 * (i_f + 1)]]
+                gui.nativeAPI().createLine(f'line_{i_skel}_{i_f}', [body_pos, body_pos + 0.1 * forces], color=[1, 0., 0., 1])
+        time.sleep(0.05)
 
 
 def get_scores(y_true, y_pred, y_fields, exclude_swing_phase=False):

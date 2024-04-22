@@ -21,7 +21,8 @@ import copy
 import torch.nn as nn
 from model.utils import extract, make_beta_schedule, linear_resample_data, update_d_dd, fix_seed, nan_helper, \
     from_foot_loc_to_foot_vel, moving_average_filtering, convert_addb_state_to_model_input, identity, maybe_wrap, \
-    inverse_convert_addb_state_to_model_input, align_moving_direction, inverse_align_moving_direction
+    inverse_convert_addb_state_to_model_input, align_moving_direction, inverse_align_moving_direction, randomize_seed, \
+    cross_product_2d
 from typing import Any, List
 import nimblephysics as nimble
 from alant.alan_consts import *
@@ -150,6 +151,9 @@ class MotionDataset(Dataset):
             average_foot_vel = (r_foot_vel + l_foot_vel) / 2
 
             vel_from_t = np.concatenate(vel_from_t_, axis=0)
+            if np.min(vel_from_t[:, 0]) < -0.5:
+                print('!!!! found vel < -0.5 m/s !!!!')
+                # raise RuntimeError('found vel < -0.5 m/s')
             for axis in range(3):
                 vel_from_t[:, axis] = moving_average_filtering(vel_from_t[:, axis], 11)
             # vel_from_t = data_filter(vel_from_t, 10, self.target_sampling_rate)
@@ -253,8 +257,6 @@ class MotionDataset(Dataset):
                 gait_phase_label = trial_.trial_gait_phase_label[i:i+self.window_len]
                 if (gait_phase_label != NOT_IN_GAIT_PHASE).any():
                     windows.append((trial_.converted_pose[i:i+self.window_len, ...], self.trials[i_trial].model_offsets, i_trial, gait_phase_label))
-            # # The last window is probably overlapping with the previous one.
-            # windows.append((trial_.converted_pose[trial_len-self.window_len:, ...], self.trials[i_trial].model_offsets, i_trial))
         return windows
 
     def get_all_wins_regardless_gait_cycle(self):
@@ -263,6 +265,7 @@ class MotionDataset(Dataset):
             trial_len = trial_.length
             for i in range(0, trial_len - self.window_len + 1, self.window_len):
                 windows.append((trial_.converted_pose[i:i+self.window_len, ...], self.trials[i_trial].model_offsets, i_trial, self.window_len))
+            # The last window is probably overlapping with the previous one.
             windows.append((trial_.converted_pose[trial_len-self.window_len:, ...], self.trials[i_trial].model_offsets, i_trial, trial_len - self.window_len - i))
         return windows
 
@@ -309,7 +312,8 @@ class MotionDataset(Dataset):
         force_col_loc = [i_dof for i_dof, dof in enumerate(opt.osim_dof_columns) if '_force_' in dof]
 
         pose_list = [inverse_convert_addb_state_to_model_input(
-            pose, self.opt.model_states_column_names, self.opt.joints_3d, self.opt.osim_dof_columns) for pose in pose_converted]
+            pose, self.opt.model_states_column_names, self.opt.joints_3d, self.opt.osim_dof_columns, trials[i_trial].pos_vec_for_pos_alignment)
+            for i_trial, pose in enumerate(pose_converted)]
 
         geometry = '/mnt/d/Local/AddBiom/vmu-suit/ml_and_simulation/data/Geometry/'
         print('Using Geometry folder: '+geometry)
@@ -410,14 +414,13 @@ class MotionDataset(Dataset):
                 forces = [frame.groundContactForce for frame in first_passes]
                 if len(forces[0]) != 6:
                     continue        # only include data with 2 contact bodies.
-
+                forces = np.array(forces)
+                cops = np.array([frame.groundContactCenterOfPressure for frame in first_passes])
                 # This is to compensate an AddBiomechanics bug that first GRF is always 0.
-                if (forces[0] == 0).all():
+                if (forces[0] == 0).all() or (cops[0] == 0).all():
                     print(f'Compensating an AddB bug, {subject_name}, {trial_id} has 0 GRF at the first frame.', end='')
                     forces[0] = forces[1]
-                forces = np.array(forces)
-
-                cops = np.array([frame.groundContactCenterOfPressure for frame in first_passes])
+                    cops[0] = cops[1]
                 foot_bodies = [skel.getBodyNode(name) for name in subject.getGroundForceBodies()]
                 foot_loc = []
                 for i_frame in range(len(cops)):
@@ -428,7 +431,7 @@ class MotionDataset(Dataset):
 
                 force_v0, force_v1 = forces[:, :3], forces[:, 3:]
                 force_p0, force_p1 = (cops - foot_loc)[:, :3], (cops - foot_loc)[:, 3:]     # TODO test non-stair walking
-                force_moment0, force_moment1 = np.cross(force_p0, force_v0), np.cross(force_p1, force_v1)
+                force_moment0, force_moment1 = cross_product_2d(force_p0, force_v0), cross_product_2d(force_p1, force_v1)
 
                 # normal by weight or weight * height
                 force_v0, force_v1 = force_v0 / sub_mass, force_v1 / sub_mass
@@ -450,9 +453,9 @@ class MotionDataset(Dataset):
                     probably_missing = [False] * len(probably_missing)
 
                 if self.align_moving_direction_flag:
-                    states, rot_mot = align_moving_direction(states, opt.osim_dof_columns)
+                    states, rot_mat = align_moving_direction(states, opt.osim_dof_columns)
                 else:
-                    rot_mot = torch.eye(3).float()
+                    rot_mat = torch.eye(3).float()
 
                 if (states.shape[0] / sampling_rate * self.target_sampling_rate) < self.window_len + 2:
                     continue
@@ -466,15 +469,15 @@ class MotionDataset(Dataset):
                 mtp_l_vel = from_foot_loc_to_foot_vel(mtp_l_loc, states[:, -len(KINETICS_ALL):][:, 4], self.target_sampling_rate)
 
                 states_df = pd.DataFrame(states, columns=opt.osim_dof_columns)
-                states_df = convert_addb_state_to_model_input(states_df, opt.joints_3d, self.target_sampling_rate)
-                assert self.opt.model_states_column_names == list(states_df.columns)
+                states_df = self.customized_param_manipulation(states_df)
+                states_df, pos_vec = convert_addb_state_to_model_input(states_df, opt.joints_3d, self.target_sampling_rate)
 
+                assert self.opt.model_states_column_names == list(states_df.columns)
                 converted_states = torch.tensor(states_df.values).float()
 
-                # assert converted_states.shape[0] == len(frames)
                 trial_data = TrialData(converted_states, probably_missing, model_offsets, contact_bodies,
                                        sub_and_trial_name, trial_id, subject.getHeightM(), subject.getMassKg(),
-                                       dset_name, rot_mot, self.window_len, mtp_r_vel, mtp_l_vel)
+                                       dset_name, rot_mat, pos_vec, self.window_len, mtp_r_vel, mtp_l_vel)
                 if len(trial_data.available_win_start) > 0:
                     self.trials.append(trial_data)
                 self.dset_set.add(dset_name)
@@ -483,6 +486,9 @@ class MotionDataset(Dataset):
                     return
             print('Current trial num: {}'.format(len(self.trials)))
         # self.trial_length_probability = torch.tensor([1000 / trial.length for trial in self.trials]).float()
+
+    def customized_param_manipulation(self, states_df):
+        return states_df
 
     @staticmethod
     def is_lumbar_rotation_reasonable(states, column_names):
@@ -557,8 +563,8 @@ class GaitCycles:
 
 class TrialData:
     def __init__(self, converted_states, probably_missing, model_offsets, contact_bodies, sub_and_trial_name, trial_id,
-                 sub_height, sub_weight, dset_name, rot_mat_for_moving_direction_alignment, window_len,
-                 mtp_r_vel, mtp_l_vel, trial_gait_phase_label=None):
+                 sub_height, sub_weight, dset_name, rot_mat_for_moving_direction_alignment, pos_vec_for_pos_alignment,
+                 window_len, mtp_r_vel, mtp_l_vel, trial_gait_phase_label=None):
         self.converted_pose = converted_states
         self.probably_missing = probably_missing
         self.model_offsets = model_offsets
@@ -574,6 +580,7 @@ class TrialData:
         assert self.mtp_l_vel.shape[0] == self.length
         self.trial_gait_phase_label = trial_gait_phase_label
         self.rot_mat_for_moving_direction_alignment = rot_mat_for_moving_direction_alignment
+        self.pos_vec_for_pos_alignment = pos_vec_for_pos_alignment
         self.window_len = window_len
         self.available_win_start = self.set_available_win_start(window_len)
         self.trial_id = trial_id
@@ -601,6 +608,7 @@ class TrialData:
             self.sub_weight,
             self.dset_name,
             self.rot_mat_for_moving_direction_alignment,
+            self.pos_vec_for_pos_alignment,
             self.window_len
         ]
 
@@ -824,16 +832,16 @@ class MotionModel:
 
     def eval_loop(self, opt, state_true, masks, value_diff_thd=None, value_diff_weight=None, num_of_generation_per_window=1):
         self.eval()
-        # if value_diff_thd is None:
-        #     value_diff_thd = torch.zeros([state_true.shape[2]])
-        # if value_diff_weight is None:
-        #     value_diff_weight = torch.ones([state_true.shape[2]])
+        if value_diff_thd is None:
+            value_diff_thd = torch.zeros([state_true.shape[2]])
+        if value_diff_weight is None:
+            value_diff_weight = torch.ones([state_true.shape[2]])
 
         constraint = {'mask': masks, 'value': state_true.clone(), 'value_diff_thd': value_diff_thd,
                       'value_diff_weight': value_diff_weight}
 
         shape = (state_true.shape[0], self.horizon, self.repr_dim)
-        cond = torch.ones(state_true.shape[0])
+        cond = torch.ones(state_true.shape[0])      # TODO remove cond
         cond = cond.to(self.accelerator.device)
         state_pred_list = [self.diffusion.generate_samples(
             shape,
@@ -843,13 +851,7 @@ class MotionModel:
             mode="inpaint",
             constraint=constraint)
             for _ in range(num_of_generation_per_window)]
-
-        state_true = self.normalizer.unnormalize(state_true)
-        state_true = state_true.detach().cpu()
-
-        state_true = inverse_convert_addb_state_to_model_input(state_true, opt.model_states_column_names,
-                                                               opt.joints_3d, opt.osim_dof_columns)
-        return state_true, state_pred_list
+        return torch.stack(state_pred_list)
 
 
 class EMA:
@@ -1162,7 +1164,7 @@ class GaussianDiffusion(nn.Module):
                 x[1:, :half] = x[:-1, half:]
         return x
 
-    def inpaint_ddim_loop(self, shape, cond, noise=None, constraint=None, return_diffusion=False, start_point=None):
+    def inpaint_ddim_loop_guide_not_working(self, shape, cond, noise=None, constraint=None, return_diffusion=False, start_point=None):
         batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
 
         times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
@@ -1186,54 +1188,88 @@ class GaussianDiffusion(nn.Module):
                     pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
 
             else:
-                # # only once
-                # lr_ = 0.01
-                # x.requires_grad_()
-                # pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
-                # value_diff = torch.subtract(x_start, value * mask)
-                # loss = torch.relu(value_diff.abs() - value_diff_thd) * mask
-                # grad = torch.autograd.grad([loss.sum()], [x])[0]
-                # print(loss.sum())
-                # x.detach()
-                # x_start = x_start - lr_ * grad
 
                 # Multiple guided steps
                 lr_ = 0.02
-                n_guided_steps = 10
+                n_guided_steps = 3
                 x.requires_grad_()
-
-                # # DEBUG
-                # x_start_list = []
-
                 for step_ in range(n_guided_steps):
                     pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
-
-                    # # DEBUG
-                    # if step_ % 5 == 0:
-                    #     x_start_list.append(x_start.detach().clone().cpu().numpy())
-
                     value_diff = torch.subtract(x_start, value * mask)
                     loss = torch.relu(value_diff.abs() - value_diff_thd) * value_diff_weight * mask
-
-                    # temp = pd.DataFrame(loss[0].detach().clone().cpu().numpy(), columns=self.opt.model_states_column_names)
-
                     grad = torch.autograd.grad([loss.sum()], [x])[0]
                     x = x - lr_ * grad
                 x_start = x_start - lr_ * grad
                 x.detach()
 
-                # # DEBUG
-                # x_start_list.append(x_start.detach().clone().cpu().numpy())
-                # cols = ['calcn_r_force_vy', 'calcn_l_force_vy']
-                # for col in cols:
-                #     col_loc = self.opt.model_states_column_names.index(col)
-                #     plt.figure()
-                #     for x_start_val in x_start_list:
-                #         plt.plot(x_start_val[0, :, col_loc])
-                #     plt.plot(value[0, :, col_loc].detach().cpu().numpy(), 'black', linewidth=2, alpha=0.3, label='True')
-                #     plt.title(col)
+            if time_next < 0:
+                x = x_start
+                return x
+
+            alpha = self.alphas_cumprod[time]
+            alpha_next = self.alphas_cumprod[time_next]
+
+            sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
+            c = (1 - alpha_next - sigma ** 2).sqrt()
+
+            noise = torch.randn_like(x)
+
+            x = x_start * alpha_next.sqrt() + \
+                c * pred_noise + \
+                sigma * noise
+
+            timesteps = torch.full((batch,), time_next, device=device, dtype=torch.long)
+            value_ = self.q_sample(value, timesteps) if (time > 0) else x
+            x = value_ * mask + (1.0 - mask) * x
+        return x
+
+    @torch.no_grad()
+    def inpaint_ddim_loop_guide_xmean(self, shape, cond, noise=None, constraint=None, return_diffusion=False, start_point=None):
+        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
+
+        times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
+        times = list(reversed(times.int().tolist()))
+        time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
+
+        x = torch.randn(shape, device=device)
+        cond = cond.to(device)
+
+        mask = constraint["mask"].to(device)  # batch x horizon x channels
+        value = constraint["value"].to(device)  # batch x horizon x channels
+        if constraint["value_diff_thd"] is not None:
+            value_diff_thd = constraint["value_diff_thd"].to(device)  # channels
+            value_diff_weight = constraint["value_diff_weight"].to(device)  # channels
+
+        for time, time_next in tqdm(time_pairs, desc='sampling loop time step'):
+            time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
+
+            if time > self.opt.guide_x_start_the_beginning_step:
+                pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
+
+            else:
+                lr_ = 0.05
+                n_guided_steps = 3
+                x.requires_grad_()
+
+                # plt.figure()
+                # plt.plot(value[0, :, 0].detach().cpu().numpy(), '-.', color='C0')
+                # plt.plot(value[0, :, 3].detach().cpu().numpy(), '-.', color='C1')
+                # plt.plot(x[0, :, 0].detach().cpu().numpy(), color='C0')
+                # plt.plot(x[0, :, 3].detach().cpu().numpy(), color='C1')
+
+                with torch.enable_grad():
+                    for step_ in range(n_guided_steps):
+                        pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
+                        value_diff = torch.subtract(x_start, value)
+                        loss = torch.relu(value_diff.abs() - value_diff_thd) * value_diff_weight
+                        grad = torch.autograd.grad([loss.sum()], [x])[0]
+                        x = x - lr_ * grad
+
+                # plt.plot(x[0, :, 0].detach().cpu().numpy(), '--', color='C0')
+                # plt.plot(x[0, :, 3].detach().cpu().numpy(), '--', color='C1')
                 # plt.show()
 
+            pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
             if time_next < 0:
                 x = x_start
                 return x
@@ -1524,10 +1560,12 @@ class GaussianDiffusion(nn.Module):
         loss_drift = loss_drift * extract(self.p2_loss_weight, t, loss_drift.shape)
 
         osim_states_pred = self.normalizer.unnormalize(model_out)
-        osim_states_pred = inverse_convert_addb_state_to_model_input(osim_states_pred, self.opt.model_states_column_names, self.opt.joints_3d, self.opt.osim_dof_columns)
+        osim_states_pred = inverse_convert_addb_state_to_model_input(osim_states_pred, self.opt.model_states_column_names,
+                                                                     self.opt.joints_3d, self.opt.osim_dof_columns, pos_vec=[0, 0, 0])
         foot_locations_pred, joint_locations_pred, segment_orientations_pred = forward_kinematics(osim_states_pred, model_offsets)
         osim_states_true = self.normalizer.unnormalize(target)
-        osim_states_true = inverse_convert_addb_state_to_model_input(osim_states_true, self.opt.model_states_column_names, self.opt.joints_3d, self.opt.osim_dof_columns)
+        osim_states_true = inverse_convert_addb_state_to_model_input(osim_states_true, self.opt.model_states_column_names,
+                                                                     self.opt.joints_3d, self.opt.osim_dof_columns, pos_vec=[0, 0, 0])
         foot_locations_true, joint_locations_true, segment_orientations_true = forward_kinematics(osim_states_true, model_offsets)
 
         loss_fk = self.loss_fn(joint_locations_pred, joint_locations_true, reduction="none")
@@ -1583,9 +1621,10 @@ class GaussianDiffusion(nn.Module):
             constraint=None,
             start_point=None,
     ):
+        randomize_seed()
         if isinstance(shape, tuple):
             if mode == "inpaint":
-                func_class = self.inpaint_ddim_loop
+                func_class = self.inpaint_ddim_loop_guide_xmean
             elif mode == "normal":
                 func_class = self.ddim_sample
             elif mode == "long":
@@ -1606,9 +1645,6 @@ class GaussianDiffusion(nn.Module):
 
         samples = normalizer.unnormalize(samples.detach().cpu())
         samples = samples.detach().cpu()
-
-        samples = inverse_convert_addb_state_to_model_input(samples, opt.model_states_column_names,
-                                                            opt.joints_3d, opt.osim_dof_columns)
         return samples
 
 

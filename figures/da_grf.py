@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 
 def get_results():
-    results_true, results_pred, results_bl, columns, _, _, _, =\
+    results_true, results_pred, results_pred_std, results_bl, columns, _, _, _, =\
         pickle.load(open(f"results/{test_data_name}.pkl", "rb"))
     dset_list = list(results_true.keys())
 
@@ -25,6 +25,7 @@ def get_results():
 
         true_ = np.concatenate(list(results_true[dset].values()))[:, params_of_interest_col_loc][in_gait_phase]
         pred_ = np.concatenate(list(results_pred[dset].values()))[:, params_of_interest_col_loc][in_gait_phase]
+        pred_std = np.concatenate(list(results_pred_std[dset].values()))[:, params_of_interest_col_loc][in_gait_phase]
 
         if True:
             plt.subplots(3, 1, figsize=(10, 8))
@@ -32,7 +33,7 @@ def get_results():
                 plt.subplot(3, 1, i+1)
                 plt.plot(true_[:, i], label='True')
                 plt.plot(pred_[:, i], label='Predicted')
-                plt.plot(bl_[:, i], label='Baseline')
+                plt.fill_between(range(len(pred_)), pred_[:, i] - pred_std[:, i], pred_[:, i] + pred_std[:, i], color='C1', alpha=0.5)
                 plt.grid()
             plt.legend()
             plt.suptitle(dset)
@@ -61,7 +62,7 @@ def get_results():
     plt.show()
 
 
-test_data_name = 'downstream_grf_standard_scalar_no_repaint'
+test_data_name = 'downstream_grf'
 if __name__ == "__main__":
     get_results()
 

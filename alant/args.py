@@ -9,7 +9,7 @@ import numpy as np
 def parse_opt():
     machine_specific_config = json.load(open(os.path.dirname(os.path.realpath(__file__)) + '/machine_specific_config.json', 'r'))
     parser = argparse.ArgumentParser()
-    parser.add_argument("--exp_name", default="StandardScaler", help="save to project/name")
+    parser.add_argument("--exp_name", default="check_txtytz", help="save to project/name")
     parser.add_argument("--with_arm", type=bool, default=False, help="whether osim model has arm DoFs")
     parser.add_argument("--with_kinematics_vel", type=bool, default=True, help="whether to include 1st derivative of kinematics")
     parser.add_argument("--log_with_wandb", type=bool, default=True, help="log with wandb")
@@ -70,7 +70,7 @@ def set_with_arm_opt(opt, with_arm):
 
     if opt.with_kinematics_vel:
         opt.model_states_column_names = opt.model_states_column_names + [
-            f'{col}_vel' for i_col, col in enumerate(opt.model_states_column_names) if col not in KINETICS_ALL]
+            f'{col}_vel' for i_col, col in enumerate(opt.model_states_column_names) if col not in KINETICS_ALL and 'pelvis_t' not in col]
 
     opt.data_path_train = data_path + 'train_cleaned/'
     opt.data_path_test = data_path + 'test_cleaned/'

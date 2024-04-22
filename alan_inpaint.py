@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 def inpaint(opt):
     model = torch.load(opt.checkpoint)
     repr_dim = model["ema_state_dict"]["input_projection.weight"].shape[1]
-    set_with_arm_opt(opt, repr_dim == 56)
+    set_with_arm_opt(opt, False)
 
     model = MotionModel(opt, repr_dim)
     render_count = 10
@@ -28,7 +28,9 @@ def inpaint(opt):
     wins = [test_dataset[i] for i in range(render_count)]
 
     masks = torch.zeros_like(wins[0][0])
-    state_true, state_pred_list = model.eval_loop(opt, wins, masks, num_of_generation_per_window=skel_num-1)
+    state_pred_list = model.eval_loop(opt, wins, masks, num_of_generation_per_window=skel_num-1)
+    state_pred_list = inverse_convert_addb_state_to_model_input(
+        state_pred_list, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, [0, 0, 0])
 
     model_name = 'unscaled_generic_no_arm' if not opt.with_arm else 'unscaled_generic_with_arm'
     customOsim: nimble.biomechanics.OpenSimFile = nimble.biomechanics.OpenSimParser.parseOsim(
@@ -67,7 +69,7 @@ def inpaint(opt):
 
 li, camargo, carter, falisse, moore, tan2021, tan2022 = 'li', 'camargo', 'carter', 'falisse', 'moore', 'tan2021', 'tan2022'
 uhlrich, santos, vanderzee, wang = 'uhlrich', 'santos', 'vanderzee', 'wang'
-b3d_path = f'/mnt/d/Local/Data/MotionPriorData/{camargo}_dset/'
+b3d_path = f'/mnt/d/Local/Data/MotionPriorData/{tan2022}_dset/'
 
 if __name__ == "__main__":
     skel_num = 2

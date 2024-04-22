@@ -1,3 +1,4 @@
+import copy
 import math
 import numpy as np
 import pandas as pd
@@ -11,6 +12,15 @@ from alant.quaternion import euler_from_6v, euler_to_6v
 from alant.alan_consts import JOINTS_3D_ALL, FROZEN_DOFS
 from data.rotation_conversions import euler_angles_to_matrix, matrix_to_euler_angles
 import matplotlib.pyplot as plt
+
+
+def cross_product_2d(a, b):
+    if len(a.shape) != 2 or len(b.shape) != 2:
+        raise ValueError("Input vectors must be 3-dimensional.")
+
+    return np.array([a[:, 1]*b[:, 2] - a[:, 2]*b[:, 1],
+                     a[:, 2]*b[:, 0] - a[:, 0]*b[:, 2],
+                     a[:, 0]*b[:, 1] - a[:, 1]*b[:, 0]]).T
 
 
 def identity(t, *args, **kwargs):
@@ -27,6 +37,7 @@ def maybe_wrap(x, num):
 
 def convert_addb_state_to_model_input(pose_df, joints_3d, sampling_fre):
     # shift root position to start in (x,y) = (0,0)
+    pos_vec = [pose_df['pelvis_tx'][0], pose_df['pelvis_ty'][0], pose_df['pelvis_tz'][0]]
     pose_df['pelvis_tx'] = pose_df['pelvis_tx'] - pose_df['pelvis_tx'][0]
     pose_df['pelvis_ty'] = pose_df['pelvis_ty'] - pose_df['pelvis_ty'][0]
     pose_df['pelvis_tz'] = pose_df['pelvis_tz'] - pose_df['pelvis_tz'][0]
@@ -44,20 +55,23 @@ def convert_addb_state_to_model_input(pose_df, joints_3d, sampling_fre):
         for i in range(6):
             pose_df[joint_name + '_' + str(i)] = joint_6v[:, i]
 
-    vel_col_loc = [i for i, col in enumerate(pose_df.columns) if 'force' not in col]
-    vel_col_names = [f'{col}_vel' for i, col in enumerate(pose_df.columns) if 'force' not in col]
+    vel_col_loc = [i for i, col in enumerate(pose_df.columns) if 'force' not in col and 'pelvis_t' not in col]
+    vel_col_names = [f'{col}_vel' for i, col in enumerate(pose_df.columns) if 'force' not in col and 'pelvis_t' not in col]
     kinematics_np = pose_df.iloc[:, vel_col_loc].to_numpy().copy()
     kinematics_np_filtered = data_filter(kinematics_np, 15, sampling_fre, 4)
     kinematics_vel = np.stack([spline_fitting_1d(kinematics_np_filtered[:, i_col], range(kinematics_np_filtered.shape[0]), 1).ravel()
                                for i_col in range(kinematics_np_filtered.shape[1])]).T
 
     pose_vel_df = pd.DataFrame(np.concatenate([pose_df.values, kinematics_vel], axis=1), columns=list(pose_df.columns)+vel_col_names)
-    return pose_vel_df
+    return pose_vel_df, pos_vec
 
 
-def inverse_convert_addb_state_to_model_input(model_states, model_states_column_names, joints_3d, osim_dof_columns):
+def inverse_convert_addb_state_to_model_input(model_states, model_states_column_names, joints_3d, osim_dof_columns, pos_vec, sampling_fre=100):
     model_states_dict = {col: model_states[..., i] for i, col in enumerate(model_states_column_names) if
                          col in osim_dof_columns}
+
+    for i_col, col in enumerate(['pelvis_tx', 'pelvis_ty', 'pelvis_tz']):
+        model_states_dict[col] = torch.cumsum(model_states_dict[col], dim=-1) / sampling_fre
 
     # convert 6v to euler
     for joint_name, joints_with_3_dof in joints_3d.items():
@@ -70,9 +84,14 @@ def inverse_convert_addb_state_to_model_input(model_states, model_states_column_
 
     # add frozen dof back
     for frozen_col in FROZEN_DOFS:
-        model_states_dict[frozen_col] = torch.zeros(model_states.shape[:2]).to(model_states.device)
+        model_states_dict[frozen_col] = torch.zeros(model_states.shape[:len(model_states.shape)-1]).to(model_states.device)
 
-    osim_states = torch.stack([model_states_dict[col] for col in osim_dof_columns], dim=2).float()
+    pos_vec = torch.tensor(pos_vec)
+    pos_vec_torch = pos_vec.unsqueeze(-1).repeat(*[1 for _ in range(len(pos_vec.shape))], model_states.shape[-2]).to(model_states.device)
+    for i_col, col in enumerate(['pelvis_tx', 'pelvis_ty', 'pelvis_tz']):
+        model_states_dict[col] += pos_vec_torch[..., i_col, :]
+
+    osim_states = torch.stack([model_states_dict[col] for col in osim_dof_columns], dim=len(model_states.shape)-1).float()
     return osim_states
 
 
@@ -110,6 +129,7 @@ def align_moving_direction(poses, column_names):
 
 
 def inverse_align_moving_direction(poses, column_names, rot_mat_to_reset):
+    """ Has not been tested yet! """
     pose_clone = torch.from_numpy(poses).clone().float()
     pelvis_orientation_col_loc = [column_names.index(col) for col in JOINTS_3D_ALL['pelvis']]
     p_pos_col_loc = [column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
@@ -153,6 +173,12 @@ def fix_seed():
     torch.manual_seed(0)
     random.seed(0)
     np.random.seed(0)
+
+
+def randomize_seed():
+    torch.manual_seed(torch.randint(0, 2 ** 32, (1,)).item())
+    random.seed(torch.randint(0, 2 ** 32, (1,)).item())
+    np.random.seed(torch.randint(0, 2 ** 32, (1,)).item())
 
 
 def nan_helper(y):
