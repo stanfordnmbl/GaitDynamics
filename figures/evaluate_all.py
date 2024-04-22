@@ -182,7 +182,6 @@ def get_baseline_val(dset, windows, trials):
 if __name__ == "__main__":
     skel_num = 4
     opt = parse_opt()
-    opt.guide_x_start_the_beginning_step = -10      # negative value means no guidance
 
     opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'100'}.pt"
     # opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'AddSubtalar2'}/weights/train-{'5000'}.pt"
