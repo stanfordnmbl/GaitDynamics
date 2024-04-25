@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -9,7 +10,7 @@ import random
 from model.utils import extract, make_beta_schedule, linear_resample_data, update_d_dd, fix_seed, nan_helper, \
     from_foot_loc_to_foot_vel, moving_average_filtering, convert_addb_state_to_model_input, identity, maybe_wrap, \
     inverse_convert_addb_state_to_model_input, align_moving_direction, inverse_align_moving_direction, randomize_seed, \
-    cross_product_2d
+    cross_product_2d, data_filter
 from typing import Any, List
 import nimblephysics as nimble
 from consts import *
@@ -132,19 +133,22 @@ class MotionDataset(Dataset):
                         vel[:, axis] = moving_average_filtering(vel[:, axis], 11)
                         # vel[:, axis] = data_filter(vel[:, axis], 10, self.target_sampling_rate)
 
+            if np.min(r_foot_vel[:, 0]) > 0.6:
+                print('Warning, found r_foot_vel > 0.6 m/s, not possible unless backward walking on a treadmill')
+            if np.min(l_foot_vel[:, 0]) > 0.6:
+                print('Warning, found l_foot_vel > 0.6 m/s, not possible unless backward walking on a treadmill')
+
             r_foot_vel[np.isnan(r_foot_vel)] = l_foot_vel[np.isnan(r_foot_vel)]
             l_foot_vel[np.isnan(l_foot_vel)] = r_foot_vel[np.isnan(l_foot_vel)]
             average_foot_vel = (r_foot_vel + l_foot_vel) / 2
 
             vel_from_t = np.concatenate(vel_from_t_, axis=0)
-            if np.min(vel_from_t[:, 0]) < -0.5:
-                print('!!!! found vel < -0.5 m/s !!!!')
-                # raise RuntimeError('found vel < -0.5 m/s')
+            if np.min(vel_from_t[:, 0]) < -0.6:
+                print('Warning, found tx_vel < -0.6 m/s, not possible for gait')
             for axis in range(3):
                 vel_from_t[:, axis] = moving_average_filtering(vel_from_t[:, axis], 11)
-            # vel_from_t = data_filter(vel_from_t, 10, self.target_sampling_rate)
 
-            average_foot_vel[np.isnan(average_foot_vel)] = 0        # Just fixed a bug here
+            average_foot_vel[np.isnan(average_foot_vel)] = 0
             walking_vel = torch.from_numpy(vel_from_t - average_foot_vel)
 
             current_index = walking_vel.shape[0]
@@ -179,7 +183,8 @@ class MotionDataset(Dataset):
             print(trial.sub_and_trial_name)
             r_foot_vel_buffer.append(trial.mtp_r_vel)
             l_foot_vel_buffer.append(trial.mtp_l_vel)
-            vel_from_t_trial = np.diff(trial.converted_pose[:, 0:3], axis=0) * self.target_sampling_rate
+            body_center_filtered = data_filter(trial.converted_pose[:, 0:3], 10, self.target_sampling_rate).astype(np.float32)
+            vel_from_t_trial = np.diff(body_center_filtered, axis=0) * self.target_sampling_rate
             vel_from_t_trial = np.concatenate([vel_from_t_trial, vel_from_t_trial[-1][None, :]], axis=0)
             vel_from_t.append(vel_from_t_trial)
 
@@ -451,8 +456,10 @@ class MotionDataset(Dataset):
 
                 foot_locations, _, _ = forward_kinematics(states[:, :-len(KINETICS_ALL)], model_offsets)
                 mtp_r_loc, mtp_l_loc = foot_locations[1].squeeze().cpu().numpy(), foot_locations[3].squeeze().cpu().numpy()
-                mtp_r_vel = from_foot_loc_to_foot_vel(mtp_r_loc, states[:, -len(KINETICS_ALL):][:, 1], self.target_sampling_rate)
-                mtp_l_vel = from_foot_loc_to_foot_vel(mtp_l_loc, states[:, -len(KINETICS_ALL):][:, 4], self.target_sampling_rate)
+                mtp_r_loc = data_filter(mtp_r_loc, 10, self.target_sampling_rate).astype(mtp_r_loc.dtype)
+                mtp_l_loc = data_filter(mtp_l_loc, 10, self.target_sampling_rate).astype(mtp_l_loc.dtype)
+                mtp_r_vel = from_foot_loc_to_foot_vel(mtp_r_loc, states[:, -len(KINETICS_ALL):][:, KINETICS_ALL.index('calcn_r_force_vy')], self.target_sampling_rate)
+                mtp_l_vel = from_foot_loc_to_foot_vel(mtp_l_loc, states[:, -len(KINETICS_ALL):][:, KINETICS_ALL.index('calcn_l_force_vy')], self.target_sampling_rate)
 
                 states_df = pd.DataFrame(states, columns=opt.osim_dof_columns)
                 states_df = self.customized_param_manipulation(states_df)

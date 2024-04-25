@@ -113,7 +113,7 @@ if __name__ == "__main__":
     opt = parse_opt()
     opt.guide_x_start_the_beginning_step = 1000
 
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'100'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'5000'}.pt"
 
     loop_all(opt)
 
