@@ -184,7 +184,7 @@ if __name__ == "__main__":
     opt = parse_opt()
 
     # opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'5000'}.pt"
-    opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'check_txtytz5'}/weights/train-{'5000'}.pt"
+    opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'Filtering_05hz'}/weights/train-{'5000'}.pt"
 
     knee_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'knee' in col]
     ankle_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'ankle' in col]

@@ -130,8 +130,6 @@ class MotionDataset(Dataset):
                 if not np.sum(nans[:, 0]) == vel.shape[0]:
                     for axis in range(3):
                         vel[nans[:, axis], axis] = np.interp(x(nans[:, axis]), x(~nans[:, axis]), vel[~nans[:, axis], axis])
-                        vel[:, axis] = moving_average_filtering(vel[:, axis], 11)
-                        # vel[:, axis] = data_filter(vel[:, axis], 10, self.target_sampling_rate)
 
             if np.min(r_foot_vel[:, 0]) > 0.6:
                 print('Warning, found r_foot_vel > 0.6 m/s, not possible unless backward walking on a treadmill')
@@ -145,11 +143,10 @@ class MotionDataset(Dataset):
             vel_from_t = np.concatenate(vel_from_t_, axis=0)
             if np.min(vel_from_t[:, 0]) < -0.6:
                 print('Warning, found tx_vel < -0.6 m/s, not possible for gait')
-            for axis in range(3):
-                vel_from_t[:, axis] = moving_average_filtering(vel_from_t[:, axis], 11)
 
             average_foot_vel[np.isnan(average_foot_vel)] = 0
-            walking_vel = torch.from_numpy(vel_from_t - average_foot_vel)
+            walking_vel = vel_from_t - average_foot_vel
+            walking_vel = torch.from_numpy(walking_vel)
 
             current_index = walking_vel.shape[0]
             current_trial = i_trial
@@ -183,8 +180,9 @@ class MotionDataset(Dataset):
             print(trial.sub_and_trial_name)
             r_foot_vel_buffer.append(trial.mtp_r_vel)
             l_foot_vel_buffer.append(trial.mtp_l_vel)
-            body_center_filtered = data_filter(trial.converted_pose[:, 0:3], 10, self.target_sampling_rate).astype(np.float32)
-            vel_from_t_trial = np.diff(body_center_filtered, axis=0) * self.target_sampling_rate
+            body_center = trial.converted_pose[:, 0:3]
+            body_center = data_filter(body_center, 10, self.target_sampling_rate).astype(np.float32)
+            vel_from_t_trial = np.diff(body_center, axis=0) * self.target_sampling_rate
             vel_from_t_trial = np.concatenate([vel_from_t_trial, vel_from_t_trial[-1][None, :]], axis=0)
             vel_from_t.append(vel_from_t_trial)
 

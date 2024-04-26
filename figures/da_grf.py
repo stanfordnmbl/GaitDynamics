@@ -62,7 +62,7 @@ def get_results():
     plt.show()
 
 
-test_data_name = 'downstream_grf___'
+test_data_name = 'downstream_grf'
 if __name__ == "__main__":
     get_results()
 

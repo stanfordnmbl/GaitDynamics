@@ -7,7 +7,7 @@ from consts import *
 def parse_opt():
     machine_specific_config = json.load(open(os.path.dirname(os.path.realpath(__file__)) + '/machine_specific_config.json', 'r'))
     parser = argparse.ArgumentParser()
-    parser.add_argument("--exp_name", default="check_txtytz", help="save to project/name")
+    parser.add_argument("--exp_name", default="Filtering_10hz", help="save to project/name")
     parser.add_argument("--with_arm", type=bool, default=False, help="whether osim model has arm DoFs")
     parser.add_argument("--with_kinematics_vel", type=bool, default=True, help="whether to include 1st derivative of kinematics")
     parser.add_argument("--log_with_wandb", type=bool, default=True, help="log with wandb")
