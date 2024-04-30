@@ -325,7 +325,9 @@ def forward_kinematics(pose, offsets, with_arm=False):
                                             humerus_transform_l[..., :3, :3], ulna_transform_l[..., :3, :3],
                                             radius_transform_l[..., :3, :3]))
 
-    return foot_locations, joint_locations, segment_orientations
+    joint_names = ['pelvis', 'hip_r', 'knee_r', 'ankle_r', 'calcn_r', 'mtp_r',
+                   'hip_l', 'knee_l', 'ankle_l', 'calcn_l', 'mtp_l']
+    return foot_locations, joint_locations, joint_names, segment_orientations
 
 
 def get_model_offsets(skeleton, with_arm=False):

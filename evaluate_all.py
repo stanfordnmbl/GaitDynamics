@@ -7,7 +7,9 @@ from data.addb_dataset import MotionDataset
 from model.model import inverse_convert_addb_state_to_model_input
 import numpy as np
 import pickle
+import nimblephysics as nimble
 import matplotlib.pyplot as plt
+from model.utils import cross_product_2d, get_multi_body_loc_using_nimble, inverse_norm_cops
 
 
 def loop_all(opt):
@@ -17,7 +19,7 @@ def loop_all(opt):
 
     model = MotionModel(opt, repr_dim)
     dset_list = DATASETS_NO_ARM
-    results_true, results_pred, results_pred_std, results_bl, sub_heights, sub_weights = {}, {}, {}, {}, {}, {}
+    results_true, results_pred, results_pred_std, results_bl, height_m_all, weights_kg_all = {}, {}, {}, {}, {}, {}
     is_output_label_array = torch.zeros([150, 35])
 
     for dset in dset_list:
@@ -45,8 +47,8 @@ def loop_all(opt):
         results_pred.update({test_dataset.trials[0].dset_name: {}})
         results_pred_std.update({test_dataset.trials[0].dset_name: {}})
 
-        sub_heights[dset] = {trial_.sub_and_trial_name: trial_.sub_height for trial_ in test_dataset.trials}
-        sub_weights[dset] = {trial_.sub_and_trial_name: trial_.sub_weight for trial_ in test_dataset.trials}
+        height_m_all[dset] = {trial_.sub_and_trial_name: trial_.height_m for trial_ in test_dataset.trials}
+        weights_kg_all[dset] = {trial_.sub_and_trial_name: trial_.height_m for trial_ in test_dataset.trials}
 
         state_pred_list = [[] for _ in range(skel_num-1)]
         for i_win in range(0, len(windows), opt.batch_size_inference):
@@ -57,14 +59,14 @@ def loop_all(opt):
             if da_to_test == 0:
                 # For GRF estimation
                 masks = torch.zeros_like(state_true)      # 0 for masking, 1 for unmasking
-                masks[:, :, kinematic_diffusion_col_loc] = 1
-                is_output_label_array[:, grf_osim_col_loc] = 1
+                masks[:, :, opt.kinematic_diffusion_col_loc] = 1
+                is_output_label_array[:, opt.grf_osim_col_loc] = 1
                 save_name = 'downstream_grf'
 
             elif da_to_test == 1:
                 # For future motion prediction
                 masks = torch.zeros_like(state_true)      # 0 for masking, 1 for unmasking
-                masks[:, :, kinematic_diffusion_col_loc] = 1
+                masks[:, :, opt.kinematic_diffusion_col_loc] = 1
                 masks[:, end_of_known:, :] = 0
                 is_output_label_array[end_of_known:, ] = 1
                 # state_pred_list_batch = model.eval_loop(opt, state_true, masks, num_of_generation_per_window=skel_num-1)
@@ -131,7 +133,7 @@ def loop_all(opt):
             results_bl[dset][sub_and_trial] = np.concatenate(results_bl[dset][sub_and_trial], axis=0)
 
     pickle.dump([results_true, results_pred, results_pred_std, results_bl, opt.osim_dof_columns,
-                 is_output_label_array, sub_heights, sub_weights],
+                 is_output_label_array, height_m_all, weights_kg_all],
                 open(f"figures/results/{save_name}.pkl", "wb"))
 
 
@@ -184,19 +186,14 @@ if __name__ == "__main__":
     opt = parse_opt()
 
     # opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'5000'}.pt"
-    opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'Filtering_05hz'}/weights/train-{'5000'}.pt"
+    opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'check_cop7'}/weights/train-{'197'}.pt"
 
-    knee_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'knee' in col]
-    ankle_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'ankle' in col]
-    hip_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'hip' in col]
-    kinematic_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'force' not in col]
-    grf_osim_col_loc = [i_col for i_col, col in enumerate(opt.osim_dof_columns) if 'force' in col and 'moment' not in col]
     cols_to_mask = {
-        'ankle': knee_diffusion_col_loc,
-        'knee': knee_diffusion_col_loc,
-        'hip': hip_diffusion_col_loc,
-        'knee_ankle': knee_diffusion_col_loc + ankle_diffusion_col_loc,
-        'knee_ankle_hip': knee_diffusion_col_loc + ankle_diffusion_col_loc + hip_diffusion_col_loc
+        'ankle': opt.knee_diffusion_col_loc,
+        'knee': opt.knee_diffusion_col_loc,
+        'hip': opt.hip_diffusion_col_loc,
+        'knee_ankle': opt.knee_diffusion_col_loc + opt.ankle_diffusion_col_loc,
+        'knee_ankle_hip': opt.knee_diffusion_col_loc + opt.ankle_diffusion_col_loc + opt.hip_diffusion_col_loc
     }
 
     # for dset in ['Tan2021_Formatted_No_Arm']:

@@ -192,12 +192,12 @@ class MotionModel:
                         joint_loss += losses[5].detach().mean(axis=0).mean(axis=0).cpu().numpy()
                         dataset_loss_record[x[2].cpu()] += losses[5].detach().mean(axis=1).mean(axis=1).cpu().numpy()
 
-                        if step % opt.ema_interval == 0:
-                            self.diffusion.ema.update_model_average(self.diffusion.master_model, self.diffusion.model)
+                if step % opt.ema_interval == 0:
+                    self.diffusion.ema.update_model_average(self.diffusion.master_model, self.diffusion.model)
 
             self.accelerator.wait_for_everyone()
 
-            if epoch > -1:       # [!]
+            if epoch > -1:
                 self.accelerator.wait_for_everyone()
                 # save only if on main thread
                 if self.accelerator.is_main_process:
@@ -232,7 +232,7 @@ class MotionModel:
                         log_dict = {name: loss for loss, name in loss_val_name_pairs_dset + loss_val_name_pairs_joints + loss_val_name_pairs_terms}
                         wandb.log(log_dict)
 
-            if (epoch % 1000) == 0:
+            if (epoch % 888) == 0:
                 torch.save(ckpt, os.path.join(wdir, f"train-{epoch}.pt"))
                 print(f"[MODEL SAVED at Epoch {epoch}]")
         if self.accelerator.is_main_process and opt.log_with_wandb:
@@ -968,11 +968,11 @@ class GaussianDiffusion(nn.Module):
         osim_states_pred = self.normalizer.unnormalize(model_out)
         osim_states_pred = inverse_convert_addb_state_to_model_input(osim_states_pred, self.opt.model_states_column_names,
                                                                      self.opt.joints_3d, self.opt.osim_dof_columns, pos_vec=[0, 0, 0])
-        foot_locations_pred, joint_locations_pred, segment_orientations_pred = forward_kinematics(osim_states_pred, model_offsets)
+        _, joint_locations_pred, _, _ = forward_kinematics(osim_states_pred, model_offsets)
         osim_states_true = self.normalizer.unnormalize(target)
         osim_states_true = inverse_convert_addb_state_to_model_input(osim_states_true, self.opt.model_states_column_names,
                                                                      self.opt.joints_3d, self.opt.osim_dof_columns, pos_vec=[0, 0, 0])
-        foot_locations_true, joint_locations_true, segment_orientations_true = forward_kinematics(osim_states_true, model_offsets)
+        _, joint_locations_true, _, _ = forward_kinematics(osim_states_true, model_offsets)
 
         loss_fk = self.loss_fn(joint_locations_pred, joint_locations_true, reduction="none")
         # loss_fk = reduce(loss_fk, "b ... -> b (...)", "mean")

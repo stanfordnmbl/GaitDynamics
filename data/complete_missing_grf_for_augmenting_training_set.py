@@ -22,7 +22,7 @@ def loop_all(opt):
 
     model = MotionModel(opt, repr_dim)
     dset_list = DATASETS_NO_ARM
-    results_true, results_pred, sub_heights, sub_weights = {}, {}, {}, {}
+    results_true, results_pred, height_m_all, weights_kg_all = {}, {}, {}, {}
     is_output_label_array = torch.zeros([150, 35])
 
     for dset in dset_list:
@@ -98,9 +98,9 @@ def loop_all(opt):
                 masks = torch.ones_like(state_true)      # 0 for masking, 1 for unmasking
 
                 for i_win in range(i_win_chunk, min(i_win_chunk+opt.batch_size_inference, len(windows_to_complete))):
-                    win_grf_mask = masks[i_win, :, grf_and_moment_model_col_loc]
+                    win_grf_mask = masks[i_win, :, opt.grf_moment_cop_model_col_loc]
                     win_grf_mask[windows_probably_missing[i_win]] = 0
-                    masks[i_win, :, grf_and_moment_model_col_loc] = win_grf_mask
+                    masks[i_win, :, opt.grf_moment_cop_model_col_loc] = win_grf_mask
 
                 state_pred_list_batch = model.eval_loop(opt, state_true, masks, num_of_generation_per_window=skel_num-1)
                 state_pred_list_batch = inverse_convert_addb_state_to_model_input(
@@ -117,8 +117,8 @@ def loop_all(opt):
                 for i_skel in range(skel_num-1):
                     averaged += state_pred_list_batch[i_skel]
                 averaged /= (skel_num-1)
-                averaged_grf = averaged[:, :, grf_model_col_loc].cpu().numpy()
-                averaged_moment = averaged[:, :, grf_and_moment_model_col_loc].cpu().numpy()
+                averaged_grf = averaged[:, :, opt.grf_model_col_loc].cpu().numpy()
+                averaged_moment = averaged[:, :, opt.grf_moment_cop_model_col_loc].cpu().numpy()
                 cop_x = averaged_moment[:, :, 2] / averaged_grf[:, :, 1]
                 cop_z = - averaged_moment[:, :, 0] / averaged_grf[:, :, 1]
                 # averaged_cop = np.concatenate([cop_x, cop_z], axis=1)
@@ -157,8 +157,4 @@ if __name__ == "__main__":
     opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'3000'}.pt"
     # opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'test_data_loader3'}/weights/train-{'3000'}.pt"
 
-    kinematic_model_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'force' not in col]
-    grf_model_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'force' in col and 'moment' not in col]
-    moment_model_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'moment' in col]
-    grf_and_moment_model_col_loc = grf_model_col_loc + moment_model_col_loc
     loop_all(opt)

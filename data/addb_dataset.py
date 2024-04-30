@@ -10,7 +10,7 @@ import random
 from model.utils import extract, make_beta_schedule, linear_resample_data, update_d_dd, fix_seed, nan_helper, \
     from_foot_loc_to_foot_vel, moving_average_filtering, convert_addb_state_to_model_input, identity, maybe_wrap, \
     inverse_convert_addb_state_to_model_input, align_moving_direction, inverse_align_moving_direction, randomize_seed, \
-    cross_product_2d, data_filter
+    cross_product_2d, data_filter, get_multi_body_loc_using_nimble, norm_cops
 from typing import Any, List
 import nimblephysics as nimble
 from consts import *
@@ -46,6 +46,7 @@ class MotionDataset(Dataset):
         self.opt = opt
         self.divide_jittery = divide_jittery
         self.specific_dset = specific_dset
+        self.skels = {}
 
         self.train = train
         self.name = "Train" if self.train else "Test"
@@ -59,8 +60,6 @@ class MotionDataset(Dataset):
         if train and self.divide_jittery:
             self.trials = self.divide_jittery_trials(self.trials, opt.model_states_column_names)
         self.guess_vel_and_replace_txtytz()
-
-        # self.visualize_loaded(opt, self.trials)
 
         self.trial_num = len(self.trials)
         if self.trial_num == 0:
@@ -145,7 +144,10 @@ class MotionDataset(Dataset):
                 print('Warning, found tx_vel < -0.6 m/s, not possible for gait')
 
             average_foot_vel[np.isnan(average_foot_vel)] = 0
-            walking_vel = vel_from_t - average_foot_vel
+            walking_vel = vel_from_t
+            # Treadmill only operates in AP direction after reseting orientation, thus only use foot_vel in ap direction
+            walking_vel[:, 0] = walking_vel[:, 0] - average_foot_vel[:, 0]
+            # walking_vel = data_filter(walking_vel, 0.5, self.target_sampling_rate).astype(np.float32)
             walking_vel = torch.from_numpy(walking_vel)
 
             current_index = walking_vel.shape[0]
@@ -294,56 +296,6 @@ class MotionDataset(Dataset):
             self.trials[i_trial].trial_gait_phase_label = trial_gait_phase_label
         return cycles_
 
-    def visualize_loaded(self, opt, trials):
-        pose_converted = [trial.converted_pose.reshape([1, -1, trial.converted_pose.shape[1]]) for trial in trials]
-
-        pose_col_loc = [i_dof for i_dof, dof in enumerate(opt.osim_dof_columns) if '_force_' not in dof]
-        force_col_loc = [i_dof for i_dof, dof in enumerate(opt.osim_dof_columns) if '_force_' in dof]
-
-        pose_list = [inverse_convert_addb_state_to_model_input(
-            pose, self.opt.model_states_column_names, self.opt.joints_3d, self.opt.osim_dof_columns, trials[i_trial].pos_vec_for_pos_alignment)
-            for i_trial, pose in enumerate(pose_converted)]
-
-        geometry = '/mnt/d/Local/AddBiom/vmu-suit/ml_and_simulation/data/Geometry/'
-        print('Using Geometry folder: '+geometry)
-        geometry = os.path.abspath(geometry)
-        if not geometry.endswith('/'):
-            geometry += '/'
-            print(' > Converted to absolute path: '+geometry)
-
-        customOsim: nimble.biomechanics.OpenSimFile = nimble.biomechanics.OpenSimParser.parseOsim(
-            '/mnt/d/Local/Data/MotionPriorData/model_and_geometry/unscaled_generic_no_arm.osim')
-        skel = customOsim.skeleton
-
-        world = nimble.simulation.World()
-        gui = NimbleGUI(world)
-        gui.serve(8090)
-
-        while True:
-            gui.nativeAPI().createText('trial num', 'Trial: ', [1200, 200], [250, 50])
-            for i_trial in range(len(pose_list)):
-                gui.nativeAPI().setTextContents('trial num', 'Trial: ' + trials[i_trial].sub_and_trial_name)
-                states = pose_list[i_trial]
-                for i in range(states.shape[1]):
-                    poses = states[0, i, pose_col_loc]
-                    skel.setPositions(poses.reshape([-1, 1]))
-                    for i_f, contact_body in enumerate(['calcn_r', 'calcn_l']):
-                        body_pos = skel.getBodyNode(contact_body).getWorldTransform().translation()
-                        forces = states[0, i, force_col_loc[3 * i_f:3 * (i_f + 1)]]
-                        gui.nativeAPI().createLine(f'line_{i_f}', [body_pos, body_pos + 0.1 * forces.numpy()], color=[1, 0., 0., 1])
-                    gui.nativeAPI().renderSkeleton(skel)
-                    time.sleep(0.005)
-            # for i in range(pose_list[0].shape[1]):        # visualize multiple skeletons
-            #     for j in range(len(pose_list)):
-            #         q = pose_list[j][0, i]
-            #         skel.setPositions(q[pose_col_loc])
-            #         for i_f, contact_body in enumerate(['calcn_r', 'calcn_l']):
-            #             body_pos = skel.getBodyNode(contact_body).getWorldTransform().translation()
-            #             forces = q[force_col_loc[3 * i_f:3 * (i_f + 1)]]
-            #             gui.nativeAPI().createLine(f'line_{j}_{i_f}', [body_pos, body_pos + 0.1 * forces.numpy()], color=[1, 0., 0., 1])
-            #         gui.nativeAPI().renderSkeleton(skel, str(j))
-            #         time.sleep(0.007)
-
     def get_attributes_of_trials(self):
         attributes = [trial.get_attributes() for trial in self.trials]
         sub_and_trial_names = [attribute['sub_and_trial_name'] for attribute in attributes]
@@ -372,14 +324,22 @@ class MotionDataset(Dataset):
                 print(f'Loading subject {subject_path} failed, skipping')
                 continue
             sub_mass = subject.getMassKg()
-            sub_height = subject.getHeightM()
+            height_m = subject.getHeightM()
             contact_bodies = subject.getGroundForceBodies()
             print(f'Loading subject: {subject_path}')
 
-            skel = subject.readSkel(0, geometryFolder=os.path.dirname(os.path.realpath(__file__)) + "/../../data/Geometry/")
-            model_offsets = get_model_offsets(skel).float()
             subject_name = subject_path.split('/')[-1].split('.')[0]
             dset_name = subject_path.split('/')[-3]
+
+
+            # TODO: nimble bug, skel has no body scales. Will generate different results once scale is added.
+            # TODO: here let's just assume skel is has scales
+            skel = subject.readSkel(0, geometryFolder=os.path.dirname(os.path.realpath(__file__)) + "/../../data/Geometry/")
+            body_scales = skel.getBodyScales()
+            self.skels[dset_name+'_'+subject_name] = skel
+
+
+            model_offsets = get_model_offsets(skel).float()
             if dset_name == '':
                 dset_name = subject_name.split('_')[0]
 
@@ -407,30 +367,15 @@ class MotionDataset(Dataset):
                 cops = np.array([frame.groundContactCenterOfPressure for frame in first_passes])
                 # This is to compensate an AddBiomechanics bug that first GRF is always 0.
                 if (forces[0] == 0).all() or (cops[0] == 0).all():
-                    print(f'Compensating an AddB bug, {subject_name}, {trial_id} has 0 GRF at the first frame.', end='')
                     forces[0] = forces[1]
                     cops[0] = cops[1]
-                foot_bodies = [skel.getBodyNode(name) for name in subject.getGroundForceBodies()]
-                foot_loc = []
-                for i_frame in range(len(cops)):
-                    skel.setPositions(poses[i_frame])
-                    foot_loc.append(np.concatenate([foot_body.getWorldTransform().translation() for foot_body in foot_bodies]))
-                foot_loc = np.array(foot_loc)
-                assert foot_loc.shape[1] == 6
+                if (forces[-1] == 0).all() or (cops[-1] == 0).all():
+                    print(f'Compensating an AddB bug, {subject_name}, {trial_id} has 0 GRF at the first frame.', end='')
+                    forces[-1] = forces[-2]
+                    cops[-1] = cops[-2]
 
-                force_v0, force_v1 = forces[:, :3], forces[:, 3:]
-                force_p0, force_p1 = (cops - foot_loc)[:, :3], (cops - foot_loc)[:, 3:]     # TODO test non-stair walking
-                force_moment0, force_moment1 = cross_product_2d(force_p0, force_v0), cross_product_2d(force_p1, force_v1)
-
-                # normal by weight or weight * height
-                force_v0, force_v1 = force_v0 / sub_mass, force_v1 / sub_mass
-                force_moment0, force_moment1 = force_moment0 / (sub_mass * sub_height), force_moment1 / (sub_mass * sub_height)
-
-                if np.max(np.abs([force_moment0, force_moment1])) > 15:
-                    print(f'{subject_name}, {trial_id} has abnormally large moment.')
-                    continue
-
-                states = np.concatenate([np.array(poses), force_v0, force_moment0, force_v1, force_moment1], axis=1)
+                force_v0, force_v1 = forces[:, :3] / sub_mass, forces[:, 3:] / sub_mass
+                states = np.concatenate([np.array(poses), force_v0, cops[:, :3], force_v1, cops[:, 3:]], axis=1)
                 if not self.is_lumbar_rotation_reasonable(np.array(states), opt.osim_dof_columns):
                     continue
 
@@ -445,6 +390,7 @@ class MotionDataset(Dataset):
                     states, rot_mat = align_moving_direction(states, opt.osim_dof_columns)
                 else:
                     rot_mat = torch.eye(3).float()
+                states = norm_cops(skel, states, opt, sub_mass, height_m)
 
                 if (states.shape[0] / sampling_rate * self.target_sampling_rate) < self.window_len + 2:
                     continue
@@ -452,12 +398,14 @@ class MotionDataset(Dataset):
                     states = linear_resample_data(states, sampling_rate, self.target_sampling_rate)
                     probably_missing = linear_resample_data(np.array(probably_missing).astype(float), sampling_rate, self.target_sampling_rate).astype(bool)
 
-                foot_locations, _, _ = forward_kinematics(states[:, :-len(KINETICS_ALL)], model_offsets)
+                foot_locations, _, _, _ = forward_kinematics(states[:, :-len(KINETICS_ALL)], model_offsets)
                 mtp_r_loc, mtp_l_loc = foot_locations[1].squeeze().cpu().numpy(), foot_locations[3].squeeze().cpu().numpy()
-                mtp_r_loc = data_filter(mtp_r_loc, 10, self.target_sampling_rate).astype(mtp_r_loc.dtype)
-                mtp_l_loc = data_filter(mtp_l_loc, 10, self.target_sampling_rate).astype(mtp_l_loc.dtype)
+
+                mtp_r_loc = data_filter(mtp_r_loc, 10, self.target_sampling_rate)
+                mtp_l_loc = data_filter(mtp_l_loc, 10, self.target_sampling_rate)
                 mtp_r_vel = from_foot_loc_to_foot_vel(mtp_r_loc, states[:, -len(KINETICS_ALL):][:, KINETICS_ALL.index('calcn_r_force_vy')], self.target_sampling_rate)
                 mtp_l_vel = from_foot_loc_to_foot_vel(mtp_l_loc, states[:, -len(KINETICS_ALL):][:, KINETICS_ALL.index('calcn_l_force_vy')], self.target_sampling_rate)
+                mtp_r_vel, mtp_l_vel = mtp_r_vel.astype(np.float32), mtp_l_vel.astype(np.float32)
 
                 states_df = pd.DataFrame(states, columns=opt.osim_dof_columns)
                 states_df = self.customized_param_manipulation(states_df)
@@ -468,7 +416,7 @@ class MotionDataset(Dataset):
 
                 trial_data = TrialData(converted_states, probably_missing, model_offsets, contact_bodies,
                                        sub_and_trial_name, trial_id, subject.getHeightM(), subject.getMassKg(),
-                                       dset_name, rot_mat, pos_vec, self.window_len, mtp_r_vel, mtp_l_vel)
+                                       dset_name, rot_mat, pos_vec, self.window_len, body_scales, mtp_r_vel, mtp_l_vel)
                 if len(trial_data.available_win_start) > 0:
                     self.trials.append(trial_data)
                 self.dset_set.add(dset_name)
@@ -479,6 +427,7 @@ class MotionDataset(Dataset):
         # self.trial_length_probability = torch.tensor([1000 / trial.length for trial in self.trials]).float()
 
     def customized_param_manipulation(self, states_df):
+        """ This is only for guided diffusion"""
         return states_df
 
     @staticmethod
@@ -554,15 +503,15 @@ class GaitCycles:
 
 class TrialData:
     def __init__(self, converted_states, probably_missing, model_offsets, contact_bodies, sub_and_trial_name, trial_id,
-                 sub_height, sub_weight, dset_name, rot_mat_for_moving_direction_alignment, pos_vec_for_pos_alignment,
-                 window_len, mtp_r_vel, mtp_l_vel, trial_gait_phase_label=None):
+                 height_m, weights_kg, dset_name, rot_mat_for_moving_direction_alignment, pos_vec_for_pos_alignment,
+                 window_len, body_scales, mtp_r_vel, mtp_l_vel, trial_gait_phase_label=None):
         self.converted_pose = converted_states
         self.probably_missing = probably_missing
         self.model_offsets = model_offsets
         self.contact_bodies = contact_bodies
         self.sub_and_trial_name = sub_and_trial_name
-        self.sub_height = sub_height
-        self.sub_weight = sub_weight
+        self.height_m = height_m
+        self.weights_kg = weights_kg
         self.dset_name = dset_name
         self.length = converted_states.shape[0]
         self.mtp_r_vel = mtp_r_vel
@@ -573,6 +522,7 @@ class TrialData:
         self.rot_mat_for_moving_direction_alignment = rot_mat_for_moving_direction_alignment
         self.pos_vec_for_pos_alignment = pos_vec_for_pos_alignment
         self.window_len = window_len
+        self.body_scales = body_scales
         self.available_win_start = self.set_available_win_start(window_len)
         self.trial_id = trial_id
 
@@ -587,7 +537,7 @@ class TrialData:
 
     def get_attributes(self):
         return {'sub_and_trial_name': self.sub_and_trial_name, 'dset_name': self.dset_name,
-                'sub_height': self.sub_height, 'sub_weight': self.sub_weight}
+                'height_m': self.height_m, 'weights_kg': self.weights_kg}
 
     def get_attributes_for_reinitialization(self):
         return [
@@ -595,10 +545,11 @@ class TrialData:
             self.contact_bodies,
             self.sub_and_trial_name,
             self.trial_id,
-            self.sub_height,
-            self.sub_weight,
+            self.height_m,
+            self.weights_kg,
             self.dset_name,
             self.rot_mat_for_moving_direction_alignment,
             self.pos_vec_for_pos_alignment,
-            self.window_len
+            self.window_len,
+            self.body_scales
         ]

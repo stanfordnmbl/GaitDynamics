@@ -16,7 +16,9 @@ OSIM_DOF_ALL = [
     'elbow_flex_l', 'pro_sup_l', 'wrist_flex_l', 'wrist_dev_l']
 
 
-KINETICS_ALL = [body + modality + axis for body in ['calcn_r', 'calcn_l'] for modality in ['_force_v', '_force_moment'] for axis in ['x', 'y', 'z']]
+KINETICS_ALL = [body + modality for body in ['calcn_r', 'calcn_l'] for modality in
+                ['_force_vx', '_force_vy', '_force_vz', '_force_normed_cop_x', '_force_normed_cop_y', '_force_normed_cop_z']]
+# normed_cop meaning cop = (cop - calcn_loc) * force_vy
 
 MODEL_STATES_COLUMN_NAMES_WITH_ARM = [
     'pelvis_tx', 'pelvis_ty', 'pelvis_tz', 'knee_angle_r', 'ankle_angle_r', 'subtalar_angle_r',

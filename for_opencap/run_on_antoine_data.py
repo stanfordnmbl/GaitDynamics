@@ -57,7 +57,7 @@ class DatasetAntoine(MotionDataset):
             if self.target_sampling_rate != sampling_rate:
                 states = linear_resample_data(states, sampling_rate, self.target_sampling_rate)
 
-            foot_locations, _, _ = forward_kinematics(states[:, :-len(KINETICS_ALL)], model_offsets)
+            foot_locations, _, _, _ = forward_kinematics(states[:, :-len(KINETICS_ALL)], model_offsets)
             mtp_r_loc, mtp_l_loc = foot_locations[1].squeeze().cpu().numpy(), foot_locations[3].squeeze().cpu().numpy()
             mtp_r_vel = from_foot_loc_to_foot_vel(mtp_r_loc, states[:, -len(KINETICS_ALL):][:, 1], self.target_sampling_rate)
             mtp_l_vel = from_foot_loc_to_foot_vel(mtp_l_loc, states[:, -len(KINETICS_ALL):][:, 4], self.target_sampling_rate)
@@ -71,7 +71,7 @@ class DatasetAntoine(MotionDataset):
             self.trials.append(TrialData(
                 converted_states, probably_missing, model_offsets, [], subject_path.split('/')[-1][:-4],
                 i_sub, unscaledSkeletonHeight, unscaledSkeletonMass, dset_name, rot_mat, pos_vec,
-                poses.shape[0], mtp_r_vel, mtp_l_vel))
+                poses.shape[0], None, mtp_r_vel, mtp_l_vel))
             self.dset_set.add(dset_name)
 
             print('Current trial num: {}'.format(len(self.trials)))
@@ -83,7 +83,7 @@ def loop_all(opt):
     set_with_arm_opt(opt, False)
 
     model = MotionModel(opt, repr_dim)
-    results_true, results_pred, results_bl, sub_heights, sub_weights = {}, {}, {}, {}, {}
+    results_true, results_pred, results_bl = {}, {}, {}
 
     test_dataset = DatasetAntoine(
         data_path=os.path.dirname(os.path.realpath(__file__)) + '/subject2/',
@@ -131,7 +131,7 @@ def loop_all(opt):
     for dset in results_true.keys():
         for i_trial, sub_and_trial in enumerate(results_true[dset].keys()):
             results_pred[dset][sub_and_trial] = np.concatenate(results_pred[dset][sub_and_trial], axis=0)
-            grf_results = torch.from_numpy(results_pred[dset][sub_and_trial][:, -12:] * test_dataset.trials[i_trial].sub_weight)
+            grf_results = torch.from_numpy(results_pred[dset][sub_and_trial][:, -12:] * test_dataset.trials[i_trial].weights_kg)
 
             mat_ = test_dataset.trials[i_trial].rot_mat_for_moving_direction_alignment.T
             for i in [0, 6]:

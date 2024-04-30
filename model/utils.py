@@ -12,6 +12,7 @@ from data.quaternion import euler_from_6v, euler_to_6v
 from consts import JOINTS_3D_ALL, FROZEN_DOFS
 from data.rotation_conversions import euler_angles_to_matrix, matrix_to_euler_angles
 import matplotlib.pyplot as plt
+from data.osim_fk import get_model_offsets, forward_kinematics
 
 
 def cross_product_2d(a, b):
@@ -33,6 +34,61 @@ def wrap(x):
 
 def maybe_wrap(x, num):
     return x if num == 1 else wrap(x)
+
+
+def get_multi_body_loc_using_nimble(body_names, skel, poses):
+    body_ids = [skel.getBodyNode(name) for name in body_names]
+    body_loc = []
+    for i_frame in range(len(poses)):
+        skel.setPositions(poses[i_frame])
+        body_loc.append(np.concatenate([body_id.getWorldTransform().translation() for body_id in body_ids]))
+    body_loc = np.array(body_loc)
+    return body_loc
+
+
+def get_multi_joint_loc_using_tom_fk(joint_names, skel, poses):
+    model_offsets = get_model_offsets(skel)
+    _, joint_locations_pred, joint_names_full, _ = forward_kinematics(poses, model_offsets)
+    body_loc = []
+    for joint_name in joint_names:
+        if joint_name not in joint_names_full:
+            raise ValueError(f'Joint name {joint_name} not found in the dictionary.')
+        body_loc.append(joint_locations_pred[joint_names_full.index(joint_name), 0].cpu())
+    body_loc = torch.concatenate(body_loc, axis=-1)
+    return body_loc
+
+
+def inverse_norm_cops(skel, states, opt, sub_mass, height_m):
+    poses = states[:, opt.kinematic_osim_col_loc]
+    forces = states[:, opt.grf_osim_col_loc]
+    normed_cops = states[:, opt.cop_osim_col_loc]
+    foot_loc = get_multi_body_loc_using_nimble(('calcn_r', 'calcn_l'), skel, poses)
+
+    for i_plate in range(2):
+        force_v = forces[:, 3*i_plate:3*(i_plate+1)]
+        vector = normed_cops[:, 3 * i_plate:3 * (i_plate + 1)] / force_v[:, 1:2] * height_m
+        vector = np.nan_to_num(vector, posinf=0, neginf=0)
+        cops = vector + foot_loc[:, 3*i_plate:3*(i_plate+1)]
+        if isinstance(states, torch.Tensor):
+            cops = torch.from_numpy(cops).to(states.dtype)
+        else:
+            cops = cops.astype(states.dtype)
+        states[:, opt.cop_osim_col_loc[3*i_plate:3*(i_plate+1)]] = cops
+    return states
+
+
+def norm_cops(skel, states, opt, sub_mass, height_m):
+    poses = states[:, opt.kinematic_osim_col_loc]
+    forces = states[:, opt.grf_osim_col_loc]
+    cops = states[:, opt.cop_osim_col_loc]
+
+    foot_loc = get_multi_body_loc_using_nimble(('calcn_r', 'calcn_l'), skel, poses)
+    for i_plate in range(2):
+        force_v = forces[:, 3*i_plate:3*(i_plate+1)]
+        vector = (cops - foot_loc)[:, 3*i_plate:3*(i_plate+1)]
+        normed_vector = vector * force_v[:, 1:2] / height_m
+        states[:, opt.cop_osim_col_loc[3*i_plate:3*(i_plate+1)]] = normed_vector.to(states.dtype)
+    return states
 
 
 def convert_addb_state_to_model_input(pose_df, joints_3d, sampling_fre):
@@ -95,12 +151,31 @@ def inverse_convert_addb_state_to_model_input(model_states, model_states_column_
     return osim_states
 
 
+def osim_states_to_knee_moments_in_percent_BW_BH(osim_states, skel, opt, height_m):
+    if isinstance(osim_states, torch.Tensor):
+        osim_states = osim_states.numpy()
+    forces = osim_states[:, opt.grf_osim_col_loc]
+    cops = osim_states[:, opt.cop_osim_col_loc]
+    poses = osim_states[:, opt.kinematic_osim_col_loc]
+    knee_loc = get_multi_joint_loc_using_tom_fk(['knee_r', 'knee_l'], skel, poses)
+    vector = (knee_loc - cops).numpy()
+    knee_moment_r = cross_product_2d(vector[:, :3], forces[:, :3]) / (height_m * 9.81) * 100
+    knee_moment_l = cross_product_2d(vector[:, 3:], forces[:, 3:]) / (height_m * 9.81) * 100
+    knee_moment_r[:, 0] = -knee_moment_r[:, 0]
+    knee_moment_l[:, 0] = -knee_moment_l[:, 0]
+    moments = np.concatenate([knee_moment_r, knee_moment_l], axis=-1)
+    moment_names = ['knee_moment_r_x', 'knee_moment_r_y', 'knee_moment_r_z', 'knee_moment_l_x', 'knee_moment_l_y', 'knee_moment_l_z']
+    return moments, moment_names
+
+
 def align_moving_direction(poses, column_names):
     pose_clone = torch.from_numpy(poses).clone().float()
     pelvis_orientation_col_loc = [column_names.index(col) for col in JOINTS_3D_ALL['pelvis']]
     p_pos_col_loc = [column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
     r_grf_col_loc = [column_names.index(col) for col in ['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']]
     l_grf_col_loc = [column_names.index(col) for col in ['calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz']]
+    r_cop_col_loc = [column_names.index(col) for col in [f'calcn_r_force_normed_cop_{x}' for x in ['x', 'y', 'z']]]
+    l_cop_col_loc = [column_names.index(col) for col in [f'calcn_l_force_normed_cop_{x}' for x in ['x', 'y', 'z']]]
 
     if len(pelvis_orientation_col_loc) != 3 or len(p_pos_col_loc) != 3 or len(r_grf_col_loc) != 3 or len(
             l_grf_col_loc) != 3:
@@ -111,6 +186,8 @@ def align_moving_direction(poses, column_names):
     p_pos = pose_clone[:, p_pos_col_loc]
     r_grf = pose_clone[:, r_grf_col_loc]
     l_grf = pose_clone[:, l_grf_col_loc]
+    r_cop = pose_clone[:, r_cop_col_loc]
+    l_cop = pose_clone[:, l_cop_col_loc]
 
     angle = math.atan2(- pelvis_orientation[0][0, 2], pelvis_orientation[0][2, 2])
     rot_mat = torch.tensor([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]]).float()
@@ -119,11 +196,15 @@ def align_moving_direction(poses, column_names):
     p_pos_rotated = torch.matmul(rot_mat, p_pos.unsqueeze(2)).squeeze(2)
     r_grf_rotated = torch.matmul(rot_mat, r_grf.unsqueeze(2)).squeeze(2)
     l_grf_rotated = torch.matmul(rot_mat, l_grf.unsqueeze(2)).squeeze(2)
+    r_cop_rotated = torch.matmul(rot_mat, r_cop.unsqueeze(2)).squeeze(2)
+    l_cop_rotated = torch.matmul(rot_mat, l_cop.unsqueeze(2)).squeeze(2)
 
     pose_clone[:, pelvis_orientation_col_loc] = matrix_to_euler_angles(pelvis_orientation_rotated.float(), "ZXY")
     pose_clone[:, p_pos_col_loc] = p_pos_rotated.float()
     pose_clone[:, r_grf_col_loc] = r_grf_rotated.float()
     pose_clone[:, l_grf_col_loc] = l_grf_rotated.float()
+    pose_clone[:, r_cop_col_loc] = r_cop_rotated.float()
+    pose_clone[:, l_cop_col_loc] = l_cop_rotated.float()
 
     return pose_clone, rot_mat
 
@@ -135,6 +216,8 @@ def inverse_align_moving_direction(poses, column_names, rot_mat_to_reset):
     p_pos_col_loc = [column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
     r_grf_col_loc = [column_names.index(col) for col in ['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']]
     l_grf_col_loc = [column_names.index(col) for col in ['calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz']]
+    r_cop_col_loc = [column_names.index(col) for col in ['calcn_r_normed_cop_x', 'calcn_r_normed_cop_y', 'calcn_r_normed_cop_z']]
+    l_cop_col_loc = [column_names.index(col) for col in ['calcn_l_normed_cop_x', 'calcn_l_normed_cop_y', 'calcn_l_normed_cop_z']]
 
     if len(pelvis_orientation_col_loc) != 3 or len(p_pos_col_loc) != 3 or len(r_grf_col_loc) != 3 or len(
             l_grf_col_loc) != 3:
@@ -145,16 +228,22 @@ def inverse_align_moving_direction(poses, column_names, rot_mat_to_reset):
     p_pos = pose_clone[:, p_pos_col_loc]
     r_grf = pose_clone[:, r_grf_col_loc]
     l_grf = pose_clone[:, l_grf_col_loc]
+    r_cop = pose_clone[:, r_cop_col_loc]
+    l_cop = pose_clone[:, l_cop_col_loc]
 
     pelvis_orientation_rotated = torch.matmul(rot_mat_to_reset, pelvis_orientation)
     p_pos_rotated = torch.matmul(rot_mat_to_reset, p_pos.unsqueeze(2)).squeeze(2)
     r_grf_rotated = torch.matmul(rot_mat_to_reset, r_grf.unsqueeze(2)).squeeze(2)
     l_grf_rotated = torch.matmul(rot_mat_to_reset, l_grf.unsqueeze(2)).squeeze(2)
+    r_cop_rotated = torch.matmul(rot_mat_to_reset, r_cop.unsqueeze(2)).squeeze(2)
+    l_cop_rotated = torch.matmul(rot_mat_to_reset, l_cop.unsqueeze(2)).squeeze(2)
 
     pose_clone[:, pelvis_orientation_col_loc] = matrix_to_euler_angles(pelvis_orientation_rotated.float(), "ZXY")
     pose_clone[:, p_pos_col_loc] = p_pos_rotated.float()
     pose_clone[:, r_grf_col_loc] = r_grf_rotated.float()
     pose_clone[:, l_grf_col_loc] = l_grf_rotated.float()
+    pose_clone[:, r_cop_col_loc] = r_cop_rotated.float()
+    pose_clone[:, l_cop_col_loc] = l_cop_rotated.float()
 
     return pose_clone
 
@@ -207,9 +296,6 @@ def from_foot_loc_to_foot_vel(mtp_loc, foot_grf, sampling_rate):
     foot_vel = np.concatenate([foot_vel, foot_vel[-1][None, :]], axis=0)
     low_grf_loc = foot_grf < grf_thd
     foot_vel[low_grf_loc, :] = np.nan
-    # nans, x = nan_helper(foot_vel)
-    # if not sum(nans[:, 0]) == foot_vel.shape[0]:
-    #     foot_vel[nans] = np.interp(x(nans), x(~nans), foot_vel[~nans])
     return foot_vel
 
 
