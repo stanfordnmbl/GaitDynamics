@@ -16,6 +16,7 @@ import pickle
 class MotionDatasetManipulated(MotionDataset):
     def customized_param_manipulation(self, trial_df):
         trial_df['lumbar_bending'] = trial_df['lumbar_bending'] * 3
+        self.manipulated_column_keywords = 'lumbar'
         return trial_df
 
 
@@ -26,18 +27,8 @@ def loop_all(opt):
 
     model = MotionModel(opt, repr_dim)
 
-    max_trial_num = 3
-    trial_start_num = 2
-    test_dataset = MotionDataset(
-        data_path=b3d_path,
-        train=False,
-        normalizer=model.normalizer,
-        opt=opt,
-        divide_jittery=False,
-        max_trial_num=max_trial_num,
-        trial_start_num=trial_start_num,
-    )
-    windows_original = test_dataset.get_all_wins_within_gait_cycle()
+    max_trial_num = 999
+    trial_start_num = 0
 
     test_dataset_mani = MotionDatasetManipulated(
         data_path=b3d_path,
@@ -50,9 +41,19 @@ def loop_all(opt):
     )
     windows_manipulated = test_dataset_mani.get_all_wins_within_gait_cycle()
 
+    test_dataset = MotionDataset(
+        data_path=b3d_path,
+        train=False,
+        normalizer=model.normalizer,
+        opt=opt,
+        divide_jittery=False,
+        max_trial_num=max_trial_num,
+        trial_start_num=trial_start_num,
+    )
+    windows_original = test_dataset.get_all_wins_within_gait_cycle()
     assert len(windows_original) == len(windows_manipulated)
 
-    manipulated_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'lumbar' in col]
+    manipulated_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if test_dataset_mani.manipulated_column_keywords in col]
 
     state_pred_list = [[] for _ in range(skel_num-1)]
     for i_win in range(0, len(windows_manipulated), opt.batch_size_inference):
@@ -83,7 +84,8 @@ def loop_all(opt):
     gui = set_up_gui(names)
 
     # TODO: only the first one is used, in the future make use all
-    sub_results_true, sub_results_pred, height_m_all, weights_kg_all = {}, {}, {}, {}
+    sub_bl_true, sub_bl_pred, height_m_all, weights_kg_all = {}, {}, {}, {}
+    sub_ts_true, sub_ts_pred = {}, {}
     for i_win, (win, state_pred), in enumerate(zip(windows_original, state_pred_list[0])):
         trial_of_this_win = test_dataset.trials[win[2]]
         true_val = inverse_convert_addb_state_to_model_input(
@@ -110,16 +112,21 @@ def loop_all(opt):
         if len(cycle_pairs) == 0:
             continue
 
-        if dset_sub_name not in sub_results_true:
-            sub_results_true[dset_sub_name], sub_results_pred[dset_sub_name] = [], []
+        if dset_sub_name not in sub_bl_true.keys():
+            sub_bl_true[dset_sub_name], sub_bl_pred[dset_sub_name] = [], []
+            sub_ts_true[dset_sub_name], sub_ts_pred[dset_sub_name] = [], []
 
         for pair_ in cycle_pairs:
             true_ = np.concatenate([true_val, true_moment], axis=-1)[pair_[0]:pair_[1]]
             true_ = linear_resample_data_as_num_of_dp(true_, 101)
-            sub_results_true[dset_sub_name].append(true_)
             pred_ = np.concatenate([state_pred, pred_moments], axis=-1)[pair_[0]:pair_[1]]
             pred_ = linear_resample_data_as_num_of_dp(pred_, 101)
-            sub_results_pred[dset_sub_name].append(pred_)
+            if 'baseline' in trial_of_this_win.sub_and_trial_name:
+                sub_bl_true[dset_sub_name].append(true_)
+                sub_bl_pred[dset_sub_name].append(pred_)
+            elif 'trunk_sway' in trial_of_this_win.sub_and_trial_name:
+                sub_ts_true[dset_sub_name].append(true_)
+                sub_ts_pred[dset_sub_name].append(pred_)
 
         height_m_all[dset_sub_name] = trial_of_this_win.height_m
         weights_kg_all[dset_sub_name] = trial_of_this_win.weights_kg
@@ -127,14 +134,15 @@ def loop_all(opt):
         name_states_dict = {names[0]: true_val, names[1]: state_pred.detach().numpy()}
         show_skeletons(opt, name_states_dict, gui, [skel_0, skel_1], trial_of_this_win)
 
-    pickle.dump([sub_results_true, sub_results_pred, None, None, opt.osim_dof_columns+moment_names,
-                 None, height_m_all, weights_kg_all],
-                open(f"results/guided_diffusion.pkl", "wb"))
+    pickle.dump([sub_bl_true, sub_bl_pred, None, None, opt.osim_dof_columns + moment_names,
+                 None, height_m_all, weights_kg_all], open(f"results/da_guided_baseline.pkl", "wb"))
+    pickle.dump([sub_ts_true, sub_ts_pred, None, None, opt.osim_dof_columns + moment_names,
+                 None, height_m_all, weights_kg_all], open(f"results/da_guided_trunk_sway.pkl", "wb"))
 
 
 li, camargo, carter, falisse, moore, tan2021, tan2022 = 'li', 'camargo', 'carter', 'falisse', 'moore', 'tan2021', 'tan2022'
 uhlrich, santos, vanderzee, wang = 'uhlrich', 'santos', 'vanderzee', 'wang'
-b3d_path = f'/mnt/d/Local/Data/MotionPriorData/{moore}_dset/'
+b3d_path = f'/mnt/d/Local/Data/MotionPriorData/{tan2022}_dset/'
 
 """ To use this code,
 1. in load_addb, manipulate channels
@@ -146,7 +154,7 @@ if __name__ == "__main__":
     opt = parse_opt()
     opt.guide_x_start_the_beginning_step = 1000
 
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'2167'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'4925'}.pt"
 
     loop_all(opt)
 

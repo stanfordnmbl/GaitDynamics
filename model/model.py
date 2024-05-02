@@ -658,10 +658,7 @@ class GaussianDiffusion(nn.Module):
                 x.requires_grad_()
 
                 # plt.figure()
-                # plt.plot(value[0, :, 0].detach().cpu().numpy(), '-.', color='C0')
-                # plt.plot(value[0, :, 3].detach().cpu().numpy(), '-.', color='C1')
-                # plt.plot(x[0, :, 0].detach().cpu().numpy(), color='C0')
-                # plt.plot(x[0, :, 3].detach().cpu().numpy(), color='C1')
+                # plt.plot(value[0, :, 9].detach().cpu().numpy(), '-.')
 
                 with torch.enable_grad():
                     for step_ in range(n_guided_steps):
@@ -671,8 +668,8 @@ class GaussianDiffusion(nn.Module):
                         grad = torch.autograd.grad([loss.sum()], [x])[0]
                         x = x - lr_ * grad
 
-                # plt.plot(x[0, :, 0].detach().cpu().numpy(), '--', color='C0')
-                # plt.plot(x[0, :, 3].detach().cpu().numpy(), '--', color='C1')
+                # plt.plot(x_start[0, :, 9].detach().cpu().numpy(), '--')
+                # plt.plot(x[0, :, 9].detach().cpu().numpy(), '--')
                 # plt.show()
 
             pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
@@ -972,7 +969,7 @@ class GaussianDiffusion(nn.Module):
         osim_states_true = self.normalizer.unnormalize(target)
         osim_states_true = inverse_convert_addb_state_to_model_input(osim_states_true, self.opt.model_states_column_names,
                                                                      self.opt.joints_3d, self.opt.osim_dof_columns, pos_vec=[0, 0, 0])
-        _, joint_locations_true, _, _ = forward_kinematics(osim_states_true, model_offsets)
+        foot_locations_pred, joint_locations_true, _, _ = forward_kinematics(osim_states_true, model_offsets)
 
         loss_fk = self.loss_fn(joint_locations_pred, joint_locations_true, reduction="none")
         # loss_fk = reduce(loss_fk, "b ... -> b (...)", "mean")
@@ -981,7 +978,7 @@ class GaussianDiffusion(nn.Module):
         # loss_floor_penetration = self.loss_fn(foot_locations_pred[..., 1], foot_locations_true[..., 1], reduction="none")
         # loss_floor_penetration = loss_floor_penetration * extract(self.p2_loss_weight, t, loss_floor_penetration.shape)
 
-        foot_acc_pred = (foot_locations_pred[..., 2:, :] - 2 * foot_locations_pred[..., 1:-1, :] + foot_locations_pred[..., :-2, :]).abs() * 10000
+        foot_acc_pred = (foot_locations_pred[..., 2:, :] - 2 * foot_locations_pred[..., 1:-1, :] + foot_locations_pred[..., :-2, :]).abs() * self.opt.target_sampling_rate ** 2
         stance_based_on_foot_vel = (torch.norm(foot_acc_pred, dim=-1) < 0.3)[..., None].expand(-1, -1, -1, 3)       # TODO tune this. (0.3 m/s2)
         foot_acc_pred[~stance_based_on_foot_vel] = 0
         loss_slide = self.loss_fn(foot_acc_pred, foot_acc_pred * 0, reduction="none")
