@@ -82,13 +82,6 @@ def loop_all(opt):
                 # For reconstruct kinematics
                 masks = torch.zeros_like(state_true)      # 0 for masking, 1 for unmasking
                 masks[:, :, cols_to_mask[mask_key]] = 1
-                # state_pred_list_batch = model.eval_loop(opt, state_true, masks, num_of_generation_per_window=skel_num-1)
-                # pos_vec = test_dataset.trials[windows[i_win][2]].pos_vec_for_pos_alignment
-                # state_pred_list_batch = inverse_convert_addb_state_to_model_input(
-                #     state_pred_list_batch, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, pos_vec)
-                #
-                # for i_skel in range(skel_num-1):
-                #     state_pred_list[i_skel] += state_pred_list_batch[i_skel]
                 save_name = f'downstream_reconstruct_kinematics_{mask_key}'
             else:
                 raise ValueError('da_to_test should be 0, 1, or 2')
@@ -185,8 +178,8 @@ if __name__ == "__main__":
     skel_num = 4
     opt = parse_opt()
 
-    # opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'5000'}.pt"
-    opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'check_cop7'}/weights/train-{'197'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'4925'}.pt"
+    # opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'nimble_fk7'}/weights/train-{'4925'}.pt"
 
     cols_to_mask = {
         'ankle': opt.knee_diffusion_col_loc,

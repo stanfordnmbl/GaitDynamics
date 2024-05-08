@@ -3,6 +3,10 @@ from consts import NOT_IN_GAIT_PHASE, EXCLUDE_FROM_ASB
 from fig_utils import get_scores
 import numpy as np
 import matplotlib.pyplot as plt
+from fig_utils import set_up_gui
+from args import parse_opt
+import nimblephysics as nimble
+import time
 
 
 def get_results():
@@ -15,6 +19,14 @@ def get_results():
 
     rmse_ap, rmse_v, rmses_ml = [], [], []
     rmse_ap_bl, rmse_v_bl, rmses_ml_bl = [], [], []
+    if visualize_as_video:
+        gui = set_up_gui()
+        opt = parse_opt()
+        customOsim: nimble.biomechanics.OpenSimFile = nimble.biomechanics.OpenSimParser.parseOsim(
+            f'/mnt/d/Local/Data/MotionPriorData/model_and_geometry/unscaled_generic_no_arm.osim')
+        skel = customOsim.skeleton
+        colors = [[1, 0., 0., 1], [0., 1, 0., 1]]
+
     for dset in dset_list:
         if dset in EXCLUDE_FROM_ASB:
             continue
@@ -27,7 +39,32 @@ def get_results():
         pred_ = np.concatenate(list(results_pred[dset].values()))[:, params_of_interest_col_loc][in_gait_phase]
         pred_std = np.concatenate(list(results_pred_std[dset].values()))[:, params_of_interest_col_loc][in_gait_phase]
 
-        if True:
+        if visualize_as_video:
+            true_pose = np.concatenate(list(results_true[dset].values()))
+            pred_pose = np.concatenate(list(results_pred[dset].values()))
+            start_frame = 300
+            end_frame = start_frame + 150
+            # gui.nativeAPI().createText('Dataset', 'Dataset ' + dset.split('_')[0], [1000, 50], [500, 200])
+            x_list, y_list = {0: {0: [], 1: []}, 1: {0: [], 1: []}}, {0: {0: [], 1: []}, 1: {0: [], 1: []}}
+            for i_frame in range(start_frame, end_frame):
+                poses = true_pose[i_frame, opt.kinematic_osim_col_loc]
+                skel.setPositions(poses)
+                gui.nativeAPI().renderSkeleton(skel, prefix='skel')
+                gui.nativeAPI().createRichPlot(f'plot_{0}', [400, 200], [500, 350], 0, 150, 0, 30*75, 'Right Foot 3-D Force Prediction', 'Time', 'Force (N)')
+                for i_source, grf_source in enumerate([true_pose, pred_pose]):
+                    for i_force, contact_body in enumerate(['calcn_r', 'calcn_l']):
+                        forces = grf_source[i_frame, opt.grf_osim_col_loc[3 * i_force:3 * (i_force + 1)]]
+                        cop = skel.getBodyNode(contact_body).getWorldTransform().translation()
+                        x_list[i_source][i_force].append(i_frame - start_frame)
+                        y_list[i_source][i_force].append(np.linalg.norm(forces) * 75)       # 75 kg
+                        gui.nativeAPI().createLine(f'line_{i_source}_{i_force}', [cop, cop + 0.06 * forces], color=colors[i_source])
+
+                        if i_force == 0:
+                            gui.nativeAPI().setRichPlotData(f'plot_{0}', 'Measured', 'red', 'line', x_list[0][i_force], y_list[0][i_force])
+                            gui.nativeAPI().setRichPlotData(f'plot_{0}', 'Predicted', 'green', 'line', x_list[1][i_force], y_list[1][i_force])
+                time.sleep(0.01)
+
+        if not visualize_as_video:
             plt.subplots(3, 1, figsize=(10, 8))
             for i in range(3):
                 plt.subplot(3, 1, i+1)
@@ -62,6 +99,7 @@ def get_results():
     plt.show()
 
 
+visualize_as_video = False
 test_data_name = 'downstream_grf'
 if __name__ == "__main__":
     get_results()

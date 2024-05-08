@@ -14,10 +14,24 @@ import pickle
 
 
 class MotionDatasetManipulated(MotionDataset):
-    def customized_param_manipulation(self, trial_df, mtp_r_vel, mtp_l_vel):
-        trial_df['lumbar_bending'] = trial_df['lumbar_bending'] * 3
-        self.manipulated_column_keywords = 'lumbar'
-        return trial_df, mtp_r_vel, mtp_l_vel
+    def customized_param_manipulation(self, trial_df):
+        # # GRF perturbation
+        # trial_gait_phase_label, _ = self.grf_to_trial_gait_phase_label(trial_df['calcn_r_force_vy'].values, self.window_len, self.target_sampling_rate)
+        # # plt.figure()
+        # # plt.plot(trial_df['calcn_r_force_vx'])
+        # curve = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.4, 0.3, 0.2, 0.1])
+        # for i in range(50, trial_df.shape[0], 50):
+        #     trial_df['calcn_r_force_vx'][i:i+9] += curve * 10
+        # # plt.plot(trial_df['calcn_r_force_vx'])
+        # # plt.show()
+        # self.manipulated_column_keywords = 'calcn_r_force_vx'
+
+        # GRF reduction
+        trial_df[['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']] = trial_df[['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']] * 0.75
+        trial_df[['calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz']] = trial_df[['calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz']] * 1.25
+        self.manipulated_column_keywords = '_force_v'
+
+        return trial_df
 
 
 def loop_all(opt):
@@ -28,7 +42,7 @@ def loop_all(opt):
     model = MotionModel(opt, repr_dim)
 
     max_trial_num = 1
-    trial_start_num = 0
+    trial_start_num = 2
 
     test_dataset_mani = MotionDatasetManipulated(
         data_path=b3d_path,
@@ -65,6 +79,7 @@ def loop_all(opt):
         masks[:, :, manipulated_col_loc] = 1
 
         value_diff_weight = torch.ones([len(opt.model_states_column_names)])
+        # value_diff_weight[manipulated_col_loc] = 0          # do not follow the manipulated column during guidance
         value_diff_thd = torch.zeros([len(opt.model_states_column_names)])
         value_diff_thd[:] = 0.1         # large value for no constraint
         value_diff_thd[manipulated_col_loc] = 0
@@ -81,7 +96,7 @@ def loop_all(opt):
         assert len(state_pred_list[i_skel]) == len(windows_manipulated)
 
     names = ['baseline', '3x trunk sway']
-    gui = set_up_gui()
+    gui = set_up_gui(names)
 
     # TODO: only the first one is used, in the future make use all
     sub_bl_true, sub_bl_pred, height_m_all, weights_kg_all = {}, {}, {}, {}
@@ -157,11 +172,6 @@ if __name__ == "__main__":
     opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'4925'}.pt"
 
     loop_all(opt)
-
-
-
-
-
 
 
 

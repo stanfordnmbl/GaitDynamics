@@ -19,12 +19,11 @@ LINE_WIDTH = 1.5
 LINE_WIDTH_THICK = 2
 
 
-def set_up_gui(names):
+def set_up_gui():
     world = nimble.simulation.World()
     world.setGravity([0, -9.81, 0])
     gui = NimbleGUI(world)
     gui.serve(8090)
-    gui.nativeAPI().createText('name', str(names), [1200, 200], [250, 50])
     return gui
 
 
@@ -57,8 +56,9 @@ def get_scores(y_true, y_pred, y_fields, exclude_swing_phase=False):
 
         r2 = r2_score(true_, pred_)
         rmse = np.sqrt(mse(true_, pred_))
+        mae = np.mean(np.abs(true_ - pred_))
         cor_value = pearsonr(true_, pred_)[0]
-        score_one_field = {'field': field, 'r2': r2, 'rmse': rmse, 'cor_value': cor_value}
+        score_one_field = {'field': field, 'r2': r2, 'rmse': rmse, 'cor_value': cor_value, 'mae': mae}
         scores.append(score_one_field)
     return scores
 

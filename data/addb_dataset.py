@@ -36,7 +36,8 @@ class MotionDataset(Dataset):
             trial_start_num=0,
             max_trial_num=None,
             divide_jittery=True,
-            specific_dset=None
+            specific_dset=None,
+            include_trials_shorter_than_window_len=False,
     ):
         self.data_path = data_path
         self.trial_start_num = trial_start_num
@@ -50,6 +51,7 @@ class MotionDataset(Dataset):
 
         self.train = train
         self.name = "Train" if self.train else "Test"
+        self.include_trials_shorter_than_window_len = include_trials_shorter_than_window_len
 
         self.dset_set = set()
 
@@ -261,40 +263,51 @@ class MotionDataset(Dataset):
         return windows
 
     def get_all_gait_cycles_and_set_gait_phase_label(self):
-        stance_vgrf_thd = 1    # 100% of body mass. Needs to be large because some datasets are noisy.
-        stance_len_thds = [int(self.opt.target_sampling_rate * 0.1), int(self.opt.window_len * 0.8)]      # 0.1 s to 1 s
-        cycle_len_thds = [int(self.opt.target_sampling_rate * 0.2), int(self.opt.window_len)]      # 0.2 s to 1.5 s
-
         cycles_ = []
         for i_trial, trial_ in enumerate(self.trials):
             unnormalized_poses = self.normalizer.unnormalize(trial_.converted_pose.clone().unsqueeze(0))
-            trial_gait_phase_label = np.full([unnormalized_poses.shape[1]], NOT_IN_GAIT_PHASE)
             r_v_grf = unnormalized_poses[0, :, self.opt.model_states_column_names.index('calcn_r_force_vy')]
             r_v_grf = r_v_grf.cpu().numpy()
 
-            stance_flag = np.abs(r_v_grf) > stance_vgrf_thd
-            stance_flag = stance_flag.astype(int)
-            start_end_indicator = np.diff(stance_flag)
-            stance_start = np.where(start_end_indicator == 1)[0]
-            stance_end = np.where(start_end_indicator == -1)[0]
-            for i_start in range(1, len(stance_start)-1):
-                end_ = stance_end[(stance_start[i_start] < stance_end) & (stance_end < stance_start[i_start+1])]
-                # Exclusion criteria
-                if len(end_) != 1:
-                    continue
-                if not stance_len_thds[0] < (end_ - stance_start[i_start]) < stance_len_thds[1]:
-                    continue
-                if not cycle_len_thds[0] < (stance_start[i_start + 1] - stance_start[i_start]) < cycle_len_thds[1]:
-                    continue
-                if stance_start[i_start+1] - self.window_len < 0:
-                    continue
-                gait_cycle_converted = trial_.converted_pose[stance_start[i_start]:stance_start[i_start+1]]
-                trial_gait_phase_label[stance_start[i_start]:stance_start[i_start+1]] = np.linspace(0, 1000, stance_start[i_start+1]-stance_start[i_start])
+            trial_gait_phase_label, stance_start_valid = self.grf_to_trial_gait_phase_label(
+                r_v_grf, self.window_len, self.opt.target_sampling_rate)
+
+            for i_start in range(len(stance_start_valid)-1):
+                gait_cycle_converted = trial_.converted_pose[stance_start_valid[i_start]:stance_start_valid[i_start+1]]
                 cycles_.append(GaitCycles(
-                    gait_cycle_converted, (stance_start[i_start], stance_start[i_start+1]),
+                    gait_cycle_converted, (stance_start_valid[i_start], stance_start_valid[i_start+1]),
                     trial_.sub_and_trial_name, trial_.dset_name))
             self.trials[i_trial].trial_gait_phase_label = trial_gait_phase_label
         return cycles_
+
+    @staticmethod
+    def grf_to_trial_gait_phase_label(v_grf, window_len, target_sampling_rate):
+        stance_vgrf_thd = 1    # 100% of body mass. Needs to be large because some datasets are noisy.
+        stance_len_thds = [int(target_sampling_rate * 0.1), int(window_len * 0.8)]      # 0.1 s to 1 s
+        cycle_len_thds = [int(target_sampling_rate * 0.2), int(window_len)]      # 0.2 s to 1.5 s
+
+        trial_gait_phase_label = np.full([v_grf.shape[0]], NOT_IN_GAIT_PHASE)       # shape x
+        stance_start_valid = []
+
+        stance_flag = np.abs(v_grf) > stance_vgrf_thd
+        stance_flag = stance_flag.astype(int)
+        start_end_indicator = np.diff(stance_flag)
+        stance_start = np.where(start_end_indicator == 1)[0]
+        stance_end = np.where(start_end_indicator == -1)[0]
+        for i_start in range(1, len(stance_start)-1):
+            end_ = stance_end[(stance_start[i_start] < stance_end) & (stance_end < stance_start[i_start+1])]
+            # Exclusion criteria
+            if len(end_) != 1:
+                continue
+            if not stance_len_thds[0] < (end_ - stance_start[i_start]) < stance_len_thds[1]:
+                continue
+            if not cycle_len_thds[0] < (stance_start[i_start + 1] - stance_start[i_start]) < cycle_len_thds[1]:
+                continue
+            if stance_start[i_start+1] - window_len < 0:
+                continue
+            trial_gait_phase_label[stance_start[i_start]:stance_start[i_start+1]] = np.linspace(0, 1000, stance_start[i_start+1]-stance_start[i_start])
+            stance_start_valid.append(stance_start[i_start])
+        return trial_gait_phase_label, stance_start_valid
 
     def get_attributes_of_trials(self):
         attributes = [trial.get_attributes() for trial in self.trials]
@@ -331,13 +344,8 @@ class MotionDataset(Dataset):
             subject_name = subject_path.split('/')[-1].split('.')[0]
             dset_name = subject_path.split('/')[-3]
 
-
-            # TODO: nimble bug, skel has no body scales. Will generate different results once scale is added.
-            # TODO: here let's just assume skel is has scales
             skel = subject.readSkel(0, geometryFolder=os.path.dirname(os.path.realpath(__file__)) + "/../../data/Geometry/")
-            body_scales = skel.getBodyScales()
             self.skels[dset_name+'_'+subject_name] = skel
-
 
             model_offsets = get_model_offsets(skel).float()
             if dset_name == '':
@@ -392,7 +400,7 @@ class MotionDataset(Dataset):
                     rot_mat = torch.eye(3).float()
                 states = norm_cops(skel, states, opt, sub_mass, height_m)
 
-                if (states.shape[0] / sampling_rate * self.target_sampling_rate) < self.window_len + 2:
+                if (not self.include_trials_shorter_than_window_len) and (states.shape[0] / sampling_rate * self.target_sampling_rate) < self.window_len + 2:
                     continue
                 if sampling_rate != self.target_sampling_rate:
                     states = linear_resample_data(states, sampling_rate, self.target_sampling_rate)
@@ -408,7 +416,7 @@ class MotionDataset(Dataset):
                 mtp_r_vel, mtp_l_vel = mtp_r_vel.astype(np.float32), mtp_l_vel.astype(np.float32)
 
                 states_df = pd.DataFrame(states, columns=opt.osim_dof_columns)
-                states_df = self.customized_param_manipulation(states_df)
+                states_df, mtp_r_vel, mtp_l_vel = self.customized_param_manipulation(states_df, mtp_r_vel, mtp_l_vel)
                 states_df, pos_vec = convert_addb_state_to_model_input(states_df, opt.joints_3d, self.target_sampling_rate)
 
                 assert self.opt.model_states_column_names == list(states_df.columns)
@@ -416,8 +424,8 @@ class MotionDataset(Dataset):
 
                 trial_data = TrialData(converted_states, probably_missing, model_offsets, contact_bodies,
                                        sub_and_trial_name, trial_id, subject.getHeightM(), subject.getMassKg(),
-                                       dset_name, rot_mat, pos_vec, self.window_len, body_scales, mtp_r_vel, mtp_l_vel)
-                if len(trial_data.available_win_start) > 0:
+                                       dset_name, rot_mat, pos_vec, self.window_len, mtp_r_vel, mtp_l_vel)
+                if self.include_trials_shorter_than_window_len or len(trial_data.available_win_start) > 0:
                     self.trials.append(trial_data)
                 self.dset_set.add(dset_name)
 
@@ -426,9 +434,9 @@ class MotionDataset(Dataset):
             print('Current trial num: {}'.format(len(self.trials)))
         # self.trial_length_probability = torch.tensor([1000 / trial.length for trial in self.trials]).float()
 
-    def customized_param_manipulation(self, states_df):
+    def customized_param_manipulation(self, states_df, mtp_r_vel, mtp_l_vel):
         """ This is only for guided diffusion"""
-        return states_df
+        return states_df, mtp_r_vel, mtp_l_vel
 
     @staticmethod
     def is_lumbar_rotation_reasonable(states, column_names):
@@ -446,11 +454,11 @@ class MotionDataset(Dataset):
 
         pos_col = ['pelvis_tx', 'pelvis_ty', 'pelvis_tz']
         pos_col_loc = [converted_column_names.index(col) for col in pos_col]
-        rot_mat_col = [col for col in converted_column_names if '_0' in col or '_1' in col or '_2' in col or '_3'
-                       in col or '_4' in col or '_5' in col]
+        rot_mat_col = [col for col in converted_column_names if '_vel' not in col and
+                       ('_0' in col or '_1' in col or '_2' in col or '_3' in col or '_4' in col or '_5' in col)]
         rot_mat_col_loc = [converted_column_names.index(col) for col in rot_mat_col]
-        euler_angle_col = [col for col in converted_column_names if 'angle' in col or 'elbow' in col or 'pro_sup' in
-                           col or 'wrist' in col]
+        euler_angle_col = [col for col in converted_column_names if '_vel' not in col and
+                           ('angle' in col or 'elbow' in col or 'pro_sup' in col or 'wrist' in col)]
         euler_angle_col_loc = [converted_column_names.index(col) for col in euler_angle_col]
 
         trial_data_list = []
@@ -504,7 +512,7 @@ class GaitCycles:
 class TrialData:
     def __init__(self, converted_states, probably_missing, model_offsets, contact_bodies, sub_and_trial_name, trial_id,
                  height_m, weights_kg, dset_name, rot_mat_for_moving_direction_alignment, pos_vec_for_pos_alignment,
-                 window_len, body_scales, mtp_r_vel, mtp_l_vel, trial_gait_phase_label=None):
+                 window_len, mtp_r_vel, mtp_l_vel, trial_gait_phase_label=None):
         self.converted_pose = converted_states
         self.probably_missing = probably_missing
         self.model_offsets = model_offsets
@@ -522,7 +530,6 @@ class TrialData:
         self.rot_mat_for_moving_direction_alignment = rot_mat_for_moving_direction_alignment
         self.pos_vec_for_pos_alignment = pos_vec_for_pos_alignment
         self.window_len = window_len
-        self.body_scales = body_scales
         self.available_win_start = self.set_available_win_start(window_len)
         self.trial_id = trial_id
 
@@ -550,6 +557,5 @@ class TrialData:
             self.dset_name,
             self.rot_mat_for_moving_direction_alignment,
             self.pos_vec_for_pos_alignment,
-            self.window_len,
-            self.body_scales
+            self.window_len
         ]

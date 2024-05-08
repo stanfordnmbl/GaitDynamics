@@ -68,6 +68,7 @@ def inverse_norm_cops(skel, states, opt, sub_mass, height_m):
         force_v = forces[:, 3*i_plate:3*(i_plate+1)]
         vector = normed_cops[:, 3 * i_plate:3 * (i_plate + 1)] / force_v[:, 1:2] * height_m
         vector = np.nan_to_num(vector, posinf=0, neginf=0)
+        vector.clip(min=-0.4, max=0.4, out=vector)      # CoP should be within 0.4 m from the foot
         cops = vector + foot_loc[:, 3*i_plate:3*(i_plate+1)]
         if isinstance(states, torch.Tensor):
             cops = torch.from_numpy(cops).to(states.dtype)
@@ -290,8 +291,7 @@ def moving_average_filtering(x, N):
     return (cumsum[N:] - cumsum[:-N]) / float(N)
 
 
-def from_foot_loc_to_foot_vel(mtp_loc, foot_grf, sampling_rate):
-    grf_thd = 2  # 2 times of body mass Kg
+def from_foot_loc_to_foot_vel(mtp_loc, foot_grf, sampling_rate, grf_thd=2):         # 2 times of body mass Kg
     foot_vel = np.diff(mtp_loc, axis=0) * sampling_rate
     foot_vel = np.concatenate([foot_vel, foot_vel[-1][None, :]], axis=0)
     low_grf_loc = foot_grf < grf_thd

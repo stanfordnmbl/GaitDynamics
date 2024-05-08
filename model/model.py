@@ -654,7 +654,7 @@ class GaussianDiffusion(nn.Module):
 
             else:
                 lr_ = 0.05
-                n_guided_steps = 3
+                n_guided_steps = 1
                 x.requires_grad_()
 
                 # plt.figure()
