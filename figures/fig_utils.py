@@ -27,7 +27,7 @@ def set_up_gui():
     return gui
 
 
-def show_skeletons(opt, name_states_dict, gui, skels, trial):
+def show_skeletons(opt, name_states_dict, gui, skels):
     num_frames = list(name_states_dict.values())[0].shape[0]
     for i_frame in range(num_frames):
         for i_skel, states in enumerate(list(name_states_dict.values())):

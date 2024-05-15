@@ -15,7 +15,7 @@ import os
 import torch
 import torch.nn as nn
 from model.utils import extract, make_beta_schedule, fix_seed, identity, maybe_wrap, \
-    inverse_convert_addb_state_to_model_input, randomize_seed
+    inverse_convert_addb_state_to_model_input
 from consts import *
 from data.osim_fk import forward_kinematics
 import matplotlib.pyplot as plt
@@ -653,8 +653,8 @@ class GaussianDiffusion(nn.Module):
                 pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
 
             else:
-                lr_ = 0.05
-                n_guided_steps = 1
+                lr_ = 0.01
+                n_guided_steps = 5
                 x.requires_grad_()
 
                 # plt.figure()
@@ -1024,7 +1024,7 @@ class GaussianDiffusion(nn.Module):
             constraint=None,
             start_point=None,
     ):
-        randomize_seed()
+        torch.manual_seed(torch.randint(0, 2 ** 32, (1,)).item())
         if isinstance(shape, tuple):
             if mode == "inpaint":
                 func_class = self.inpaint_ddim_loop_guide_xmean

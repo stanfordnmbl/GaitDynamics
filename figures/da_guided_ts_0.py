@@ -132,7 +132,7 @@ def loop_all(opt):
         weights_kg_all[dset_sub_name] = trial_of_this_win.weights_kg
 
         name_states_dict = {names[0]: true_val, names[1]: state_pred.detach().numpy()}
-        show_skeletons(opt, name_states_dict, gui, [skel_0, skel_1], trial_of_this_win)
+        show_skeletons(opt, name_states_dict, gui, [skel_0, skel_1])
 
     pickle.dump([sub_bl_true, sub_bl_pred, None, None, opt.osim_dof_columns + moment_names,
                  None, height_m_all, weights_kg_all], open(f"results/da_guided_baseline.pkl", "wb"))

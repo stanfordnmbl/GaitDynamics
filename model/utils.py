@@ -66,6 +66,7 @@ def inverse_norm_cops(skel, states, opt, sub_mass, height_m):
 
     for i_plate in range(2):
         force_v = forces[:, 3*i_plate:3*(i_plate+1)]
+        force_v[force_v == 0] = 1e-6
         vector = normed_cops[:, 3 * i_plate:3 * (i_plate + 1)] / force_v[:, 1:2] * height_m
         vector = np.nan_to_num(vector, posinf=0, neginf=0)
         vector.clip(min=-0.4, max=0.4, out=vector)      # CoP should be within 0.4 m from the foot
@@ -163,7 +164,7 @@ def osim_states_to_knee_moments_in_percent_BW_BH(osim_states, skel, opt, height_
     knee_moment_r = cross_product_2d(vector[:, :3], forces[:, :3]) / (height_m * 9.81) * 100
     knee_moment_l = cross_product_2d(vector[:, 3:], forces[:, 3:]) / (height_m * 9.81) * 100
     knee_moment_r[:, 0] = -knee_moment_r[:, 0]
-    knee_moment_l[:, 0] = -knee_moment_l[:, 0]
+    knee_moment_l[:, 0] = knee_moment_l[:, 0]
     moments = np.concatenate([knee_moment_r, knee_moment_l], axis=-1)
     moment_names = ['knee_moment_r_x', 'knee_moment_r_y', 'knee_moment_r_z', 'knee_moment_l_x', 'knee_moment_l_y', 'knee_moment_l_z']
     return moments, moment_names
@@ -263,12 +264,6 @@ def fix_seed():
     torch.manual_seed(0)
     random.seed(0)
     np.random.seed(0)
-
-
-def randomize_seed():
-    torch.manual_seed(torch.randint(0, 2 ** 32, (1,)).item())
-    random.seed(torch.randint(0, 2 ** 32, (1,)).item())
-    np.random.seed(torch.randint(0, 2 ** 32, (1,)).item())
 
 
 def nan_helper(y):

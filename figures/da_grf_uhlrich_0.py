@@ -96,7 +96,7 @@ def loop_all(opt):
 
     model = MotionModel(opt, repr_dim)
 
-    # Use marker-based kinematics
+    """ Use marker-based kinematics """
     test_dataset = MotionDataset(
         data_path='/mnt/d/Local/Data/MotionPriorData/uhlrich_dset/',
         train=False,
@@ -104,13 +104,13 @@ def loop_all(opt):
         opt=opt,
         divide_jittery=False,
         include_trials_shorter_than_window_len=True,
-        # max_trial_num=1,
-        # trial_start_num=-1,
+        specific_trial='walking'
     )
+    windows = test_dataset.get_all_wins_including_shorter_than_window_len(opt.kinematic_diffusion_col_loc)
     trials = test_dataset.trials
 
-    # Use opencap-based kinematics
-    # trials = []
+    """ Use opencap-based kinematics """
+    # trials, windows = [], []
     # for sub_num in [2, 3, 4, 6, 7, 8, 9, 11]:
     #     test_dataset = DatasetOpenCap(
     #         data_path=f'/mnt/g/Shared drives/NMBL Shared Data/datasets/Uhlrich2023/Raw/4CVPR/Data/subject{sub_num}/OpenCap/',
@@ -120,24 +120,9 @@ def loop_all(opt):
     #         divide_jittery=False,
     #         # max_trial_num=1,
     #     )
+    #     windows_sub = test_dataset.get_all_wins_including_shorter_than_window_len(opt.kinematic_diffusion_col_loc)
+    #     windows.extend(windows_sub)
     #     trials.extend(test_dataset.trials)
-
-    windows, masks = [], []
-    for i_trial, trial_ in enumerate(trials):
-        if 'walking' not in trial_.sub_and_trial_name:
-            continue
-        trial_len = trial_.length
-        i = - opt.window_len
-        for i in range(0, trial_len - opt.window_len + 1, opt.window_len):
-            mask = torch.zeros([opt.window_len, len(opt.model_states_column_names)])      # 0 for masking, 1 for unmasking
-            mask[:, opt.kinematic_diffusion_col_loc] = 1
-            windows.append((trial_.converted_pose[i:i+opt.window_len, ...], trial_.model_offsets, i_trial, opt.window_len, mask))
-        # The last window is incomplete
-        window = torch.zeros([opt.window_len, trial_.converted_pose.shape[1]])
-        window[:trial_len-i-opt.window_len, ...] = trial_.converted_pose[i+opt.window_len:i+2*opt.window_len, ...]
-        mask = torch.zeros([opt.window_len, len(opt.model_states_column_names)])      # 0 for masking, 1 for unmasking
-        mask[:trial_len-i-opt.window_len, opt.kinematic_diffusion_col_loc] = 1
-        windows.append((window, trial_.model_offsets, i_trial, trial_len - opt.window_len - i, mask))
 
     state_pred_list = [[] for _ in range(skel_num-1)]
     for i_win in range(0, len(windows), opt.batch_size_inference):
@@ -203,9 +188,9 @@ def loop_all(opt):
 
 
 if __name__ == "__main__":
-    skel_num = 12
+    skel_num = 3
     opt = parse_opt()
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'4925'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'5328'}.pt"
     loop_all(opt)
 
 

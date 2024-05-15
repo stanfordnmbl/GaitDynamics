@@ -7,15 +7,13 @@ from data.preprocess import increment_path, Normalizer
 import os
 import torch
 import random
-from model.utils import extract, make_beta_schedule, linear_resample_data, update_d_dd, fix_seed, nan_helper, \
-    from_foot_loc_to_foot_vel, moving_average_filtering, convert_addb_state_to_model_input, identity, maybe_wrap, \
-    inverse_convert_addb_state_to_model_input, align_moving_direction, inverse_align_moving_direction, randomize_seed, \
-    cross_product_2d, data_filter, get_multi_body_loc_using_nimble, norm_cops
+from model.utils import linear_resample_data, update_d_dd, fix_seed, nan_helper, from_foot_loc_to_foot_vel, \
+    convert_addb_state_to_model_input, align_moving_direction, data_filter, norm_cops
 from typing import Any, List
 import nimblephysics as nimble
 from consts import *
 from data.quaternion import rotation_6d_to_matrix, matrix_to_rotation_6d
-from data.osim_fk import get_model_offsets, get_knee_rotation_coefficients, forward_kinematics
+from data.osim_fk import get_model_offsets, forward_kinematics
 from nimblephysics import NimbleGUI
 import time
 import more_itertools as mit
@@ -37,6 +35,7 @@ class MotionDataset(Dataset):
             max_trial_num=None,
             divide_jittery=True,
             specific_dset=None,
+            specific_trial=None,
             include_trials_shorter_than_window_len=False,
     ):
         self.data_path = data_path
@@ -47,6 +46,7 @@ class MotionDataset(Dataset):
         self.opt = opt
         self.divide_jittery = divide_jittery
         self.specific_dset = specific_dset
+        self.specific_trial = specific_trial
         self.skels = {}
 
         self.train = train
@@ -262,6 +262,34 @@ class MotionDataset(Dataset):
             windows.append((trial_.converted_pose[trial_len-self.window_len:, ...], self.trials[i_trial].model_offsets, i_trial, trial_len - self.window_len - i))
         return windows
 
+    def get_all_wins_including_shorter_than_window_len(self, col_loc_to_unmask):
+        windows = []
+        for i_trial, trial_ in enumerate(self.trials):
+            trial_len = trial_.length
+            i = - self.opt.window_len
+            for i in range(0, trial_len - self.opt.window_len + 1, self.opt.window_len):
+                mask = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
+                mask[:, col_loc_to_unmask] = 1
+                windows.append((trial_.converted_pose[i:i+self.opt.window_len, ...], trial_.model_offsets, i_trial, self.opt.window_len, mask))
+            # The last window is incomplete
+            window = torch.zeros([self.opt.window_len, trial_.converted_pose.shape[1]])
+            window[:trial_len-i-self.opt.window_len, ...] = trial_.converted_pose[i+self.opt.window_len:i+2*self.opt.window_len, ...]
+            mask = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
+            mask[:trial_len-i-self.opt.window_len, col_loc_to_unmask] = 1      # 0 for masking, 1 for unmasking
+            windows.append((window, trial_.model_offsets, i_trial, trial_len - self.opt.window_len - i, mask))
+        return windows
+
+    def get_one_win_from_the_end_of_each_trial(self, col_loc_to_unmask):
+        windows = []
+        for i_trial, trial_ in enumerate(self.trials):
+            len_ = min(self.opt.window_len, trial_.length)
+            mask = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
+            mask[-len_:, col_loc_to_unmask] = 1
+            pose = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
+            pose[-len_:] = trial_.converted_pose[-len_:]
+            windows.append((pose, trial_.model_offsets, i_trial, self.opt.window_len, mask))
+        return windows
+
     def get_all_gait_cycles_and_set_gait_phase_label(self):
         cycles_ = []
         for i_trial, trial_ in enumerate(self.trials):
@@ -355,6 +383,9 @@ class MotionDataset(Dataset):
             for trial_id in tqdm(range(trial_start_num_, subject.getNumTrials())):
                 sampling_rate = int(1 / subject.getTrialTimestep(trial_id))
                 sub_and_trial_name = subject_name + '__' + subject.getTrialName(trial_id)
+                if self.specific_trial and self.specific_trial not in sub_and_trial_name:
+                    continue
+
                 trial_length = subject.getTrialLength(trial_id)
                 probably_missing: List[bool] = [reason != nimble.biomechanics.MissingGRFReason.notMissingGRF for reason
                                                 in subject.getMissingGRF(trial_id)]
