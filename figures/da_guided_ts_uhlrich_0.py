@@ -50,7 +50,7 @@ def loop_all(opt):
     )
     windows_original = test_dataset.get_one_win_from_the_end_of_each_trial([0])
 
-    sub_bl_true, sub_bl_pred, height_m_all, weights_kg_all = {}, {}, {}, {}
+    sub_bl_true, sub_bl_pred, height_m_all, weight_kg_all = {}, {}, {}, {}
     sub_ts_true, sub_ts_pred = {}, {}
 
     gui = set_up_gui()
@@ -75,8 +75,9 @@ def loop_all(opt):
         state_pred_list = [[] for _ in range(skel_num-1)]
         for i_win in range(0, len(windows_manipulated), opt.batch_size_inference):
 
-            state_manipulated = torch.stack([win[0] for win in windows_manipulated[i_win:i_win+opt.batch_size_inference]])
-            masks = torch.stack([win[4] for win in windows_manipulated[i_win:i_win+opt.batch_size_inference]])
+            state_manipulated = torch.stack([win.pose for win in windows_manipulated[i_win:i_win+opt.batch_size_inference]])
+            masks = torch.stack([win.mask for win in windows_manipulated[i_win:i_win+opt.batch_size_inference]])
+            height_m_tensor = torch.tensor([win.height_m for win in windows_manipulated[i_win:i_win+opt.batch_size_inference]]).unsqueeze(-1)
 
             value_diff_weight = masks.sum(dim=2).bool().float().unsqueeze(-1).repeat([1, 1, masks.shape[2]])
             value_diff_thd = torch.zeros([len(opt.model_states_column_names)])
@@ -84,9 +85,9 @@ def loop_all(opt):
             value_diff_thd[test_dataset_mani.manipulated_col_loc] = 0
 
             state_pred_list_batch = model.eval_loop(opt, state_manipulated, masks, value_diff_thd, value_diff_weight,
-                                                    num_of_generation_per_window=skel_num - 1)
+                                                    num_of_generation_per_window=skel_num - 1, mode='guided_uhlrich_ts')
             state_pred_list_batch = inverse_convert_addb_state_to_model_input(
-                state_pred_list_batch, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, [0, 0, 0])
+                state_pred_list_batch, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], height_m_tensor)
 
             for i_skel in range(skel_num-1):
                 state_pred_list[i_skel] += state_pred_list_batch[i_skel]
@@ -95,22 +96,22 @@ def loop_all(opt):
             assert len(state_pred_list[i_skel]) == len(windows_manipulated)
 
         for i_win, (win, state_pred), in enumerate(zip(windows_original, state_pred_list[0])):
-            trial_of_this_win = test_dataset.trials[win[2]]
+            trial_of_this_win = test_dataset.trials[win.trial_id]
             true_val = inverse_convert_addb_state_to_model_input(
-                model.normalizer.unnormalize(win[0].unsqueeze(0)), opt.model_states_column_names,
-                opt.joints_3d, opt.osim_dof_columns, [0, 0, 0]).squeeze().numpy()
+                model.normalizer.unnormalize(win.pose.unsqueeze(0)), opt.model_states_column_names,
+                opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], win.height_m).squeeze().numpy()
 
             dset_sub_name = trial_of_this_win.dset_name + '_' + trial_of_this_win.sub_and_trial_name.split('__')[0]
             test_name = f'_{x_times_lumbar_bending}'
             skel_0 = test_dataset.skels[dset_sub_name]
             skel_1 = test_dataset_mani.skels[dset_sub_name]
-            true_val = inverse_norm_cops(skel_0, true_val, opt, trial_of_this_win.weights_kg, trial_of_this_win.height_m)
-            state_pred = inverse_norm_cops(skel_1, state_pred, opt, trial_of_this_win.weights_kg, trial_of_this_win.height_m)
+            true_val = inverse_norm_cops(skel_0, true_val, opt, trial_of_this_win.weight_kg, trial_of_this_win.height_m)
+            state_pred = inverse_norm_cops(skel_1, state_pred, opt, trial_of_this_win.weight_kg, trial_of_this_win.height_m)
 
             true_moment, moment_names = osim_states_to_knee_moments_in_percent_BW_BH(true_val, skel_0, opt, trial_of_this_win.height_m)
             pred_moments, _ = osim_states_to_knee_moments_in_percent_BW_BH(state_pred, skel_1, opt, trial_of_this_win.height_m)
 
-            l_grf_v = true_val[:, opt.osim_dof_columns.index('calcn_l_force_vy')] * windows_manipulated[i_win][4][:, test_dataset_mani.manipulated_col_loc[0]].numpy()
+            l_grf_v = true_val[:, opt.osim_dof_columns.index('calcn_l_force_vy')] * windows_manipulated[i_win].mask[:, test_dataset_mani.manipulated_col_loc[0]].numpy()
             if get_start_end_of_gait_cycle(l_grf_v):
                 start_, end_ = get_start_end_of_gait_cycle(l_grf_v)
             else:
@@ -134,15 +135,15 @@ def loop_all(opt):
                 sub_ts_pred[test_name].append(pred_)
 
             height_m_all[test_name] = trial_of_this_win.height_m
-            weights_kg_all[test_name] = trial_of_this_win.weights_kg
+            weight_kg_all[test_name] = trial_of_this_win.weight_kg
 
-            name_states_dict = {'true': true_val, 'pred': state_pred.detach().numpy()}
-            show_skeletons(opt, name_states_dict, gui, [skel_0, skel_1])
+            # name_states_dict = {'true': true_val, 'pred': state_pred.detach().numpy()}
+            # show_skeletons(opt, name_states_dict, gui, [skel_0, skel_1])
 
     pickle.dump([sub_bl_true, sub_bl_pred, None, None, opt.osim_dof_columns + moment_names,
-                 None, height_m_all, weights_kg_all], open(f"results/da_guided_baseline.pkl", "wb"))
+                 None, height_m_all, weight_kg_all], open(f"results/da_guided_baseline.pkl", "wb"))
     pickle.dump([sub_ts_true, sub_ts_pred, None, None, opt.osim_dof_columns + moment_names,
-                 None, height_m_all, weights_kg_all], open(f"results/da_guided_trunk_sway.pkl", "wb"))
+                 None, height_m_all, weight_kg_all], open(f"results/da_guided_trunk_sway.pkl", "wb"))
 
 
 b3d_path = f'/mnt/d/Local/Data/MotionPriorData/uhlrich_dset/'
@@ -155,8 +156,10 @@ if __name__ == "__main__":
     skel_num = 2
     opt = parse_opt()
     opt.guide_x_start_the_beginning_step = 1000
+    # opt.guidance_lr = 0.02
+    # opt.n_guided_steps = 5
 
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'5328'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'4995'}.pt"
 
     loop_all(opt)
 

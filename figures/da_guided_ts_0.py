@@ -58,11 +58,13 @@ def loop_all(opt):
     state_pred_list = [[] for _ in range(skel_num-1)]
     for i_win in range(0, len(windows_manipulated), opt.batch_size_inference):
 
-        state_manipulated = [win[0] for win in windows_manipulated[i_win:i_win+opt.batch_size_inference]]
+        state_manipulated = [win.pose for win in windows_manipulated[i_win:i_win+opt.batch_size_inference]]
         state_manipulated = torch.stack(state_manipulated)
 
         masks = torch.zeros_like(state_manipulated)      # 0 for masking, 1 for unmasking
         masks[:, :, manipulated_col_loc] = 1
+
+        height_m_tensor = torch.tensor([win.height_m for win in windows_manipulated[i_win:i_win+opt.batch_size_inference]]).unsqueeze(-1)
 
         value_diff_weight = torch.ones([len(opt.model_states_column_names)])
         value_diff_thd = torch.zeros([len(opt.model_states_column_names)])
@@ -72,7 +74,7 @@ def loop_all(opt):
         state_pred_list_batch = model.eval_loop(opt, state_manipulated, masks, value_diff_thd, value_diff_weight,
                                                 num_of_generation_per_window=skel_num - 1)
         state_pred_list_batch = inverse_convert_addb_state_to_model_input(
-            state_pred_list_batch, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, [0, 0, 0])
+            state_pred_list_batch, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], height_m_tensor)
 
         for i_skel in range(skel_num-1):
             state_pred_list[i_skel] += state_pred_list_batch[i_skel]
@@ -84,25 +86,25 @@ def loop_all(opt):
     gui = set_up_gui()
 
     # TODO: only the first one is used, in the future make use all
-    sub_bl_true, sub_bl_pred, height_m_all, weights_kg_all = {}, {}, {}, {}
+    sub_bl_true, sub_bl_pred, height_m_all, weight_kg_all = {}, {}, {}, {}
     sub_ts_true, sub_ts_pred = {}, {}
     for i_win, (win, state_pred), in enumerate(zip(windows_original, state_pred_list[0])):
-        trial_of_this_win = test_dataset.trials[win[2]]
+        trial_of_this_win = test_dataset.trials[win.trial_id]
         true_val = inverse_convert_addb_state_to_model_input(
-            model.normalizer.unnormalize(win[0].unsqueeze(0)), opt.model_states_column_names,
-            opt.joints_3d, opt.osim_dof_columns, [0, 0, 0]).squeeze().numpy()
+            model.normalizer.unnormalize(win.pose.unsqueeze(0)), opt.model_states_column_names,
+            opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], win.height_m).squeeze().numpy()
 
         dset_sub_name = trial_of_this_win.dset_name + '_' + trial_of_this_win.sub_and_trial_name.split('__')[0]
         skel_0 = test_dataset.skels[dset_sub_name]
         skel_1 = test_dataset_mani.skels[dset_sub_name]
-        true_val = inverse_norm_cops(skel_0, true_val, opt, trial_of_this_win.weights_kg, trial_of_this_win.height_m)
-        state_pred = inverse_norm_cops(skel_1, state_pred, opt, trial_of_this_win.weights_kg, trial_of_this_win.height_m)
+        true_val = inverse_norm_cops(skel_0, true_val, opt, trial_of_this_win.weight_kg, trial_of_this_win.height_m)
+        state_pred = inverse_norm_cops(skel_1, state_pred, opt, trial_of_this_win.weight_kg, trial_of_this_win.height_m)
 
         true_moment, moment_names = osim_states_to_knee_moments_in_percent_BW_BH(true_val, skel_0, opt, trial_of_this_win.height_m)
         pred_moments, _ = osim_states_to_knee_moments_in_percent_BW_BH(state_pred, skel_1, opt, trial_of_this_win.height_m)
 
-        gait_cycle_starts = np.where(win[3] == 0)[0]
-        gait_cycle_ends = np.where(win[3] == 1000)[0]
+        gait_cycle_starts = np.where(win.gait_phase_label == 0)[0]
+        gait_cycle_ends = np.where(win.gait_phase_label == 1000)[0]
         cycle_pairs = []
         for end_ in gait_cycle_ends:
             for start_ in reversed(gait_cycle_starts):
@@ -129,15 +131,15 @@ def loop_all(opt):
                 sub_ts_pred[dset_sub_name].append(pred_)
 
         height_m_all[dset_sub_name] = trial_of_this_win.height_m
-        weights_kg_all[dset_sub_name] = trial_of_this_win.weights_kg
+        weight_kg_all[dset_sub_name] = trial_of_this_win.weight_kg
 
         name_states_dict = {names[0]: true_val, names[1]: state_pred.detach().numpy()}
         show_skeletons(opt, name_states_dict, gui, [skel_0, skel_1])
 
     pickle.dump([sub_bl_true, sub_bl_pred, None, None, opt.osim_dof_columns + moment_names,
-                 None, height_m_all, weights_kg_all], open(f"results/da_guided_baseline.pkl", "wb"))
+                 None, height_m_all, weight_kg_all], open(f"results/da_guided_baseline.pkl", "wb"))
     pickle.dump([sub_ts_true, sub_ts_pred, None, None, opt.osim_dof_columns + moment_names,
-                 None, height_m_all, weights_kg_all], open(f"results/da_guided_trunk_sway.pkl", "wb"))
+                 None, height_m_all, weight_kg_all], open(f"results/da_guided_trunk_sway.pkl", "wb"))
 
 
 li, camargo, carter, falisse, moore, tan2021, tan2022 = 'li', 'camargo', 'carter', 'falisse', 'moore', 'tan2021', 'tan2022'

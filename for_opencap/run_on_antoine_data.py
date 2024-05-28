@@ -131,7 +131,7 @@ def loop_all(opt):
     for dset in results_true.keys():
         for i_trial, sub_and_trial in enumerate(results_true[dset].keys()):
             results_pred[dset][sub_and_trial] = np.concatenate(results_pred[dset][sub_and_trial], axis=0)
-            grf_results = torch.from_numpy(results_pred[dset][sub_and_trial][:, -12:] * test_dataset.trials[i_trial].weights_kg)
+            grf_results = torch.from_numpy(results_pred[dset][sub_and_trial][:, -12:] * test_dataset.trials[i_trial].weight_kg)
 
             mat_ = test_dataset.trials[i_trial].rot_mat_for_moving_direction_alignment.T
             for i in [0, 6]:

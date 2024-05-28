@@ -19,7 +19,7 @@ def loop_all(opt):
 
     model = MotionModel(opt, repr_dim)
     dset_list = DATASETS_NO_ARM
-    results_true, results_pred, results_pred_std, results_bl, height_m_all, weights_kg_all = {}, {}, {}, {}, {}, {}
+    results_true, results_pred, results_pred_std, results_bl, height_m_all, weight_kg_all = {}, {}, {}, {}, {}, {}
     is_output_label_array = torch.zeros([150, 35])
 
     for dset in dset_list:
@@ -48,12 +48,12 @@ def loop_all(opt):
         results_pred_std.update({test_dataset.trials[0].dset_name: {}})
 
         height_m_all[dset] = {trial_.sub_and_trial_name: trial_.height_m for trial_ in test_dataset.trials}
-        weights_kg_all[dset] = {trial_.sub_and_trial_name: trial_.height_m for trial_ in test_dataset.trials}
+        weight_kg_all[dset] = {trial_.sub_and_trial_name: trial_.height_m for trial_ in test_dataset.trials}
 
         state_pred_list = [[] for _ in range(skel_num-1)]
         for i_win in range(0, len(windows), opt.batch_size_inference):
 
-            state_true = [win[0] for win in windows[i_win:i_win+opt.batch_size_inference]]
+            state_true = [win.pose for win in windows[i_win:i_win+opt.batch_size_inference]]
             state_true = torch.stack(state_true)
 
             if da_to_test == 0:
@@ -87,10 +87,11 @@ def loop_all(opt):
                 raise ValueError('da_to_test should be 0, 1, or 2')
 
             state_pred_list_batch = model.eval_loop(opt, state_true, masks, num_of_generation_per_window=skel_num-1)
-            pos_vec = np.array([test_dataset.trials[windows[i_win_vec][2]].pos_vec_for_pos_alignment
+            pos_vec = np.array([test_dataset.trials[windows[i_win_vec].trial_id].pos_vec_for_pos_alignment
                                 for i_win_vec in range(len(windows[i_win:i_win+opt.batch_size_inference]))])
+            height_m_tensor = torch.tensor([win.height_m for win in windows[i_win:i_win+opt.batch_size_inference]]).unsqueeze(1)
             state_pred_list_batch = inverse_convert_addb_state_to_model_input(
-                state_pred_list_batch, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, pos_vec)
+                state_pred_list_batch, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, pos_vec, height_m_tensor)
             for i_skel in range(skel_num-1):
                 state_pred_list[i_skel] += state_pred_list_batch[i_skel]
 
@@ -105,15 +106,14 @@ def loop_all(opt):
             state_pred_list_std.append(std)
 
         for win, state_pred_mean, state_pred_std in zip(windows, state_pred_list_averaged, state_pred_list_std):
-            # windows.append((trial_.converted_pose[i:i+self.window_len, ...], self.trials[i_trial].model_offsets, i_trial, gait_phase_label))
-            trial = test_dataset.trials[win[2]]
+            trial = test_dataset.trials[win.trial_id]
             if trial.sub_and_trial_name not in results_true[trial.dset_name].keys():
                 results_true[trial.dset_name].update({trial.sub_and_trial_name: []})
                 results_pred[trial.dset_name].update({trial.sub_and_trial_name: []})
                 results_pred_std[trial.dset_name].update({trial.sub_and_trial_name: []})
             true_val = inverse_convert_addb_state_to_model_input(
-                model.normalizer.unnormalize(win[0].unsqueeze(0)), opt.model_states_column_names,
-                opt.joints_3d, opt.osim_dof_columns, trial.pos_vec_for_pos_alignment).squeeze().numpy()
+                model.normalizer.unnormalize(win.pose.unsqueeze(0)), opt.model_states_column_names,
+                opt.joints_3d, opt.osim_dof_columns, trial.pos_vec_for_pos_alignment, win.height_m).squeeze().numpy()
             results_true[trial.dset_name][trial.sub_and_trial_name].append(true_val)
             results_pred[trial.dset_name][trial.sub_and_trial_name].append(state_pred_mean)
             results_pred_std[trial.dset_name][trial.sub_and_trial_name].append(state_pred_std)
@@ -126,7 +126,7 @@ def loop_all(opt):
             results_bl[dset][sub_and_trial] = np.concatenate(results_bl[dset][sub_and_trial], axis=0)
 
     pickle.dump([results_true, results_pred, results_pred_std, results_bl, opt.osim_dof_columns,
-                 is_output_label_array, height_m_all, weights_kg_all],
+                 is_output_label_array, height_m_all, weight_kg_all],
                 open(f"figures/results/{save_name}.pkl", "wb"))
 
 
@@ -163,8 +163,8 @@ def get_baseline_val(dset, windows, trials):
     bl_pred = {dset: {}}
 
     for win in windows:
-        i_trial = win[2]
-        gait_phase_label = win[3]
+        i_trial = win.trial_id
+        gait_phase_label = win.gait_phase_label
         if trials[i_trial].sub_and_trial_name not in bl_pred[dset].keys():
             bl_pred[dset].update({trials[i_trial].sub_and_trial_name: []})
         bl_pred_current_win = average_gait_cycle[gait_phase_label]
@@ -179,7 +179,7 @@ if __name__ == "__main__":
     opt = parse_opt()
 
     opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'4925'}.pt"
-    # opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'nimble_fk7'}/weights/train-{'4925'}.pt"
+    # opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'include_no_grf_trials_for_vel'}/weights/train-{'9768'}.pt"
 
     cols_to_mask = {
         'ankle': opt.knee_diffusion_col_loc,

@@ -38,25 +38,25 @@ class MotionDatasetManipulated(MotionDataset):
         # self.manipulated_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if '_force_v' in col]
         # self.do_not_follow_col_loc = []
 
-        # # vel increase
-        # ratio = 1.3
-        # trial_df['pelvis_tx'] = trial_df['pelvis_tx'] * ratio
-        # mtp_r_vel[:, 0] = mtp_r_vel[:, 0] * ratio
-        # mtp_l_vel[:, 0] = mtp_l_vel[:, 0] * ratio
-        # self.manipulated_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'pelvis_tx' in col]
-        # self.do_not_follow_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'force' in col]
+        # vel increase
+        ratio = 1.25
+        trial_df['pelvis_tx'] = trial_df['pelvis_tx'] * ratio
+        mtp_r_vel[:, 0] = mtp_r_vel[:, 0] * ratio
+        mtp_l_vel[:, 0] = mtp_l_vel[:, 0] * ratio
+        self.manipulated_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'pelvis_tx' in col]
+        self.do_not_follow_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'force' in col]
 
-        # GRF perturbation
-        plt.figure()
-        plt.plot(trial_df['calcn_r_force_normed_cop_x'])
-        curve = np.array([1 - abs(i - 1) for i in np.arange(0, 2, 0.08)])
-        for i in range(50, trial_df.shape[0], 50):
-            trial_df['calcn_r_force_normed_cop_x'][i:i+25] += curve * 0.1
-            trial_df['calcn_r_force_normed_cop_x'][i:i+25] += curve * 0.1
-        plt.plot(trial_df['calcn_r_force_normed_cop_x'])
-        plt.show()
-        self.manipulated_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if '_normed_cop_' in col]
-        self.do_not_follow_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if '_normed_cop_' not in col]
+        # # GRF perturbation
+        # plt.figure()
+        # plt.plot(trial_df['calcn_r_force_normed_cop_x'])
+        # curve = np.array([1 - abs(i - 1) for i in np.arange(0, 2, 0.08)])
+        # for i in range(50, trial_df.shape[0], 50):
+        #     trial_df['calcn_r_force_normed_cop_x'][i:i+25] += curve * 0.1
+        #     trial_df['calcn_r_force_normed_cop_x'][i:i+25] += curve * 0.1
+        # plt.plot(trial_df['calcn_r_force_normed_cop_x'])
+        # plt.show()
+        # self.manipulated_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if '_normed_cop_' in col]
+        # self.do_not_follow_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if '_normed_cop_' not in col]
 
         return trial_df, mtp_r_vel, mtp_l_vel
 
@@ -68,8 +68,8 @@ def loop_all(opt):
 
     model = MotionModel(opt, repr_dim)
 
-    max_trial_num = 1
-    trial_start_num = 1
+    max_trial_num = 999
+    trial_start_num = 0
 
     test_dataset_mani = MotionDatasetManipulated(
         data_path=b3d_path,
@@ -78,9 +78,10 @@ def loop_all(opt):
         opt=opt,
         divide_jittery=False,
         max_trial_num=max_trial_num,
-        trial_start_num=trial_start_num
+        trial_start_num=trial_start_num,
+        specific_trial='fast'
     )
-    windows_manipulated = test_dataset_mani.get_all_wins_within_gait_cycle()
+    windows_manipulated = test_dataset_mani.get_one_win_from_the_end_of_each_trial(test_dataset_mani.manipulated_col_loc)
 
     test_dataset = MotionDataset(
         data_path=b3d_path,
@@ -90,15 +91,17 @@ def loop_all(opt):
         divide_jittery=False,
         max_trial_num=max_trial_num,
         trial_start_num=trial_start_num,
+        specific_trial='500'
     )
-    windows_original = test_dataset.get_all_wins_within_gait_cycle()
+    windows_original = test_dataset.get_one_win_from_the_end_of_each_trial([0])
     assert len(windows_original) == len(windows_manipulated)
 
     state_pred_list = [[] for _ in range(skel_num-1)]
     for i_win in range(0, len(windows_manipulated), opt.batch_size_inference):
 
-        state_manipulated = [win[0] for win in windows_manipulated[i_win:i_win+opt.batch_size_inference]]
+        state_manipulated = [win.pose for win in windows_manipulated[i_win:i_win+opt.batch_size_inference]]
         state_manipulated = torch.stack(state_manipulated)
+        height_m_tensor = torch.tensor([win.height_m for win in windows_manipulated[i_win:i_win+opt.batch_size_inference]]).unsqueeze(-1)
 
         masks = torch.zeros_like(state_manipulated)      # 0 for masking, 1 for unmasking
         masks[:, :, test_dataset_mani.manipulated_col_loc] = 1
@@ -107,13 +110,13 @@ def loop_all(opt):
         value_diff_weight[test_dataset_mani.do_not_follow_col_loc] = 0
 
         value_diff_thd = torch.zeros([len(opt.model_states_column_names)])
-        value_diff_thd[:] = 0.2         # large value for no constraint
+        value_diff_thd[:] = 4         # large value for no constraint
         value_diff_thd[test_dataset_mani.manipulated_col_loc] = 0
 
         state_pred_list_batch = model.eval_loop(opt, state_manipulated, masks, value_diff_thd, value_diff_weight,
                                                 num_of_generation_per_window=skel_num - 1)
         state_pred_list_batch = inverse_convert_addb_state_to_model_input(
-            state_pred_list_batch, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, [0, 0, 0])
+            state_pred_list_batch, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], height_m_tensor)
 
         for i_skel in range(skel_num-1):
             state_pred_list[i_skel] += state_pred_list_batch[i_skel]
@@ -121,28 +124,28 @@ def loop_all(opt):
     for i_skel in range(skel_num-1):
         assert len(state_pred_list[i_skel]) == len(windows_manipulated)
 
-    names = ['baseline', '3x trunk sway']
+    names = ['experiment 5 m/s', 'synthesized 5 m/s']
     gui = set_up_gui()
 
     # TODO: only the first one is used, in the future make use all
-    sub_bl_true, sub_bl_pred, height_m_all, weights_kg_all = {}, {}, {}, {}
+    sub_bl_true, sub_bl_pred, height_m_all, weight_kg_all = {}, {}, {}, {}
     for i_win, (win, state_pred), in enumerate(zip(windows_original, state_pred_list[0])):
-        trial_of_this_win = test_dataset.trials[win[2]]
+        trial_of_this_win = test_dataset.trials[win.trial_id]
         true_val = inverse_convert_addb_state_to_model_input(
-            model.normalizer.unnormalize(win[0].unsqueeze(0)), opt.model_states_column_names,
-            opt.joints_3d, opt.osim_dof_columns, [0, 0, 0]).squeeze().numpy()
+            model.normalizer.unnormalize(win.pose.unsqueeze(0)), opt.model_states_column_names,
+            opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], win.height_m).squeeze().numpy()
 
         dset_sub_name = trial_of_this_win.dset_name + '_' + trial_of_this_win.sub_and_trial_name.split('__')[0]
         skel_0 = test_dataset.skels[dset_sub_name]
         skel_1 = test_dataset_mani.skels[dset_sub_name]
-        true_val = inverse_norm_cops(skel_0, true_val, opt, trial_of_this_win.weights_kg, trial_of_this_win.height_m)
-        state_pred = inverse_norm_cops(skel_1, state_pred, opt, trial_of_this_win.weights_kg, trial_of_this_win.height_m)
+        true_val = inverse_norm_cops(skel_0, true_val, opt, trial_of_this_win.weight_kg, trial_of_this_win.height_m)
+        state_pred = inverse_norm_cops(skel_1, state_pred, opt, trial_of_this_win.weight_kg, trial_of_this_win.height_m)
 
         true_moment, moment_names = osim_states_to_knee_moments_in_percent_BW_BH(true_val, skel_0, opt, trial_of_this_win.height_m)
         pred_moments, _ = osim_states_to_knee_moments_in_percent_BW_BH(state_pred, skel_1, opt, trial_of_this_win.height_m)
 
-        gait_cycle_starts = np.where(win[3] == 0)[0]
-        gait_cycle_ends = np.where(win[3] == 1000)[0]
+        gait_cycle_starts = np.where(win.gait_phase_label == 0)[0]
+        gait_cycle_ends = np.where(win.gait_phase_label == 1000)[0]
         cycle_pairs = []
         for end_ in gait_cycle_ends:
             for start_ in reversed(gait_cycle_starts):
@@ -164,18 +167,18 @@ def loop_all(opt):
             sub_bl_pred[dset_sub_name].append(pred_)
 
         height_m_all[dset_sub_name] = trial_of_this_win.height_m
-        weights_kg_all[dset_sub_name] = trial_of_this_win.weights_kg
+        weight_kg_all[dset_sub_name] = trial_of_this_win.weight_kg
 
         name_states_dict = {names[0]: true_val, names[1]: state_pred.detach().numpy()}
         show_skeletons(opt, name_states_dict, gui, [skel_0, skel_1])
 
     pickle.dump([sub_bl_true, sub_bl_pred, None, None, opt.osim_dof_columns + moment_names,
-                 None, height_m_all, weights_kg_all], open(f"results/da_guided_.pkl", "wb"))
+                 None, height_m_all, weight_kg_all], open(f"results/da_guided_.pkl", "wb"))
 
 
-li, camargo, carter, falisse, moore, tan2021, tan2022 = 'li', 'camargo', 'carter', 'falisse', 'moore', 'tan2021', 'tan2022'
-uhlrich, santos, vanderzee, wang = 'uhlrich', 'santos', 'vanderzee', 'wang'
-b3d_path = f'/mnt/d/Local/Data/MotionPriorData/{santos}_dset/'
+li, camargo, carter, falisse, hamner, moore, tan2021 = 'li', 'camargo', 'carter', 'falisse', 'hamner', 'moore', 'tan2021'
+tan2022, uhlrich, santos, vanderzee, wang = 'uhlrich', 'santos', 'vanderzee', 'wang', 'tan2022'
+b3d_path = f'/mnt/d/Local/Data/MotionPriorData/{carter}_dset/'
 
 """ To use this code,
 1. in load_addb, manipulate channels
@@ -187,7 +190,7 @@ if __name__ == "__main__":
     opt = parse_opt()
     opt.guide_x_start_the_beginning_step = 1000
 
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'4925'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'4995'}.pt"
 
     loop_all(opt)
 

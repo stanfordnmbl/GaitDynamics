@@ -22,7 +22,7 @@ def loop_all(opt):
 
     model = MotionModel(opt, repr_dim)
     dset_list = DATASETS_NO_ARM
-    results_true, results_pred, height_m_all, weights_kg_all = {}, {}, {}, {}
+    results_true, results_pred, height_m_all, weight_kg_all = {}, {}, {}, {}
     is_output_label_array = torch.zeros([150, 35])
 
     for dset in dset_list:

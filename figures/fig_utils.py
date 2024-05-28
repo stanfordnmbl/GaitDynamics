@@ -7,6 +7,7 @@ import nimblephysics as nimble
 from nimblephysics import NimbleGUI
 import time
 
+from data.addb_dataset import MotionDataset
 
 FONT_SIZE_LARGE = 15
 FONT_SIZE = 13
@@ -17,6 +18,61 @@ FONT_DICT_SMALL = {'fontsize': FONT_SIZE_SMALL}
 FONT_DICT_X_SMALL = {'fontsize': 15}
 LINE_WIDTH = 1.5
 LINE_WIDTH_THICK = 2
+
+
+def naive_stance_phase_extractor(v_grf):
+    """ Can only be used for clean data such as Hammer2013. """
+    stance_vgrf_thd = 5    # 100% of body mass. Needs to be large because some datasets are noisy.
+    stance_start_valid, stance_end_valid = [], []
+    stance_flag = np.abs(v_grf) > stance_vgrf_thd
+    stance_flag = stance_flag.astype(int)
+    start_end_indicator = np.diff(stance_flag)
+    stance_start = np.where(start_end_indicator == 1)[0]
+    stance_end = np.where(start_end_indicator == -1)[0]
+    for i_start in range(0, len(stance_start)):
+        try:
+            end_ = stance_end[(stance_start[i_start] < stance_end)][0]
+        except IndexError:
+            continue
+        stance_start_valid.append(stance_start[i_start])
+        stance_end_valid.append(end_)
+    return stance_start_valid, stance_end_valid
+
+
+def extract_gait_parameters_from_osim_states_and_append(poses, skel, opt, param_dict, num_to_append=1):
+    param_dict_new = extract_gait_parameters_from_osim_states(poses, skel, opt)
+    for key in param_dict_new.keys():
+        if key not in param_dict:
+            param_dict[key] = param_dict_new[key]
+        else:
+            param_dict[key].extend(param_dict_new[key][:num_to_append])
+    return param_dict
+
+
+def extract_gait_parameters_from_osim_states(poses, skel, opt):
+    v_grf = poses[:, opt.osim_dof_columns.index('calcn_r_force_vy')]
+    stance_start_valid, stance_end_valid = naive_stance_phase_extractor(v_grf)
+    param_dict = {'hip_flexion_r': [], 'knee_angle_r': [], 'ankle_angle_r': [],
+                  'hip_flexion_r_max': [], 'knee_angle_r_max': [], 'ankle_angle_r_max': [],
+                  'hip_flexion_r_min': [], 'knee_angle_r_min': [], 'ankle_angle_r_min': [],
+                  'stride_length_r': [], 'stride_time_r': [], 'stance_time_r': []}
+    for i_step in range(len(stance_start_valid) - 1):
+        start_, end_ = stance_start_valid[i_step], stance_start_valid[i_step+1]
+        for key in ('hip_flexion_r', 'knee_angle_r', 'ankle_angle_r'):
+            param_dict[key].append(poses[start_:end_, opt.osim_dof_columns.index(key)])
+            param_dict[key + '_max'].append(np.max(poses[start_:end_, opt.osim_dof_columns.index(key)]))
+            param_dict[key + '_min'].append(np.min(poses[start_:end_, opt.osim_dof_columns.index(key)]))
+
+        stance_time = (stance_end_valid[i_step] - start_) / opt.target_sampling_rate
+        stride_time = (end_ - start_) / opt.target_sampling_rate
+        skel.setPositions(poses[start_, opt.kinematic_osim_col_loc])
+        foot_loc_r_start = skel.getBodyNode('calcn_r').getWorldTransform().translation()
+        skel.setPositions(poses[end_, opt.kinematic_osim_col_loc])
+        foot_loc_r_end = skel.getBodyNode('calcn_r').getWorldTransform().translation()
+        param_dict['stance_time_r'].append(stance_time)
+        param_dict['stride_time_r'].append(stride_time)
+        param_dict['stride_length_r'].append((foot_loc_r_end - foot_loc_r_start)[0])
+    return param_dict
 
 
 def set_up_gui():

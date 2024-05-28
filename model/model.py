@@ -119,16 +119,9 @@ class MotionModel:
     def prepare(self, objects):
         return self.accelerator.prepare(*objects)
 
-    def train_loop(self, opt):
+    def train_loop(self, opt, train_dataset):
         if opt.log_with_wandb:
             wandb.init(project=opt.wandb_pj_name, name=opt.exp_name, dir="wandb_logs")
-        train_dataset = MotionDataset(
-            data_path=opt.data_path_train,
-            train=True,
-            # trial_start_num=-3,
-            # max_trial_num=4,            # !!!
-            opt=opt,
-        )
         # set normalizer
         self.normalizer = train_dataset.normalizer
         self.diffusion.set_normalizer(self.normalizer)
@@ -223,22 +216,34 @@ class MotionModel:
                             if trial_loss == 0:
                                 continue        # if 0, then the trial is not used for training, thus skipping
                             loss_dset[dset_name] = [loss_dset[dset_name][0] + trial_loss, loss_dset[dset_name][1] + 1]
-
                         loss_val_name_pairs_dset = []
                         for dset_name, loss_count in loss_dset.items():
                             if loss_count[1] != 0:
                                 loss_val_name_pairs_dset.append((loss_count[0] / loss_count[1], dset_name))
-
                         log_dict = {name: loss for loss, name in loss_val_name_pairs_dset + loss_val_name_pairs_joints + loss_val_name_pairs_terms}
+
+                        # loss_trial = {trial_.dset_name + trial_.sub_and_trial_name: [0, 0] for trial_ in train_dataset.trials}
+                        # for dset_name, sub_and_trial_name, trial_loss in zip(dset_names, sub_and_trial_names, dataset_loss_record):
+                        #     trial_name_full = dset_name + sub_and_trial_name
+                        #     if trial_loss == 0:
+                        #         continue        # if 0, then the trial is not used for training, thus skipping
+                        #     loss_trial[trial_name_full] = [loss_trial[trial_name_full][0] + trial_loss, loss_trial[trial_name_full][1] + 1]
+                        # loss_val_name_pairs_trial = []
+                        # for trial_name_full, loss_count in loss_trial.items():
+                        #     if loss_count[1] != 0:
+                        #         loss_val_name_pairs_trial.append((loss_count[0] / loss_count[1], trial_name_full))
+                        # log_dict = {name: loss for loss, name in loss_val_name_pairs_trial}
+
                         wandb.log(log_dict)
 
-            if (epoch % 888) == 0:
+            if (epoch % 999) == 0:
                 torch.save(ckpt, os.path.join(wdir, f"train-{epoch}.pt"))
                 print(f"[MODEL SAVED at Epoch {epoch}]")
         if self.accelerator.is_main_process and opt.log_with_wandb:
             wandb.run.finish()
 
-    def eval_loop(self, opt, state_true, masks, value_diff_thd=None, value_diff_weight=None, num_of_generation_per_window=1):
+    def eval_loop(self, opt, state_true, masks, value_diff_thd=None, value_diff_weight=None,
+                  num_of_generation_per_window=1, mode="inpaint"):
         self.eval()
         if value_diff_thd is None:
             value_diff_thd = torch.zeros([state_true.shape[2]])
@@ -256,7 +261,7 @@ class MotionModel:
             cond,
             self.normalizer,
             opt,
-            mode="inpaint",
+            mode=mode,
             constraint=constraint)
             for _ in range(num_of_generation_per_window)]
         return torch.stack(state_pred_list)
@@ -570,8 +575,13 @@ class GaussianDiffusion(nn.Module):
                 x[1:, :half] = x[:-1, half:]
         return x
 
-    def inpaint_ddim_loop_guide_not_working(self, shape, cond, noise=None, constraint=None, return_diffusion=False, start_point=None):
+    @torch.no_grad()
+    def inpaint_ddim_loop_guide_xmean_uhlrich_ts(self, shape, cond, noise=None, constraint=None, return_diffusion=False, start_point=None):
         batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
+
+        guide_x_start_the_beginning_step = 1000
+        n_guided_steps = 5
+        guidance_lr = 0.02
 
         times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
         times = list(reversed(times.int().tolist()))
@@ -582,32 +592,23 @@ class GaussianDiffusion(nn.Module):
 
         mask = constraint["mask"].to(device)  # batch x horizon x channels
         value = constraint["value"].to(device)  # batch x horizon x channels
-        if constraint["value_diff_thd"] is not None:
-            value_diff_thd = constraint["value_diff_thd"].to(device)  # channels
-            value_diff_weight = constraint["value_diff_weight"].to(device)  # channels
+        value_diff_thd = constraint["value_diff_thd"].to(device)  # channels
+        value_diff_weight = constraint["value_diff_weight"].to(device)  # channels
 
         for time, time_next in tqdm(time_pairs, desc='sampling loop time step'):
             time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
 
-            if time > self.opt.guide_x_start_the_beginning_step:
-                with torch.no_grad():
-                    pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
-
-            else:
-
-                # Multiple guided steps
-                lr_ = 0.02
-                n_guided_steps = 3
+            if time <= guide_x_start_the_beginning_step:
                 x.requires_grad_()
-                for step_ in range(n_guided_steps):
-                    pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
-                    value_diff = torch.subtract(x_start, value * mask)
-                    loss = torch.relu(value_diff.abs() - value_diff_thd) * value_diff_weight * mask
-                    grad = torch.autograd.grad([loss.sum()], [x])[0]
-                    x = x - lr_ * grad
-                x_start = x_start - lr_ * grad
-                x.detach()
+                with torch.enable_grad():
+                    for step_ in range(n_guided_steps):
+                        pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
+                        value_diff = torch.subtract(x_start, value)
+                        loss = torch.relu(value_diff.abs() - value_diff_thd) * value_diff_weight
+                        grad = torch.autograd.grad([loss.sum()], [x])[0]
+                        x = x - guidance_lr * grad
 
+            pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
             if time_next < 0:
                 x = x_start
                 return x
@@ -630,7 +631,89 @@ class GaussianDiffusion(nn.Module):
         return x
 
     @torch.no_grad()
-    def inpaint_ddim_loop_guide_xmean(self, shape, cond, noise=None, constraint=None, return_diffusion=False, start_point=None):
+    def inpaint_ddim_loop_guided_run_faster(self, shape, cond, noise=None, constraint=None, return_diffusion=False, start_point=None):
+        def vertical_horizontal_loss(x, y, value_diff_thd, value_diff_weight):
+            m = x.size(1)
+            n = y.size(1)
+            d = x.size(2)
+            x = x.unsqueeze(2).expand(-1, m, n, d)
+            y = y.unsqueeze(1).expand(-1, m, n, d)
+            value_diff = (x - y).abs()
+            i_indices = torch.arange(m).view(-1, 1).to(x.device)
+            j_indices = torch.arange(n).view(1, -1).to(x.device)
+            pos_diff = ((i_indices - j_indices) * 0.4).abs().unsqueeze(-1).expand(value_diff.shape)
+            # pos_diff = (torch.relu(i_indices - j_indices - 5)).unsqueeze(-1).expand(value_diff.shape)
+
+            dist = torch.relu(value_diff+pos_diff - value_diff_thd) * value_diff_weight
+            loss = torch.min(dist, dim=1).values
+            return loss
+
+        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
+
+        guide_x_start_the_beginning_step = 1000
+        n_guided_steps = 5
+        guidance_lr = 0.02
+
+        times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
+        times = list(reversed(times.int().tolist()))
+        time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
+
+        x = torch.randn(shape, device=device)
+        cond = cond.to(device)
+
+        mask = constraint["mask"].to(device)  # batch x horizon x channels
+        value = constraint["value"].to(device)  # batch x horizon x channels
+        value_diff_thd = constraint["value_diff_thd"].to(device)  # channels
+        value_diff_weight = constraint["value_diff_weight"].to(device)  # channels
+
+        for time, time_next in tqdm(time_pairs, desc='sampling loop time step'):
+            time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
+
+            if time <= guide_x_start_the_beginning_step:
+                x.requires_grad_()
+
+                # if time < 50:
+                #     plt.figure()
+                #     dim_to_check = 3
+                #     plt.plot(value[0, :, dim_to_check].detach().cpu().numpy(), '-.')
+
+                with torch.enable_grad():
+                    for step_ in range(n_guided_steps):
+                        pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
+                        loss = vertical_horizontal_loss(x_start, value, value_diff_thd, value_diff_weight)
+                        grad = torch.autograd.grad([loss.sum()], [x])[0]
+                        x = x - guidance_lr * grad
+
+                # if time < 50:
+                #     plt.plot(x_start[0, :, dim_to_check].detach().cpu().numpy(), '--')
+                #     plt.plot(loss[0, :, dim_to_check].detach().cpu().numpy())
+                #     plt.grid()
+                #     plt.show()
+
+            pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
+            if time_next < 0:
+                x = x_start
+                return x
+
+            alpha = self.alphas_cumprod[time]
+            alpha_next = self.alphas_cumprod[time_next]
+
+            sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
+            c = (1 - alpha_next - sigma ** 2).sqrt()
+
+            noise = torch.randn_like(x)
+
+            x = x_start * alpha_next.sqrt() + \
+                c * pred_noise + \
+                sigma * noise
+
+            timesteps = torch.full((batch,), time_next, device=device, dtype=torch.long)
+            value_ = self.q_sample(value, timesteps) if (time > 0) else x
+            x = value_ * mask + (1.0 - mask) * x
+        return x
+
+    @torch.no_grad()
+    def inpaint_ddim_loop(self, shape, cond, noise=None, constraint=None, return_diffusion=False, start_point=None):
         batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
 
         times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
@@ -642,35 +725,9 @@ class GaussianDiffusion(nn.Module):
 
         mask = constraint["mask"].to(device)  # batch x horizon x channels
         value = constraint["value"].to(device)  # batch x horizon x channels
-        if constraint["value_diff_thd"] is not None:
-            value_diff_thd = constraint["value_diff_thd"].to(device)  # channels
-            value_diff_weight = constraint["value_diff_weight"].to(device)  # channels
 
         for time, time_next in tqdm(time_pairs, desc='sampling loop time step'):
             time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
-
-            if time > self.opt.guide_x_start_the_beginning_step:
-                pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
-
-            else:
-                lr_ = 0.01
-                n_guided_steps = 5
-                x.requires_grad_()
-
-                # plt.figure()
-                # plt.plot(value[0, :, 9].detach().cpu().numpy(), '-.')
-
-                with torch.enable_grad():
-                    for step_ in range(n_guided_steps):
-                        pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
-                        value_diff = torch.subtract(x_start, value)
-                        loss = torch.relu(value_diff.abs() - value_diff_thd) * value_diff_weight
-                        grad = torch.autograd.grad([loss.sum()], [x])[0]
-                        x = x - lr_ * grad
-
-                # plt.plot(x_start[0, :, 9].detach().cpu().numpy(), '--')
-                # plt.plot(x[0, :, 9].detach().cpu().numpy(), '--')
-                # plt.show()
 
             pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
             if time_next < 0:
@@ -815,52 +872,6 @@ class GaussianDiffusion(nn.Module):
             return x
 
     @torch.no_grad()
-    def repaint_ddpm_loop_not_working(
-            self,
-            shape,
-            cond,
-            noise=None,
-            constraint=None,
-            return_diffusion=False,
-            start_point=None,
-    ):
-        """ This is from the original repaint paper """
-        device = self.betas.device
-
-        batch_size = shape[0]
-        x = torch.randn(shape, device=device) if noise is None else noise.to(device)
-        cond = cond.to(device)
-        if return_diffusion:
-            diffusion = [x]
-
-        mask = constraint["mask"].to(device)  # batch x horizon x channels
-        value = constraint["value"].to(device)  # batch x horizon x channels
-
-        start_point = self.n_timestep if start_point is None else start_point
-        u_rounds = 10
-        for i in tqdm(reversed(range(0, start_point))):
-            for u_ in range(u_rounds):
-                timesteps = torch.full((batch_size,), i, device=device, dtype=torch.long)
-                x, _ = self.p_sample(x, cond, timesteps)
-                value_ = self.q_sample(value, timesteps - 1) if (i > 0) else x
-                x = value_ * mask + (1.0 - mask) * x
-
-                if i == 0:
-                    return x
-
-                if u_ < u_rounds - 1:
-                    # x = self.q_sample(x, timesteps)
-                    x = torch.sqrt(1 - self.betas[i-1]) * x + torch.sqrt(self.betas[i-1]) * torch.randn_like(x)
-
-                if return_diffusion:
-                    diffusion.append(x)
-
-        if return_diffusion:
-            return x, diffusion
-        else:
-            return x
-
-    @torch.no_grad()
     def long_inpaint_loop(
             self,
             shape,
@@ -938,7 +949,7 @@ class GaussianDiffusion(nn.Module):
         return sample
 
     def p_losses(self, x, cond, t):
-        x_start, model_offsets, _ = x
+        x_start, model_offsets, _, _, height_m = x
         noise = torch.randn_like(x_start)
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
 
@@ -963,12 +974,14 @@ class GaussianDiffusion(nn.Module):
         loss_drift = loss_drift * extract(self.p2_loss_weight, t, loss_drift.shape)
 
         osim_states_pred = self.normalizer.unnormalize(model_out)
-        osim_states_pred = inverse_convert_addb_state_to_model_input(osim_states_pred, self.opt.model_states_column_names,
-                                                                     self.opt.joints_3d, self.opt.osim_dof_columns, pos_vec=[0, 0, 0])
+        osim_states_pred = inverse_convert_addb_state_to_model_input(
+            osim_states_pred, self.opt.model_states_column_names, self.opt.joints_3d, self.opt.osim_dof_columns,
+            pos_vec=[0, 0, 0], height_m=height_m)
         _, joint_locations_pred, _, _ = forward_kinematics(osim_states_pred, model_offsets)
         osim_states_true = self.normalizer.unnormalize(target)
-        osim_states_true = inverse_convert_addb_state_to_model_input(osim_states_true, self.opt.model_states_column_names,
-                                                                     self.opt.joints_3d, self.opt.osim_dof_columns, pos_vec=[0, 0, 0])
+        osim_states_true = inverse_convert_addb_state_to_model_input(
+            osim_states_true, self.opt.model_states_column_names, self.opt.joints_3d, self.opt.osim_dof_columns,
+            pos_vec=[0, 0, 0], height_m=height_m)
         foot_locations_pred, joint_locations_true, _, _ = forward_kinematics(osim_states_true, model_offsets)
 
         loss_fk = self.loss_fn(joint_locations_pred, joint_locations_true, reduction="none")
@@ -1027,7 +1040,11 @@ class GaussianDiffusion(nn.Module):
         torch.manual_seed(torch.randint(0, 2 ** 32, (1,)).item())
         if isinstance(shape, tuple):
             if mode == "inpaint":
-                func_class = self.inpaint_ddim_loop_guide_xmean
+                func_class = self.inpaint_ddim_loop
+            elif mode == "guided_uhlrich_ts":
+                func_class = self.inpaint_ddim_loop_guide_xmean_uhlrich_ts
+            elif mode == "guided_run_faster":
+                func_class = self.inpaint_ddim_loop_guided_run_faster
             elif mode == "normal":
                 func_class = self.ddim_sample
             elif mode == "long":

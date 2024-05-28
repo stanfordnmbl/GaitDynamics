@@ -80,14 +80,34 @@ def inverse_norm_cops(skel, states, opt, sub_mass, height_m):
 
 
 def norm_cops(skel, states, opt, sub_mass, height_m):
+    states = torch.from_numpy(states)
     poses = states[:, opt.kinematic_osim_col_loc]
     forces = states[:, opt.grf_osim_col_loc]
     cops = states[:, opt.cop_osim_col_loc]
 
-    foot_loc = get_multi_body_loc_using_nimble(('calcn_r', 'calcn_l'), skel, poses)
+    heel_centers = torch.from_numpy(get_multi_body_loc_using_nimble(('calcn_r', 'calcn_l'), skel, poses)).to(states.dtype)
+    toe_centers = torch.from_numpy(get_multi_body_loc_using_nimble(('toes_r', 'toes_l'), skel, poses)).to(states.dtype)
     for i_plate in range(2):
         force_v = forces[:, 3*i_plate:3*(i_plate+1)]
-        vector = (cops - foot_loc)[:, 3*i_plate:3*(i_plate+1)]
+
+        cop_to_toe = (toe_centers - cops)[:, 3*i_plate:3*(i_plate+1)]
+        cop_to_heel = (heel_centers - cops)[:, 3*i_plate:3*(i_plate+1)]
+
+        distance_to_toe = torch.norm(cop_to_toe, dim=-1)
+        distance_to_heel = torch.norm(cop_to_heel, dim=-1)
+        stance_phase = force_v[:, 1] > 0.5
+        use_toe = distance_to_toe < distance_to_heel
+
+        cop_to_foot = torch.zeros_like(cop_to_toe, dtype=cop_to_toe.dtype)
+        cop_to_foot[use_toe] = cop_to_toe[use_toe]
+        cop_to_foot[~use_toe] = cop_to_heel[~use_toe]
+
+        cop_to_foot[:, [0, 2]] = torch.clip(cop_to_foot[:, [0, 2]], -0.1, 0.1)
+
+        cops[use_toe&stance_phase, 3*i_plate:3*(i_plate+1)] = toe_centers[use_toe&stance_phase, 3*i_plate:3*(i_plate+1)] - cop_to_foot[use_toe&stance_phase]
+        cops[(~use_toe)&stance_phase, 3*i_plate:3*(i_plate+1)] = heel_centers[(~use_toe)&stance_phase, 3*i_plate:3*(i_plate+1)] - cop_to_foot[(~use_toe)&stance_phase]
+
+        vector = (cops - heel_centers)[:, 3*i_plate:3*(i_plate+1)]
         normed_vector = vector * force_v[:, 1:2] / height_m
         states[:, opt.cop_osim_col_loc[3*i_plate:3*(i_plate+1)]] = normed_vector.to(states.dtype)
     return states
@@ -124,12 +144,13 @@ def convert_addb_state_to_model_input(pose_df, joints_3d, sampling_fre):
     return pose_vel_df, pos_vec
 
 
-def inverse_convert_addb_state_to_model_input(model_states, model_states_column_names, joints_3d, osim_dof_columns, pos_vec, sampling_fre=100):
+def inverse_convert_addb_state_to_model_input(model_states, model_states_column_names, joints_3d, osim_dof_columns, pos_vec, height_m, sampling_fre=100):
     model_states_dict = {col: model_states[..., i] for i, col in enumerate(model_states_column_names) if
                          col in osim_dof_columns}
 
     for i_col, col in enumerate(['pelvis_tx', 'pelvis_ty', 'pelvis_tz']):
         model_states_dict[col] = torch.cumsum(model_states_dict[col], dim=-1) / sampling_fre
+    model_states_dict['pelvis_ty'] = model_states_dict['pelvis_ty'] * height_m.unsqueeze(-1).expand(model_states_dict['pelvis_ty'].shape)
 
     # convert 6v to euler
     for joint_name, joints_with_3_dof in joints_3d.items():
@@ -171,7 +192,9 @@ def osim_states_to_knee_moments_in_percent_BW_BH(osim_states, skel, opt, height_
 
 
 def align_moving_direction(poses, column_names):
-    pose_clone = torch.from_numpy(poses).clone().float()
+    if isinstance(poses, np.ndarray):
+        poses = torch.from_numpy(poses)
+    pose_clone = poses.clone().float()
     pelvis_orientation_col_loc = [column_names.index(col) for col in JOINTS_3D_ALL['pelvis']]
     p_pos_col_loc = [column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
     r_grf_col_loc = [column_names.index(col) for col in ['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']]

@@ -83,7 +83,7 @@ class DatasetOpenCap(MotionDataset):
             probably_missing = [False] * converted_states.shape[0]
             self.trials.append(TrialData(
                 converted_states, probably_missing, model_offsets, [], subject_path.split('/')[-1][:-4],
-                i_sub, 0., unscaledSkeletonMass, dset_name, rot_mat, pos_vec, poses.shape[0], mtp_r_vel, mtp_l_vel))
+                i_sub, skel.getHeight(np.zeros(skel.getNumDofs())), unscaledSkeletonMass, dset_name, rot_mat, pos_vec, poses.shape[0], mtp_r_vel, mtp_l_vel))
             self.dset_set.add(dset_name)
 
             print('Current trial num: {}'.format(len(self.trials)))
@@ -127,14 +127,15 @@ def loop_all(opt):
     state_pred_list = [[] for _ in range(skel_num-1)]
     for i_win in range(0, len(windows), opt.batch_size_inference):
 
-        state_true = torch.stack([win[0] for win in windows[i_win:i_win+opt.batch_size_inference]])
-        masks = torch.stack([win[4] for win in windows[i_win:i_win+opt.batch_size_inference]])
+        state_true = torch.stack([win.pose for win in windows[i_win:i_win+opt.batch_size_inference]])
+        masks = torch.stack([win.mask for win in windows[i_win:i_win+opt.batch_size_inference]])
+        height_m_tensor = torch.tensor([win.height_m for win in windows[i_win:i_win+opt.batch_size_inference]]).unsqueeze(-1)
 
         state_pred_list_batch = model.eval_loop(opt, state_true, masks, num_of_generation_per_window=skel_num-1)
-        pos_vec = np.array([trials[windows[i_win_vec][2]].pos_vec_for_pos_alignment
+        pos_vec = np.array([trials[windows[i_win_vec].trial_id].pos_vec_for_pos_alignment
                             for i_win_vec in range(len(windows[i_win:i_win+opt.batch_size_inference]))])
         state_pred_list_batch = inverse_convert_addb_state_to_model_input(
-            state_pred_list_batch, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, pos_vec)
+            state_pred_list_batch, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, pos_vec, height_m_tensor)
         for i_skel in range(skel_num-1):
             state_pred_list[i_skel] += state_pred_list_batch[i_skel]
 
@@ -150,15 +151,15 @@ def loop_all(opt):
 
     results_true, results_pred, scores = {}, {}, {}
     for win, state_pred_mean, state_pred_std in zip(windows, state_pred_list_averaged, state_pred_list_std):
-        trial = trials[win[2]]
+        trial = trials[win.trial_id]
         if trial.sub_and_trial_name not in results_true.keys():
             results_true.update({trial.sub_and_trial_name: []})
             results_pred.update({trial.sub_and_trial_name: []})
 
         true_val = inverse_convert_addb_state_to_model_input(
-            model.normalizer.unnormalize(win[0].unsqueeze(0)), opt.model_states_column_names,
-            opt.joints_3d, opt.osim_dof_columns, trial.pos_vec_for_pos_alignment).squeeze().numpy()
-        mask = win[4].squeeze().numpy()
+            model.normalizer.unnormalize(win.pose.unsqueeze(0)), opt.model_states_column_names,
+            opt.joints_3d, opt.osim_dof_columns, trial.pos_vec_for_pos_alignment, win.height_m).squeeze().numpy()
+        mask = win.mask.squeeze().numpy()
         true_val = true_val * mask[:, 0].repeat(35).reshape((150, -1))
         state_pred_mean = state_pred_mean * mask[:, 0].repeat(35).reshape((150, -1))
         results_true[trial.sub_and_trial_name].append(true_val)
@@ -190,7 +191,7 @@ def loop_all(opt):
 if __name__ == "__main__":
     skel_num = 3
     opt = parse_opt()
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'5328'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'4995'}.pt"
     loop_all(opt)
 
 
