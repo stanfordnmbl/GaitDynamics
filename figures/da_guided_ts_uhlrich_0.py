@@ -77,12 +77,12 @@ def loop_all(opt):
 
             state_manipulated = torch.stack([win.pose for win in windows_manipulated[i_win:i_win+opt.batch_size_inference]])
             masks = torch.stack([win.mask for win in windows_manipulated[i_win:i_win+opt.batch_size_inference]])
-            height_m_tensor = torch.tensor([win.height_m for win in windows_manipulated[i_win:i_win+opt.batch_size_inference]]).unsqueeze(-1)
+            height_m_tensor = torch.tensor([win.height_m for win in windows_manipulated[i_win:i_win+opt.batch_size_inference]])
 
             value_diff_weight = masks.sum(dim=2).bool().float().unsqueeze(-1).repeat([1, 1, masks.shape[2]])
             value_diff_thd = torch.zeros([len(opt.model_states_column_names)])
-            value_diff_thd[:] = 4         # large value for no constraint
-            value_diff_thd[test_dataset_mani.manipulated_col_loc] = 0
+            value_diff_thd[:] = 2         # large value for no constraint
+            value_diff_thd[test_dataset_mani.manipulated_col_loc] = 999
 
             state_pred_list_batch = model.eval_loop(opt, state_manipulated, masks, value_diff_thd, value_diff_weight,
                                                     num_of_generation_per_window=skel_num - 1, mode='guided_uhlrich_ts')
@@ -99,7 +99,7 @@ def loop_all(opt):
             trial_of_this_win = test_dataset.trials[win.trial_id]
             true_val = inverse_convert_addb_state_to_model_input(
                 model.normalizer.unnormalize(win.pose.unsqueeze(0)), opt.model_states_column_names,
-                opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], win.height_m).squeeze().numpy()
+                opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], torch.tensor(win.height_m)).squeeze().numpy()
 
             dset_sub_name = trial_of_this_win.dset_name + '_' + trial_of_this_win.sub_and_trial_name.split('__')[0]
             test_name = f'_{x_times_lumbar_bending}'
@@ -138,7 +138,7 @@ def loop_all(opt):
             weight_kg_all[test_name] = trial_of_this_win.weight_kg
 
             # name_states_dict = {'true': true_val, 'pred': state_pred.detach().numpy()}
-            # show_skeletons(opt, name_states_dict, gui, [skel_0, skel_1])
+            # show_skeletons(opt, name_states_dict, gui, skel_0)
 
     pickle.dump([sub_bl_true, sub_bl_pred, None, None, opt.osim_dof_columns + moment_names,
                  None, height_m_all, weight_kg_all], open(f"results/da_guided_baseline.pkl", "wb"))

@@ -10,7 +10,7 @@ def parse_opt():
     parser.add_argument("--exp_name", default="ty_height_norm", help="save to project/name")
     parser.add_argument("--with_arm", type=bool, default=False, help="whether osim model has arm DoFs")
     parser.add_argument("--with_kinematics_vel", type=bool, default=True, help="whether to include 1st derivative of kinematics")
-    parser.add_argument("--log_with_wandb", type=bool, default=True, help="log with wandb")
+    parser.add_argument("--log_with_wandb", type=bool, default=machine_specific_config['log_with_wandb'], help="log with wandb")
     parser.add_argument("--epochs", type=int, default=7000)
     parser.add_argument("--target_sampling_rate", type=int, default=100)
     parser.add_argument("--window_len", type=int, default=150)

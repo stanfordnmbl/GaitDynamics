@@ -1,4 +1,3 @@
-from data.addb_dataset import MotionDataset
 import numpy as np
 from functools import partial
 import torch.nn.functional as F
@@ -9,6 +8,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from pathlib import Path
 from data.preprocess import increment_path
+from data.quaternion import euler_from_6v, euler_to_6v
 from model.adan import Adan
 from model.dance_decoder import DanceDecoder
 import os
@@ -631,6 +631,188 @@ class GaussianDiffusion(nn.Module):
         return x
 
     @torch.no_grad()
+    def inpaint_ddim_run_faster(self, shape, cond, noise=None, constraint=None, return_diffusion=False, start_point=None):
+        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
+
+        # guide_x_start_the_beginning_step = 1000
+        # n_guided_steps = 5
+        # guidance_lr = 0.02
+
+        times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
+        times = list(reversed(times.int().tolist()))
+        time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
+
+        x = torch.randn(shape, device=device)
+        cond = cond.to(device)
+
+        mask = constraint["mask"].to(device)  # batch x horizon x channels
+        value = constraint["value"].to(device)  # batch x horizon x channels
+        # value_diff_thd = constraint["value_diff_thd"].to(device)  # channels
+        # value_diff_weight = constraint["value_diff_weight"].to(device)  # channels
+
+        value.requires_grad_()
+        # x.requires_grad_()
+        with torch.enable_grad():
+            for time, time_next in tqdm(time_pairs, desc='sampling loop time step'):
+                time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
+
+                # if time <= guide_x_start_the_beginning_step:
+                #     x.requires_grad_()
+                #     with torch.enable_grad():
+                #         for step_ in range(n_guided_steps):
+                #             pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
+                #             value_diff = torch.subtract(x_start, value)
+                #             loss = torch.relu(value_diff.abs() - value_diff_thd) * value_diff_weight
+                #             grad = torch.autograd.grad([loss.sum()], [x])[0]
+                #             x = x - guidance_lr * grad
+
+                pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
+                if time_next < 0:
+                    x = x_start
+                    break
+
+                alpha = self.alphas_cumprod[time]
+                alpha_next = self.alphas_cumprod[time_next]
+
+                sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
+                c = (1 - alpha_next - sigma ** 2).sqrt()
+
+                noise = torch.randn_like(x)
+
+                x = x_start * alpha_next.sqrt() + \
+                    c * pred_noise + \
+                    sigma * noise
+
+                timesteps = torch.full((batch,), time_next, device=device, dtype=torch.long)
+                value_ = self.q_sample(value, timesteps) if (time > 0) else x
+                x = value_ * mask + (1.0 - mask) * x
+
+            tx_col_loc = self.opt.model_states_column_names.index('pelvis_tx')
+            knee_r_col_loc = self.opt.model_states_column_names.index('knee_angle_r')
+            ankle_r_col_loc = self.opt.model_states_column_names.index('ankle_angle_r')
+            vel = x[0, :, tx_col_loc]
+            grad_to_x = torch.autograd.grad([vel.sum()], [value], retain_graph=True)[0]
+            x_times_grad = 2
+            plt.figure()
+            plt.plot(value[0, :, knee_r_col_loc].detach().cpu().numpy(), color='gray')
+            plt.plot((x[0, :, knee_r_col_loc] + x_times_grad * grad_to_x[0, :, knee_r_col_loc]).detach().cpu().numpy(), '--', color='C0')
+            plt.plot(value[0, :, ankle_r_col_loc].detach().cpu().numpy(), color='gray')
+            plt.plot((x[0, :, ankle_r_col_loc] + x_times_grad * grad_to_x[0, :, ankle_r_col_loc]).detach().cpu().numpy(), '--', color='C1')
+            plt.plot(value[0, :, tx_col_loc].detach().cpu().numpy(), color='gray')
+            plt.plot(x[0, :, tx_col_loc].detach().cpu().numpy(), '--', color='C2')
+            plt.show()
+        return x + x_times_grad * grad_to_x
+
+    @torch.no_grad()
+    def inpaint_ddpm_loop_run_faster_hip_euler_not_working(
+            self,
+            shape,
+            cond,
+            noise=None,
+            constraint=None,
+            return_diffusion=False,
+            start_point=None,
+    ):
+        device = self.betas.device
+        batch_size = shape[0]
+        assert batch_size == 1
+
+        tx_col_loc = self.opt.model_states_column_names.index('pelvis_tx')
+
+        value = constraint["value"].to(device)  # batch x horizon x channels
+        timesteps = torch.full((batch_size,), 1, device=device, dtype=torch.long)
+
+        x = self.q_sample(value, timesteps - 1)
+        x.requires_grad_()
+        with torch.enable_grad():
+            x_new, _ = self.p_sample(x, cond, timesteps)
+            vel = x_new[0, :, tx_col_loc]
+            grad_to_x = torch.autograd.grad([vel.sum()], [x], retain_graph=True)[0]
+            x_times_grad = 50
+
+            # hip_flexion_r_col_loc = 3
+            knee_r_col_loc = self.opt.model_states_column_names.index('knee_angle_r')
+            ankle_r_col_loc = self.opt.model_states_column_names.index('ankle_angle_r')
+            hip_r_col_loc = self.opt.model_states_column_names.index('hip_flexion_r')
+            plt.figure()
+            # plt.plot(x[0, :, knee_r_col_loc].detach().cpu().numpy(), color='C0')
+            plt.plot(value[0, :, knee_r_col_loc].detach().cpu().numpy(), color='gray')
+            plt.plot((x[0, :, knee_r_col_loc] + x_times_grad * grad_to_x[0, :, knee_r_col_loc]).detach().cpu().numpy(), '--', color='C0')
+            # plt.plot(x[0, :, ankle_r_col_loc].detach().cpu().numpy(), color='C1')
+            plt.plot(value[0, :, ankle_r_col_loc].detach().cpu().numpy(), color='gray')
+            plt.plot((x[0, :, ankle_r_col_loc] + x_times_grad * grad_to_x[0, :, ankle_r_col_loc]).detach().cpu().numpy(), '--', color='C1')
+            # plt.plot(x[0, :, hip_r_col_loc].detach().cpu().numpy(), color='C2')
+            plt.plot(value[0, :, hip_r_col_loc].detach().cpu().numpy(), color='gray')
+            plt.plot((x[0, :, hip_r_col_loc] + x_times_grad * grad_to_x[0, :, hip_r_col_loc]).detach().cpu().numpy(), '--', color='C2')
+            plt.show()
+
+            x_manipulated = value + x_times_grad * grad_to_x
+            return x_manipulated
+
+    @torch.no_grad()
+    def inpaint_ddpm_loop_hip_6v(
+            self,
+            shape,
+            cond,
+            noise=None,
+            constraint=None,
+            return_diffusion=False,
+            start_point=None,
+    ):
+        device = self.betas.device
+        batch_size = shape[0]
+        assert batch_size == 1
+
+        tx_col_loc = self.opt.model_states_column_names.index('pelvis_tx')
+
+        value = constraint["value"].to(device)  # batch x horizon x channels
+        timesteps = torch.full((batch_size,), 1, device=device, dtype=torch.long)
+        x = self.q_sample(value, timesteps - 1)
+
+        x_unnormed = self.normalizer.unnormalize(x)
+        # convert 6v to euler
+        joint_euler, joint_euler_col_loc = [], []
+        for joint_name, joints_with_3_dof in self.opt.joints_3d.items():
+            joint_name_6v = [joint_name + '_' + str(i) for i in range(6)]
+            index_ = [self.opt.model_states_column_names.index(joint_name_6v[i]) for i in range(6)]
+            joint_euler.append(euler_from_6v(x_unnormed[..., index_], "ZXY"))
+            joint_euler_col_loc.append(index_)
+        joint_euler = torch.stack(joint_euler, dim=-1)
+
+        joint_euler.requires_grad_()
+        with torch.enable_grad():
+            x_temp = torch.zeros_like(x[0])
+            for i_joint in range(0, int(joint_euler.shape[-1])):
+                joint_6v = euler_to_6v(joint_euler[..., i_joint], "ZXY")
+                x_temp[..., joint_euler_col_loc[i_joint]] = joint_6v
+
+            # x_temp = self.normalizer.scaler.transform(x_temp)
+            x_temp = self.normalizer.normalize(x_temp)
+            for i_joint in range(0, int(joint_euler.shape[-1])):
+                x[..., joint_euler_col_loc[i_joint]] = x_temp[..., joint_euler_col_loc[i_joint]]
+            x.requires_grad_()
+
+            x_new, _ = self.p_sample(x, cond, timesteps)
+            vel = x_new[0, :, tx_col_loc]
+            grad_to_x = torch.autograd.grad([vel.sum()], [x], retain_graph=True)[0]
+            grad_to_joint_euler = torch.autograd.grad([vel.sum()], [joint_euler], retain_graph=True)[0]
+            x_times_grad = 40
+
+            # hip_flexion_r_col_loc = 3
+            knee_r_col_loc = self.opt.model_states_column_names.index('knee_angle_r')
+            ankle_r_col_loc = self.opt.model_states_column_names.index('ankle_angle_r')
+            plt.figure()
+            plt.plot(x[0, :, knee_r_col_loc].detach().cpu().numpy(), color='C0')
+            # plt.plot(value[0, :, knee_r_col_loc].detach().cpu().numpy(), '-.', color='C0')
+            plt.plot((x[0, :, knee_r_col_loc] + x_times_grad * grad_to_x[0, :, knee_r_col_loc]).detach().cpu().numpy(), '--', color='C0')
+            plt.plot(x[0, :, ankle_r_col_loc].detach().cpu().numpy(), color='C1')
+            # plt.plot(value[0, :, ankle_r_col_loc].detach().cpu().numpy(), '-.', color='C1')
+            plt.plot((x[0, :, ankle_r_col_loc] + x_times_grad * grad_to_x[0, :, ankle_r_col_loc]).detach().cpu().numpy(), '--', color='C1')
+            plt.plot(joint_euler[0, :, 0, 1].detach().cpu().numpy() * 10, color='C2')
+            plt.plot((joint_euler[0, :, 0, 1] * 10 + grad_to_joint_euler[0, :, 0, 1]).detach().cpu().numpy(), '--', color='C2')
+            plt.show()
+
+    @torch.no_grad()
     def inpaint_ddim_loop_guided_run_faster(self, shape, cond, noise=None, constraint=None, return_diffusion=False, start_point=None):
         def vertical_horizontal_loss(x, y, value_diff_thd, value_diff_weight):
             m = x.size(1)
@@ -750,86 +932,6 @@ class GaussianDiffusion(nn.Module):
             value_ = self.q_sample(value, timesteps) if (time > 0) else x
             x = value_ * mask + (1.0 - mask) * x
         return x
-
-    @torch.no_grad()
-    def repaint_ddim_loop_convergence_issue(self, shape, cond, noise=None, constraint=None, return_diffusion=False, start_point=None):
-        """ Implemented the algorithm described in this paper: https://arxiv.org/pdf/2304.03760.pdf """
-        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
-
-        times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
-        times = list(reversed(times.int().tolist()))
-        time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
-
-        x_time = torch.randn(shape, device=device)
-        cond = cond.to(device)
-
-        mask = constraint["mask"].to(device)  # batch x horizon x channels
-        value = constraint["value"].to(device)  # batch x horizon x channels
-
-        for time, time_next in tqdm(time_pairs, desc='sampling loop time step'):
-            time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
-
-            u_rounds = 5
-            for u_ in range(u_rounds):
-
-                pred_noise, x_start, *_ = self.model_predictions(x_time, cond, time_cond, clip_x_start=self.clip_denoised)
-
-                x_start = value * mask + (1.0 - mask) * x_start
-
-                if u_ < u_rounds - 1:
-                    x_time = self.q_sample(x_start, time_cond)
-
-            alpha_next = self.alphas_cumprod[time_next]
-            x_time_next = x_start * alpha_next.sqrt() + (1 - alpha_next).sqrt() * pred_noise
-            x_time = x_time_next
-
-        return x_start
-
-    @torch.no_grad()
-    def inpaint_ddim_loop_not_working_even_worse(self, shape, cond, noise=None, constraint=None, return_diffusion=False, start_point=None):
-        """
-        Tried to implement the ddim repaint described in this paper, but failed: https://arxiv.org/pdf/2401.04747.pdf
-        """
-        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
-
-        times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
-        times = list(reversed(times.int().tolist()))
-        time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
-
-        x_time = torch.randn(shape, device=device)
-        cond = cond.to(device)
-
-        mask = constraint["mask"].to(device)  # batch x horizon x channels
-        value = constraint["value"].to(device)  # batch x horizon x channels
-
-        plt.figure()
-
-        for time, time_next in tqdm(time_pairs, desc='sampling loop time step'):
-            time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
-
-            u_rounds = 10
-            for u_ in range(u_rounds):
-
-                if time_next > 0:
-                    timesteps = torch.full((batch,), time_next, device=device, dtype=torch.long)
-                    value_ = self.q_sample(value, timesteps)
-                else:
-                    value_ = value
-
-                pred_noise, x_start, *_ = self.model_predictions(x_time, cond, time_cond, clip_x_start=self.clip_denoised)
-
-                if time_next < 0:
-                    x = x_start
-                    return x
-
-                alpha_next = self.alphas_cumprod[time_next]
-                x_time_next = x_start * alpha_next.sqrt() + (1 - alpha_next).sqrt() * pred_noise
-                x_time_next = value_ * mask + (1.0 - mask) * x_time_next
-                if u_ != u_rounds - 1:
-                    x_time = torch.sqrt(1 - self.betas[time]) * x_time_next + torch.sqrt(self.betas[time]) * torch.randn_like(x_time)
-                else:
-                    x_time = x_time_next
-        return x_start
 
     @torch.no_grad()
     def inpaint_ddpm_loop(
@@ -1045,6 +1147,8 @@ class GaussianDiffusion(nn.Module):
                 func_class = self.inpaint_ddim_loop_guide_xmean_uhlrich_ts
             elif mode == "guided_run_faster":
                 func_class = self.inpaint_ddim_loop_guided_run_faster
+            elif mode == "run_faster":
+                func_class = self.inpaint_ddim_run_faster
             elif mode == "normal":
                 func_class = self.ddim_sample
             elif mode == "long":

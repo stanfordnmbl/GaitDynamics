@@ -129,7 +129,7 @@ def loop_all(opt):
 
         state_true = torch.stack([win.pose for win in windows[i_win:i_win+opt.batch_size_inference]])
         masks = torch.stack([win.mask for win in windows[i_win:i_win+opt.batch_size_inference]])
-        height_m_tensor = torch.tensor([win.height_m for win in windows[i_win:i_win+opt.batch_size_inference]]).unsqueeze(-1)
+        height_m_tensor = torch.tensor([win.height_m for win in windows[i_win:i_win+opt.batch_size_inference]])
 
         state_pred_list_batch = model.eval_loop(opt, state_true, masks, num_of_generation_per_window=skel_num-1)
         pos_vec = np.array([trials[windows[i_win_vec].trial_id].pos_vec_for_pos_alignment
@@ -149,35 +149,41 @@ def loop_all(opt):
         state_pred_list_averaged.append(averaged)
         state_pred_list_std.append(std)
 
-    results_true, results_pred, scores = {}, {}, {}
+    results_true, results_pred, results_pred_std = {}, {}, {}
     for win, state_pred_mean, state_pred_std in zip(windows, state_pred_list_averaged, state_pred_list_std):
         trial = trials[win.trial_id]
         if trial.sub_and_trial_name not in results_true.keys():
             results_true.update({trial.sub_and_trial_name: []})
             results_pred.update({trial.sub_and_trial_name: []})
+            results_pred_std.update({trial.sub_and_trial_name: []})
 
         true_val = inverse_convert_addb_state_to_model_input(
             model.normalizer.unnormalize(win.pose.unsqueeze(0)), opt.model_states_column_names,
-            opt.joints_3d, opt.osim_dof_columns, trial.pos_vec_for_pos_alignment, win.height_m).squeeze().numpy()
+            opt.joints_3d, opt.osim_dof_columns, trial.pos_vec_for_pos_alignment, torch.tensor(win.height_m)).squeeze().numpy()
         mask = win.mask.squeeze().numpy()
         true_val = true_val * mask[:, 0].repeat(35).reshape((150, -1))
         state_pred_mean = state_pred_mean * mask[:, 0].repeat(35).reshape((150, -1))
+        state_pred_std = state_pred_std * mask[:, 0].repeat(35).reshape((150, -1))
         results_true[trial.sub_and_trial_name].append(true_val)
         results_pred[trial.sub_and_trial_name].append(state_pred_mean)
+        results_pred_std[trial.sub_and_trial_name].append(state_pred_std)
 
     params_of_interest = ['calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz']
     params_of_interest_col_loc = [opt.osim_dof_columns.index(col) for col in params_of_interest]
-    true_all, pred_all = [], []
+    true_all, pred_all, pred_std_all = [], [], []
     for sub_and_trial in results_true.keys():
         results_true[sub_and_trial] = np.concatenate(results_true[sub_and_trial], axis=0)
         results_pred[sub_and_trial] = np.concatenate(results_pred[sub_and_trial], axis=0)
+        results_pred_std[sub_and_trial] = np.concatenate(results_pred_std[sub_and_trial], axis=0)
 
         stance_phase = np.abs(results_true[sub_and_trial][:, params_of_interest_col_loc[0]]) > 1e-5
         true_all.append(results_true[sub_and_trial][stance_phase])
         pred_all.append(results_pred[sub_and_trial][stance_phase])
+        pred_std_all.append(results_pred_std[sub_and_trial][stance_phase])
 
     true_all = np.concatenate(true_all, axis=0)
     pred_all = np.concatenate(pred_all, axis=0)
+    pred_std_all = np.concatenate(pred_std_all, axis=0)
     for i_param, param in enumerate(params_of_interest):
         idx = opt.osim_dof_columns.index(param)
         scores = get_scores(true_all[:, idx:idx+1], pred_all[:, idx:idx+1], [param], None)
@@ -185,13 +191,14 @@ def loop_all(opt):
         plt.figure()
         plt.plot(true_all[:, idx:idx+1], label='True')
         plt.plot(pred_all[:, idx:idx+1], label='Pred')
+        plt.fill_between(range(len(true_all)), pred_all[:, idx] - pred_std_all[:, idx], pred_all[:, idx] + pred_std_all[:, idx], color='C1', alpha=0.25)
     plt.show()
 
 
 if __name__ == "__main__":
-    skel_num = 3
+    skel_num = 5
     opt = parse_opt()
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'4995'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'5994'}.pt"
     loop_all(opt)
 
 

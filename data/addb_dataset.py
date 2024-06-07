@@ -117,12 +117,6 @@ class MotionDataset(Dataset):
         for i in range(self.trial_num):
             self.trials[i].converted_pose = self.normalizer.normalize(self.trials[i].converted_pose).clone().detach().float()
 
-        # # [debug]
-        # data_concat = torch.cat([trial_.converted_pose for trial_ in self.trials], dim=0)
-        # for i_col, col_name in enumerate(opt.model_states_column_names):
-        #     print(f'{col_name}, mean: {data_concat[:, i_col].mean()}, std: {data_concat[:, i_col].std()},'
-        #           f' max: {data_concat[:, i_col].max()}, min: {data_concat[:, i_col].min()}')
-
     def guess_vel_and_replace_txtytz(self):
         def get_vel_and_reset(r_foot_vel_buffer_, l_foot_vel_buffer_, vel_from_t_, i_trial):
             r_foot_vel = np.concatenate(r_foot_vel_buffer_, axis=0)
@@ -358,6 +352,8 @@ class MotionDataset(Dataset):
             sub_mass = subject.getMassKg()
             height_m = subject.getHeightM()
             contact_bodies = subject.getGroundForceBodies()
+            if contact_bodies != ['calcn_r', 'calcn_l']:
+                continue
             print(f'Loading subject: {subject_path}')
 
             subject_name = subject_path.split('/')[-1].split('.')[0]
@@ -396,13 +392,15 @@ class MotionDataset(Dataset):
                 forces = np.array(forces)
                 cops = np.array([frame.groundContactCenterOfPressure for frame in first_passes])
                 # This is to compensate an AddBiomechanics bug that first GRF is always 0.
+                if len(poses) < 10:
+                    continue
                 if (forces[0] == 0).all() or (cops[0] == 0).all():
                     poses = poses[1:]
                     forces = forces[1:]
                     cops = cops[1:]
                     probably_missing = probably_missing[1:]
                 if (forces[-1] == 0).all() or (cops[-1] == 0).all():
-                    print(f'Compensating an AddB bug, {subject_name}, {trial_id} has 0 GRF at the first frame.', end='')
+                    # print(f'Compensating an AddB bug, {subject_name}, {trial_id} has 0 GRF at the first frame.', end='')
                     poses = poses[:-1]
                     forces = forces[:-1]
                     cops = cops[:-1]
@@ -421,8 +419,8 @@ class MotionDataset(Dataset):
                     probably_missing = [False] * len(probably_missing)
 
                 pelvis_ty_col_loc = opt.osim_dof_columns.index('pelvis_ty')
-                states[:, pelvis_ty_col_loc] = states[:, pelvis_ty_col_loc] / height_m
                 states = norm_cops(skel, states, opt, sub_mass, height_m)
+                states[:, pelvis_ty_col_loc] = states[:, pelvis_ty_col_loc] / height_m
                 if self.align_moving_direction_flag:
                     states, rot_mat = align_moving_direction(states, opt.osim_dof_columns)
                 else:

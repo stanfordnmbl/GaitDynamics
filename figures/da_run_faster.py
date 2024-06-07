@@ -17,7 +17,7 @@ import pickle
 class MotionDatasetManipulated(MotionDataset):
     def customized_param_manipulation(self, trial_df, mtp_r_vel, mtp_l_vel):
         # vel increase
-        ratio = 1.05
+        ratio = 1.1
         trial_df['pelvis_tx'] = trial_df['pelvis_tx'] * ratio
         mtp_r_vel[:, 0] = mtp_r_vel[:, 0] * ratio
         mtp_l_vel[:, 0] = mtp_l_vel[:, 0] * ratio
@@ -34,7 +34,7 @@ def loop_all(opt):
 
     model = MotionModel(opt, repr_dim)
 
-    max_trial_num = 1
+    max_trial_num = 99
     trial_start_num = 0
 
     test_dataset_mani = MotionDatasetManipulated(
@@ -83,14 +83,14 @@ def loop_all(opt):
         state_manipulated = torch.stack(state_manipulated)
 
         masks = torch.stack([win.mask for win in windows_manipulated_exp[i_win:i_win+opt.batch_size_inference]])
-        height_m_tensor = torch.tensor([win.height_m for win in windows_manipulated_exp[i_win:i_win+opt.batch_size_inference]]).unsqueeze(-1)
+        height_m_tensor = torch.tensor([win.height_m for win in windows_manipulated_exp[i_win:i_win+opt.batch_size_inference]])
 
         value_diff_weight = torch.ones([len(opt.model_states_column_names)])
         value_diff_weight[test_dataset_mani.do_not_follow_col_loc] = 0
 
         value_diff_thd = torch.zeros([len(opt.model_states_column_names)])
         value_diff_thd[:] = 1         # large value for no constraint
-        value_diff_thd[test_dataset_mani.manipulated_col_loc] = 0
+        value_diff_thd[test_dataset_mani.manipulated_col_loc] = 999
 
         state_pred_list_batch = model.eval_loop(opt, state_manipulated, masks, value_diff_thd, value_diff_weight,
                                                 num_of_generation_per_window=skel_num - 1, mode='guided_run_faster')
@@ -106,10 +106,10 @@ def loop_all(opt):
         trial_of_this_win = test_dataset.trials[win_original_exp.trial_id]
         win_original_exp = inverse_convert_addb_state_to_model_input(
             model.normalizer.unnormalize(win_original_exp.pose.unsqueeze(0)), opt.model_states_column_names,
-            opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], win_original_exp.height_m).squeeze().numpy()
+            opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], torch.tensor(win_original_exp.height_m)).squeeze().numpy()
         win_bl_exp = inverse_convert_addb_state_to_model_input(
             model.normalizer.unnormalize(win_bl_exp.pose.unsqueeze(0)), opt.model_states_column_names,
-            opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], win_bl_exp.height_m).squeeze().numpy()
+            opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], torch.tensor(win_bl_exp.height_m)).squeeze().numpy()
 
         dset_sub_name = trial_of_this_win.dset_name + '_' + trial_of_this_win.sub_and_trial_name.split('__')[0]
         skel_0 = test_dataset.skels[dset_sub_name]
@@ -135,28 +135,33 @@ def loop_all(opt):
         #     'synthesized 5 m/s': win_manipulated_syn_all_skel[0],     # only the first one is shown
         #     'experiment 5 m/s': win_original_exp}
         # for _ in range(2):
-        #     show_skeletons(opt, name_states_dict, gui, [skel_0, skel_1, skel_2])
+        #     show_skeletons(opt, name_states_dict, gui, skel_0)
 
-    plt.figure()
-    plt.ylabel('# of Subject with Decreased Parameter                                      # of Subject with Increased Parameter')
+    plt.figure(figsize=(6, 4))
+    plt.ylabel('# of Subject decreased      # of Subject  increased  ', labelpad=13)
+    plt.xlabel('Flexion angles')
+    plt.yticks(np.arange(-10, 11, 2))
+    plt.ylim([-10, 11])
     ax = plt.gca()
-    for i_param, param in enumerate(
-            ['hip_flexion_r_max', 'knee_angle_r_max', 'ankle_angle_r_max',
-             'hip_flexion_r_min', 'ankle_angle_r_min']):
+    for i_param, (param, param_name) in enumerate(zip(
+            ['hip_flexion_r_max', 'knee_angle_r_max', 'ankle_angle_r_max', 'hip_flexion_r_min'],
+            ['Hip max', 'Knee max', 'Ankle max', 'Hip min'])):
         print(param)
         delta_exp = np.array(param_dict_original_exp[param])-np.array(param_dict_bl_exp[param])
         delta_syn = np.array(param_dict_syn[param])-np.array(param_dict_bl_exp[param])
         increased_idx = delta_exp > 0
         increased_num = np.sum(increased_idx)
         increased_num_syn = np.sum(delta_syn[increased_idx] > 0)
-        ax.bar(param, [increased_num, increased_num_syn], color=['gray', 'C0'])
+        ax.bar(param_name, [increased_num, increased_num_syn], color=['gray', 'C0'], label=['', ''])
         decrease_num_syn = np.sum(delta_syn[~increased_idx] < 0)
-        ax.bar(param, -np.array([delta_exp.shape[0] - increased_num, decrease_num_syn]), color=['gray', 'C0'])
+        ax.bar(param_name, -np.array([delta_exp.shape[0] - increased_num, decrease_num_syn]), color=['gray', 'C0'])
 
-        plt.figure()
-        plt.plot(np.array(param_dict_original_exp[param])-np.array(param_dict_bl_exp[param]),
-                 np.array(param_dict_syn[param])-np.array(param_dict_bl_exp[param]), 'o')
-        plt.title(param)
+        plt.figure(figsize=(6, 4))
+        plt.plot((np.array(param_dict_original_exp[param])-np.array(param_dict_bl_exp[param])) * 180 / np.pi,
+                 (np.array(param_dict_syn[param])-np.array(param_dict_bl_exp[param])) * 180 / np.pi, 'o')
+        plt.xlabel(param_name + ' change - Experimental (deg)')
+        plt.ylabel(param_name + ' change - Synthetic (deg)')
+    ax.legend(['Experimental', 'Synthetic'])
     ax.plot([-0.5, i_param+0.5], [0, 0], 'black', linewidth=2)
     plt.show()
 

@@ -1,6 +1,7 @@
 {
   "batch_size": 32,
   "pseudo_dataset_len": 100,
-  "b3d_path": "/mnt/d/Local/Data/MotionPriorData/"
+  "b3d_path": "/mnt/d/Local/Data/MotionPriorData/",
+  "log_with_wandb": false
 }
 

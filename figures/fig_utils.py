@@ -83,7 +83,7 @@ def set_up_gui():
     return gui
 
 
-def show_skeletons(opt, name_states_dict, gui, skels):
+def show_skeletons(opt, name_states_dict, gui, skel):
     num_frames = list(name_states_dict.values())[0].shape[0]
     for i_frame in range(num_frames):
         for i_skel, states in enumerate(list(name_states_dict.values())):
@@ -92,8 +92,8 @@ def show_skeletons(opt, name_states_dict, gui, skels):
             states[i_frame, opt.cop_osim_col_loc[5]] += 0.5 * i_skel
 
             poses = states[i_frame, opt.kinematic_osim_col_loc]
-            skels[i_skel].setPositions(poses)
-            gui.nativeAPI().renderSkeleton(skels[i_skel], prefix='skel' + str(i_skel))
+            skel.setPositions(poses)
+            gui.nativeAPI().renderSkeleton(skel, prefix='skel' + str(i_skel))
             for i_force, contact_body in enumerate(['calcn_r', 'calcn_l']):
                 forces = states[i_frame, opt.grf_osim_col_loc[3 * i_force:3 * (i_force + 1)]]
                 cop = states[i_frame, opt.cop_osim_col_loc[3 * i_force:3 * (i_force + 1)]]
