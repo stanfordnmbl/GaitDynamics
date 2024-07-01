@@ -24,6 +24,7 @@ class MotionDatasetManipulated(MotionDataset):
         trial_df['lumbar_bending'] = trial_df['lumbar_bending'] * self.opt.x_times_lumbar_bending
         self.manipulated_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'lumbar' in col] + \
                                    [opt.model_states_column_names.index('pelvis_tx')]
+        self.do_not_follow_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if '_vel' in col]
         return trial_df, mtp_r_vel, mtp_l_vel
 
 
@@ -55,7 +56,7 @@ def loop_all(opt):
 
     gui = set_up_gui()
 
-    for x_times_lumbar_bending in [2, 2.5, 3, 3.5]:
+    for x_times_lumbar_bending in [2.5, 3, 3.5]:
         print(f'x_times_lumbar_bending: {x_times_lumbar_bending}')
         opt.x_times_lumbar_bending = x_times_lumbar_bending
         test_dataset_mani = MotionDatasetManipulated(
@@ -77,14 +78,16 @@ def loop_all(opt):
 
             state_manipulated = torch.stack([win.pose for win in windows_manipulated[i_win:i_win+opt.batch_size_inference]])
             masks = torch.stack([win.mask for win in windows_manipulated[i_win:i_win+opt.batch_size_inference]])
+            cond = torch.stack([win.cond for win in windows_manipulated[i_win:i_win+opt.batch_size_inference]])
             height_m_tensor = torch.tensor([win.height_m for win in windows_manipulated[i_win:i_win+opt.batch_size_inference]])
 
             value_diff_weight = masks.sum(dim=2).bool().float().unsqueeze(-1).repeat([1, 1, masks.shape[2]])
             value_diff_thd = torch.zeros([len(opt.model_states_column_names)])
-            value_diff_thd[:] = 2         # large value for no constraint
+            value_diff_thd[:] = 3         # large value for no constraint
             value_diff_thd[test_dataset_mani.manipulated_col_loc] = 999
+            value_diff_thd[test_dataset_mani.do_not_follow_col_loc] = 999
 
-            state_pred_list_batch = model.eval_loop(opt, state_manipulated, masks, value_diff_thd, value_diff_weight,
+            state_pred_list_batch = model.eval_loop(opt, state_manipulated, masks, value_diff_thd, value_diff_weight, cond=cond,
                                                     num_of_generation_per_window=skel_num - 1, mode='guided_uhlrich_ts')
             state_pred_list_batch = inverse_convert_addb_state_to_model_input(
                 state_pred_list_batch, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], height_m_tensor)
@@ -159,7 +162,7 @@ if __name__ == "__main__":
     # opt.guidance_lr = 0.02
     # opt.n_guided_steps = 5
 
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'4995'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'6993'}.pt"
 
     loop_all(opt)
 

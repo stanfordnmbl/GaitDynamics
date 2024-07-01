@@ -1,11 +1,14 @@
 from args import parse_opt
 from model.model import MotionModel
 from data.addb_dataset import MotionDataset
+import wandb
 
 
 def train(opt):
     repr_dim = len(opt.model_states_column_names)
     model = MotionModel(opt, repr_dim)
+    if opt.log_with_wandb:
+        wandb.init(project=opt.wandb_pj_name, name=opt.exp_name, dir="wandb_logs")
     train_dataset = MotionDataset(
         data_path=opt.data_path_train,
         train=True,

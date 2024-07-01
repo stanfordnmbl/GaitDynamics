@@ -39,13 +39,13 @@ def naive_stance_phase_extractor(v_grf):
     return stance_start_valid, stance_end_valid
 
 
-def extract_gait_parameters_from_osim_states_and_append(poses, skel, opt, param_dict, num_to_append=1):
+def extract_gait_parameters_from_osim_states_and_append(poses, skel, opt, param_dict, max_num_to_append=1):
     param_dict_new = extract_gait_parameters_from_osim_states(poses, skel, opt)
     for key in param_dict_new.keys():
         if key not in param_dict:
             param_dict[key] = param_dict_new[key]
         else:
-            param_dict[key].extend(param_dict_new[key][:num_to_append])
+            param_dict[key].extend(param_dict_new[key][:max_num_to_append])
     return param_dict
 
 

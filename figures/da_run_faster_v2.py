@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from model.utils import inverse_convert_addb_state_to_model_input, osim_states_to_knee_moments_in_percent_BW_BH, \
     linear_resample_data_as_num_of_dp
 import nimblephysics as nimble
-from model.utils import cross_product_2d, get_multi_body_loc_using_nimble, inverse_norm_cops
+from model.utils import cross_product_2d, get_multi_body_loc_using_nimble_by_body_names, inverse_norm_cops
 import pickle
 
 
@@ -55,10 +55,12 @@ def loop_all(opt):
         state_bl = torch.stack(state_bl)
         masks = [win.mask for win in windows_bl_exp[i_win:i_win+1]]
         masks = torch.stack(masks)
+        cond = [win.cond for win in windows_bl_exp[i_win:i_win+1]]
+        cond = torch.stack(cond)
 
         height_m_tensor = torch.tensor([win.height_m for win in windows_bl_exp[i_win:i_win+1]])
 
-        state_pred_list_batch = model.eval_loop(opt, state_bl, masks, num_of_generation_per_window=skel_num - 1, mode='run_faster')
+        state_pred_list_batch = model.eval_loop(opt, state_bl, masks, cond=cond, num_of_generation_per_window=skel_num - 1, mode='run_faster')
         state_pred_list_batch = inverse_convert_addb_state_to_model_input(
             state_pred_list_batch, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], height_m_tensor)
 
@@ -133,7 +135,7 @@ b3d_path = f'/mnt/d/Local/Data/MotionPriorData/hamner_dset/'
 if __name__ == "__main__":
     skel_num = 2
     opt = parse_opt()
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'5994'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'6993'}.pt"
     loop_all(opt)
 
 

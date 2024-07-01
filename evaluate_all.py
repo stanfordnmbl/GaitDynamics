@@ -7,9 +7,6 @@ from data.addb_dataset import MotionDataset
 from model.model import inverse_convert_addb_state_to_model_input
 import numpy as np
 import pickle
-import nimblephysics as nimble
-import matplotlib.pyplot as plt
-from model.utils import cross_product_2d, get_multi_body_loc_using_nimble, inverse_norm_cops
 
 
 def loop_all(opt):

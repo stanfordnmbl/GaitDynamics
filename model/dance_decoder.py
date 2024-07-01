@@ -6,6 +6,78 @@ from torch.nn import functional as F
 import torch
 from model.rotary_embedding_torch import RotaryEmbedding
 from model.utils import PositionalEncoding, SinusoidalPosEmb, prob_mask_like
+from einops.layers.torch import Rearrange, Reduce
+
+
+# class TransformerEncoderLayer(nn.Module):
+#     def __init__(
+#             self,
+#             d_model: int,
+#             nhead: int,
+#             dim_feedforward: int = 2048,
+#             dropout: float = 0.1,
+#             activation: Union[str, Callable[[Tensor], Tensor]] = F.relu,
+#             layer_norm_eps: float = 1e-5,
+#             batch_first: bool = False,
+#             norm_first: bool = True,
+#             device=None,
+#             dtype=None,
+#             rotary=None,
+#     ) -> None:
+#         super().__init__()
+#         self.self_attn = nn.MultiheadAttention(
+#             d_model, nhead, dropout=dropout, batch_first=batch_first
+#         )
+#         # Implementation of Feedforward model
+#         self.linear1 = nn.Linear(d_model, dim_feedforward)
+#         self.dropout = nn.Dropout(dropout)
+#         self.linear2 = nn.Linear(dim_feedforward, d_model)
+#
+#         self.norm_first = norm_first
+#         self.norm1 = nn.LayerNorm(d_model, eps=layer_norm_eps)
+#         self.norm2 = nn.LayerNorm(d_model, eps=layer_norm_eps)
+#         self.dropout1 = nn.Dropout(dropout)
+#         self.dropout2 = nn.Dropout(dropout)
+#         self.activation = activation
+#
+#         self.rotary = rotary
+#         self.use_rotary = rotary is not None
+#
+#     def forward(
+#             self,
+#             src: Tensor,
+#             src_mask: Optional[Tensor] = None,
+#             src_key_padding_mask: Optional[Tensor] = None,
+#     ) -> Tensor:
+#         x = src
+#         if self.norm_first:
+#             x = x + self._sa_block(self.norm1(x), src_mask, src_key_padding_mask)
+#             x = x + self._ff_block(self.norm2(x))
+#         else:
+#             x = self.norm1(x + self._sa_block(x, src_mask, src_key_padding_mask))
+#             x = self.norm2(x + self._ff_block(x))
+#
+#         return x
+#
+#     # self-attention block
+#     def _sa_block(
+#             self, x: Tensor, attn_mask: Optional[Tensor], key_padding_mask: Optional[Tensor]
+#     ) -> Tensor:
+#         qk = self.rotary.rotate_queries_or_keys(x) if self.use_rotary else x
+#         x = self.self_attn(
+#             qk,
+#             qk,
+#             x,
+#             attn_mask=attn_mask,
+#             key_padding_mask=key_padding_mask,
+#             need_weights=False,
+#         )[0]
+#         return self.dropout1(x)
+#
+#     # feed forward block
+#     def _ff_block(self, x: Tensor) -> Tensor:
+#         x = self.linear2(self.dropout(self.activation(self.linear1(x))))
+#         return self.dropout2(x)
 
 
 class DenseFiLM(nn.Module):
@@ -59,16 +131,17 @@ class FiLMTransformerDecoderLayer(nn.Module):
 
         self.norm_first = norm_first
         self.norm1 = nn.LayerNorm(d_model, eps=layer_norm_eps)
-        # self.norm2 = nn.LayerNorm(d_model, eps=layer_norm_eps)
         self.norm3 = nn.LayerNorm(d_model, eps=layer_norm_eps)
         self.dropout1 = nn.Dropout(dropout)
-        # self.dropout2 = nn.Dropout(dropout)
         self.dropout3 = nn.Dropout(dropout)
         self.activation = activation
 
         self.film1 = DenseFiLM(d_model)
-        # self.film2 = DenseFiLM(d_model)
         self.film3 = DenseFiLM(d_model)
+
+        # self.norm2 = nn.LayerNorm(d_model, eps=layer_norm_eps)
+        # self.dropout2 = nn.Dropout(dropout)
+        # self.film2 = DenseFiLM(d_model)
 
         self.rotary = rotary
         self.use_rotary = rotary is not None
@@ -86,7 +159,6 @@ class FiLMTransformerDecoderLayer(nn.Module):
     ):
         x = tgt
         if self.norm_first:
-            # self-attention -> film -> residual
             x_1 = self._sa_block(self.norm1(x), tgt_mask, tgt_key_padding_mask)
             x = x + featurewise_affine(x_1, self.film1(t))
             ## cross-attention -> film -> residual (REMOVED)
@@ -170,7 +242,7 @@ class DanceDecoder(nn.Module):
         num_layers: int = 4,
         num_heads: int = 4,
         dropout: float = 0.1,
-        cond_feature_dim: int = 4800,
+        # cond_feature_dim: int = 6,
         activation: Callable[[Tensor], Tensor] = F.gelu,
         use_rotary=True,
         **kwargs
@@ -197,6 +269,8 @@ class DanceDecoder(nn.Module):
             nn.Linear(latent_dim, latent_dim * 4),
             nn.Mish(),
         )
+        # input projection
+        self.input_projection = nn.Linear(nfeats, latent_dim)
 
         self.to_time_cond = nn.Sequential(nn.Linear(latent_dim * 4, latent_dim),)
 
@@ -204,15 +278,7 @@ class DanceDecoder(nn.Module):
         #     nn.Linear(latent_dim * 4, latent_dim * 2),  # 2 time tokens
         #     Rearrange("b (r d) -> b r d", r=2),
         # )
-
-        # null embeddings for guidance dropout
-        # self.null_cond_embed = nn.Parameter(torch.randn(1, seq_len, latent_dim))
-        # self.null_cond_hidden = nn.Parameter(torch.randn(1, latent_dim))
-
         # self.norm_cond = nn.LayerNorm(latent_dim)
-
-        # input projection
-        self.input_projection = nn.Linear(nfeats, latent_dim)
         # self.cond_encoder = nn.Sequential()
         # for _ in range(2):
         #     self.cond_encoder.append(
@@ -226,7 +292,6 @@ class DanceDecoder(nn.Module):
         #             rotary=self.rotary,
         #         )
         #     )
-        # conditional projection
         # self.cond_projection = nn.Linear(cond_feature_dim, latent_dim)
         # self.non_attn_cond_projection = nn.Sequential(
         #     nn.LayerNorm(latent_dim),
@@ -254,59 +319,37 @@ class DanceDecoder(nn.Module):
         self.final_layer = nn.Linear(latent_dim, output_feats)
 
     def guided_forward(self, x, cond_embed, times, guidance_weight):
-        unc = self.forward(x, cond_embed, times, cond_drop_prob=1)
-        conditioned = self.forward(x, cond_embed, times, cond_drop_prob=0)
+        return self.forward(x, cond_embed, times)
 
-        return unc + (conditioned - unc) * guidance_weight
-
-    def forward(
-        self, x: Tensor, cond_embed: Tensor, times: Tensor, cond_drop_prob: float = 0.0
-    ):
-        batch_size, device = x.shape[0], x.device
-
-        # project to latent space
+    # No conditioning version
+    def forward(self, x: Tensor, cond_embed: Tensor, times: Tensor, cond_drop_prob: float = 0.0):
         x = self.input_projection(x)
-        # add the positional embeddings of the input sequence to provide temporal information
         x = self.abs_pos_encoding(x)
-
-        # create music conditional embedding with conditional dropout - REMOVED
-        keep_mask = prob_mask_like((batch_size,), 1 - cond_drop_prob, device=device)
-        keep_mask_embed = rearrange(keep_mask, "b -> b 1 1")
-        keep_mask_hidden = rearrange(keep_mask, "b -> b 1")
-
-        # cond_tokens = self.cond_projection(cond_embed)
-        # # encode tokens
-        # # conditional encoder is a full transformer encoder in EDGE - we can simplify!
-        # cond_tokens = self.abs_pos_encoding(cond_tokens)
-        # cond_tokens = self.cond_encoder(cond_tokens)
-
-        # null_cond_embed = self.null_cond_embed.to(cond_tokens.dtype)
-        # cond_tokens = torch.where(keep_mask_embed, cond_tokens, null_cond_embed)
-        #
-        # mean_pooled_cond_tokens = cond_tokens.mean(dim=-2)
-        # cond_hidden = self.non_attn_cond_projection(mean_pooled_cond_tokens)
-
-        # create the diffusion timestep embedding, add the extra music projection
-        # sinusoidal position embedding - linear layer - non-linearity (output size is 4*latent_dim)
         t_hidden = self.time_mlp(times)
-
-        # project to attention and FiLM conditioning
-        t = self.to_time_cond(t_hidden) # linear from 4*latent_dim to latent_dim
-        # t_tokens = self.to_time_tokens(t_hidden) # linear from 4*latent_dim to latent_dim re-arranged to concat with cond_tokens
-
-        # FiLM conditioning
-        # null_cond_hidden = self.null_cond_hidden.to(t.dtype)
-        # cond_hidden = torch.where(keep_mask_hidden, cond_hidden, null_cond_hidden)
-        # t += cond_hidden
-        #
-        # cross-attention conditioning
-        # c = torch.cat((cond_tokens, t_tokens), dim=-2)
-        # c = t_tokens
-        # cond_tokens = self.norm_cond(c)
-
-        # Pass through the transformer decoder
-        # attending to the conditional embedding
+        t = self.to_time_cond(t_hidden)
         output = self.seqTransDecoder(x, None, t)
-
         output = self.final_layer(output)
         return output
+
+    # # # With conditioning version
+    # def forward(self, x: Tensor, cond_embed: Tensor, times: Tensor):
+    #     x = self.input_projection(x)
+    #     x = self.abs_pos_encoding(x)
+    #
+    #     cond_tokens = self.cond_projection(cond_embed).unsqueeze(1)
+    #     # cond_tokens = self.abs_pos_encoding(cond_tokens)
+    #     # cond_tokens = self.cond_encoder(cond_tokens)
+    #
+    #     t_hidden = self.time_mlp(times)
+    #     t = self.to_time_cond(t_hidden) # linear from 4*latent_dim to latent_dim
+    #
+    #     mean_pooled_cond_tokens = cond_tokens.mean(dim=-2)
+    #     cond_hidden = self.non_attn_cond_projection(mean_pooled_cond_tokens)
+    #     t += cond_hidden
+    #     # t_tokens = self.to_time_tokens(t_hidden)
+    #     # c = torch.cat((cond_tokens, t_tokens), dim=-2)
+    #     # cond_tokens = self.norm_cond(c)
+    #
+    #     output = self.seqTransDecoder(x, cond_tokens, t)
+    #     output = self.final_layer(output)
+    #     return output

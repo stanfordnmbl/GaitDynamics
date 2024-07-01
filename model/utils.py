@@ -36,14 +36,40 @@ def maybe_wrap(x, num):
     return x if num == 1 else wrap(x)
 
 
-def get_multi_body_loc_using_nimble(body_names, skel, poses):
+def get_multi_body_loc_using_nimble_by_body_names(body_names, skel, poses):
     body_ids = [skel.getBodyNode(name) for name in body_names]
+    return get_multi_body_loc_using_nimble_by_body_nodes(body_ids, skel, poses)
+
+
+def get_multi_body_loc_using_nimble_by_body_nodes(body_nodes, skel, poses):
     body_loc = []
     for i_frame in range(len(poses)):
         skel.setPositions(poses[i_frame])
-        body_loc.append(np.concatenate([body_id.getWorldTransform().translation() for body_id in body_ids]))
+        body_loc.append(np.concatenate([body_node.getWorldTransform().translation() for body_node in body_nodes]))
     body_loc = np.array(body_loc)
     return body_loc
+
+
+def body_loc_to_cond(body_loc):
+    femur_r = body_loc[:, 3:6] - body_loc[:, 0:3]
+    tibia_r = body_loc[:, 6:9] - body_loc[:, 3:6]
+    talus_r = body_loc[:, 9:12] - body_loc[:, 6:9]
+    calcn_r = body_loc[:, 12:15] - body_loc[:, 9:12]
+    toes_r = body_loc[:, 15:18] - body_loc[:, 12:15]
+    femur_l = body_loc[:, 18:21] - body_loc[:, 0:3]
+    tibia_l = body_loc[:, 21:24] - body_loc[:, 18:21]
+    talus_l = body_loc[:, 24:27] - body_loc[:, 21:24]
+    calcn_l = body_loc[:, 27:30] - body_loc[:, 24:27]
+    toes_l = body_loc[:, 30:33] - body_loc[:, 27:30]
+    torso = body_loc[:, 33:36] - body_loc[:, 0:3]
+    femur_average = (femur_r + femur_l) / 2
+    tibia_average = (tibia_r + tibia_l) / 2
+    talus_average = (talus_r + talus_l) / 2
+    calcn_average = (calcn_r + calcn_l) / 2
+    toes_average = (toes_r + toes_l) / 2
+    cond = np.concatenate([femur_average, tibia_average, talus_average, torso], axis=-1)[:, 1::3]
+    cond = cond * 10
+    return cond
 
 
 def get_multi_joint_loc_using_tom_fk(joint_names, skel, poses):
@@ -62,7 +88,7 @@ def inverse_norm_cops(skel, states, opt, sub_mass, height_m):
     poses = states[:, opt.kinematic_osim_col_loc]
     forces = states[:, opt.grf_osim_col_loc]
     normed_cops = states[:, opt.cop_osim_col_loc]
-    foot_loc = get_multi_body_loc_using_nimble(('calcn_r', 'calcn_l'), skel, poses)
+    foot_loc = get_multi_body_loc_using_nimble_by_body_names(('calcn_r', 'calcn_l'), skel, poses)
 
     for i_plate in range(2):
         force_v = forces[:, 3*i_plate:3*(i_plate+1)]
@@ -85,8 +111,8 @@ def norm_cops(skel, states, opt, sub_mass, height_m):
     forces = states[:, opt.grf_osim_col_loc]
     cops = states[:, opt.cop_osim_col_loc]
 
-    heel_centers = torch.from_numpy(get_multi_body_loc_using_nimble(('calcn_r', 'calcn_l'), skel, poses)).to(states.dtype)
-    toe_centers = torch.from_numpy(get_multi_body_loc_using_nimble(('toes_r', 'toes_l'), skel, poses)).to(states.dtype)
+    heel_centers = torch.from_numpy(get_multi_body_loc_using_nimble_by_body_names(('calcn_r', 'calcn_l'), skel, poses)).to(states.dtype)
+    toe_centers = torch.from_numpy(get_multi_body_loc_using_nimble_by_body_names(('toes_r', 'toes_l'), skel, poses)).to(states.dtype)
     for i_plate in range(2):
         force_v = forces[:, 3*i_plate:3*(i_plate+1)]
 

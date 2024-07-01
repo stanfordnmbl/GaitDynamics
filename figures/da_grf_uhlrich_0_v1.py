@@ -23,6 +23,7 @@ class DatasetOpenCap(MotionDataset):
             for root, dirs, files in os.walk(self.data_path + 'Kinematics/'):
                 for file in files:
                     file_path = os.path.join(root, file)
+                    # if file.endswith(".mot") and 'walking' in file_path and 'walkingTS' not in file_path:
                     if file.endswith(".mot") and 'walking' in file_path:
                         subject_paths.append(file_path)
 
@@ -34,13 +35,14 @@ class DatasetOpenCap(MotionDataset):
         self.trials = []
         for i_sub, subject_path in enumerate(subject_paths):
             model_offsets = get_model_offsets(skel).float()
-            subject_name = subject_path.split('4CVPR/Data/')[1].split('/OpenCap/')[0]
+            subject_name = subject_path.split('/')[-1].split('.')[0]
             dset_name = subject_path.split('/')[-3]
 
             if f'uhlrich_dset_{subject_name}' in WEIGHT_KG_OVERWRITE.keys():
-                weight_kg = WEIGHT_KG_OVERWRITE[f'uhlrich_dset_{subject_name}']
+                weight_kg = WEIGHT_KG_OVERWRITE[f'{dset_name}_{subject_name}']
             else:
                 weight_kg = skel.getMass()
+
             if dset_name == '':
                 dset_name = subject_name.split('_')[0]
 
@@ -79,7 +81,8 @@ class DatasetOpenCap(MotionDataset):
 
             foot_locations, _, _, _ = forward_kinematics(states[:, :-len(KINETICS_ALL)], model_offsets)
             mtp_r_loc, mtp_l_loc = foot_locations[1].squeeze().cpu().numpy(), foot_locations[3].squeeze().cpu().numpy()
-            mtp_r_vel, mtp_l_vel = np.zeros_like(mtp_r_loc), np.zeros_like(mtp_l_loc)
+            mtp_r_vel = from_foot_loc_to_foot_vel(mtp_r_loc, states[:, -len(KINETICS_ALL):][:, KINETICS_ALL.index('calcn_r_force_vy')], self.target_sampling_rate)
+            mtp_l_vel = from_foot_loc_to_foot_vel(mtp_l_loc, states[:, -len(KINETICS_ALL):][:, KINETICS_ALL.index('calcn_l_force_vy')], self.target_sampling_rate)
 
             states_df = pd.DataFrame(states, columns=opt.osim_dof_columns)
             states_df, pos_vec = convert_addb_state_to_model_input(states_df, opt.joints_3d, self.target_sampling_rate)
@@ -191,7 +194,7 @@ def loop_all(opt, trials, windows, kinematic_type_str):
 if __name__ == "__main__":
     skel_num = 3
     opt = parse_opt()
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'6993_small'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'4995'}.pt"
     model = torch.load(opt.checkpoint)
     repr_dim = model["ema_state_dict"]["input_projection.weight"].shape[1]
     set_with_arm_opt(opt, False)
@@ -213,13 +216,14 @@ if __name__ == "__main__":
         else:
             trial_.converted_pose = trial_.converted_pose[20:]
         trial_.length = trial_.converted_pose.shape[0]
+    # test_dataset.trials = [trial for trial in test_dataset.trials if 'walkingTS' not in trial.sub_and_trial_name]   # !!!! Exclude TS trials
     windows = test_dataset.get_all_wins_including_shorter_than_window_len(opt.kinematic_diffusion_col_loc)
     trials = test_dataset.trials
     loop_all(opt, trials, windows, 'marker_based')
 
     """ Use opencap-based kinematics """
     trials, windows = [], []
-    for sub_num in range(2, 4):
+    for sub_num in range(2, 12):
         test_dataset = DatasetOpenCap(
             data_path=f'/mnt/g/Shared drives/NMBL Shared Data/datasets/Uhlrich2023/Raw/4CVPR/Data/subject{sub_num}/OpenCap/',
             train=False,

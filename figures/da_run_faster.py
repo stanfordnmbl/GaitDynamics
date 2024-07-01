@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from model.utils import inverse_convert_addb_state_to_model_input, osim_states_to_knee_moments_in_percent_BW_BH, \
     linear_resample_data_as_num_of_dp
 import nimblephysics as nimble
-from model.utils import cross_product_2d, get_multi_body_loc_using_nimble, inverse_norm_cops
+from model.utils import cross_product_2d, get_multi_body_loc_using_nimble_by_body_names, inverse_norm_cops
 import pickle
 
 
@@ -83,16 +83,18 @@ def loop_all(opt):
         state_manipulated = torch.stack(state_manipulated)
 
         masks = torch.stack([win.mask for win in windows_manipulated_exp[i_win:i_win+opt.batch_size_inference]])
+        cond = torch.stack([win.cond for win in windows_manipulated_exp[i_win:i_win+opt.batch_size_inference]])
         height_m_tensor = torch.tensor([win.height_m for win in windows_manipulated_exp[i_win:i_win+opt.batch_size_inference]])
 
         value_diff_weight = torch.ones([len(opt.model_states_column_names)])
         value_diff_weight[test_dataset_mani.do_not_follow_col_loc] = 0
 
         value_diff_thd = torch.zeros([len(opt.model_states_column_names)])
-        value_diff_thd[:] = 1         # large value for no constraint
+        value_diff_thd[:] = 3         # large value for no constraint
         value_diff_thd[test_dataset_mani.manipulated_col_loc] = 999
+        value_diff_thd[test_dataset_mani.do_not_follow_col_loc] = 999
 
-        state_pred_list_batch = model.eval_loop(opt, state_manipulated, masks, value_diff_thd, value_diff_weight,
+        state_pred_list_batch = model.eval_loop(opt, state_manipulated, masks, value_diff_thd, value_diff_weight, cond=cond,
                                                 num_of_generation_per_window=skel_num - 1, mode='guided_run_faster')
         state_pred_list_batch = inverse_convert_addb_state_to_model_input(
             state_pred_list_batch, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], height_m_tensor)
@@ -175,8 +177,10 @@ b3d_path = f'/mnt/d/Local/Data/MotionPriorData/hamner_dset/'
 if __name__ == "__main__":
     skel_num = 5
     opt = parse_opt()
+    opt.n_guided_steps = 5
+    opt.guidance_lr = 0.02
 
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'4995'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'6993'}.pt"
 
     loop_all(opt)
 
