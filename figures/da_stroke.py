@@ -20,11 +20,6 @@ def get_sub_meta(sub, meta_table):
     if np.isnan(sub_meta_dict['FAC']):
         sub_meta_dict['FAC'] = 0
     return sub_meta_dict
-    # try:
-    #     assert len(sub_meta) == 1
-    #     return sub_meta.iloc[0].to_dict()
-    # except AssertionError:
-    #     return {'FAC': 6}
 
 
 def metric_smoothness(pred_array, diff_array, param_col_loc):
@@ -127,23 +122,23 @@ def loop_all():
             diff = [((state_true - state_pred.cpu()) * masks).numpy() for state_pred in state_pred_list]
             diff_list_sub.append(diff)
 
-            # # [DEBUG]
-            # state_pred_to_show = [model.normalizer.unnormalize(state_pred).cpu() for state_pred in state_pred_list]
-            # for j_win in range(i_win, i_win+state_true.shape[0]):
-            #     height_m_tensor = torch.tensor([win.height_m for win in windows[j_win:j_win+1]])
-            #     name_states_dict = {}
-            #     for i_generation, states in enumerate([model.normalizer.unnormalize(state_true)] + state_pred_to_show[::]):
-            #         states = inverse_convert_addb_state_to_model_input(
-            #             states, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], height_m_tensor)
-            #         skel_ = list(test_dataset.skels.values())[0]
-            #         win_osim = inverse_norm_cops(skel_, states[j_win], opt, windows[j_win].weight_kg, windows[j_win].height_m).detach().numpy()
-            #         if i_generation == 0:
-            #             name = 'True'
-            #         else:
-            #             name = f'Generation {i_generation}'
-            #         name_states_dict.update({name: win_osim})
-            #     for _ in range(1):
-            #         show_skeletons(opt, name_states_dict, gui, skel_)
+            # [DEBUG]
+            state_pred_to_show = [model.normalizer.unnormalize(state_pred).cpu() for state_pred in state_pred_list]
+            for j_win in range(i_win, i_win+state_true.shape[0]):
+                height_m_tensor = torch.tensor([win.height_m for win in windows[j_win:j_win+1]])
+                name_states_dict = {}
+                for i_generation, states in enumerate([model.normalizer.unnormalize(state_true)] + state_pred_to_show[::]):
+                    states = inverse_convert_addb_state_to_model_input(
+                        states, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], height_m_tensor)
+                    skel_ = list(test_dataset.skels.values())[0]
+                    win_osim = inverse_norm_cops(skel_, states[j_win], opt, windows[j_win].weight_kg, windows[j_win].height_m).detach().numpy()
+                    if i_generation == 0:
+                        name = 'True'
+                    else:
+                        name = f'Generation {i_generation}'
+                    name_states_dict.update({name: win_osim})
+                for _ in range(1):
+                    show_skeletons(opt, name_states_dict, gui, skel_)
 
         pred_array = np.array(pred_list_sub).swapaxes(0, 1)
         pred_array = pred_array.reshape(pred_array.shape[0], -1, pred_array.shape[-1])
@@ -189,7 +184,7 @@ colors = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7']
 save_z_score = False
 if not save_z_score:
     mean_, std_ = pickle.load(open("results/for_z_score.pkl", "rb"))
-# gui = set_up_gui()
+gui = set_up_gui()
 
 if __name__ == "__main__":
     skel_num = 2

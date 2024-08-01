@@ -15,6 +15,7 @@ def train(opt):
         # trial_start_num=-3,
         # max_trial_num=1,            # !!!
         dset_keyworks_to_exclude=['Hammer2013'],
+        # dset_keyworks_to_exclude=['Carter2023', 'Fregly2012', 'Falisse2017', 'Hammer2013', 'Han2023', 'Li2021', 'Santos2017', 'Tan2021', 'Uhlrich2023', 'Wang2023'],
         opt=opt,
     )
     model.train_loop(opt, train_dataset)

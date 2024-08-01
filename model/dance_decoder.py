@@ -318,14 +318,14 @@ class DanceDecoder(nn.Module):
         
         self.final_layer = nn.Linear(latent_dim, output_feats)
 
-    def guided_forward(self, x, cond_embed, times, guidance_weight):
-        return self.forward(x, cond_embed, times)
+    def guided_forward(self, x, cond_embed, time_cond, guidance_weight):
+        return self.forward(x, cond_embed, time_cond)
 
     # No conditioning version
-    def forward(self, x: Tensor, cond_embed: Tensor, times: Tensor, cond_drop_prob: float = 0.0):
+    def forward(self, x: Tensor, cond_embed: Tensor, time_cond: Tensor, cond_drop_prob: float = 0.0):
         x = self.input_projection(x)
         x = self.abs_pos_encoding(x)
-        t_hidden = self.time_mlp(times)
+        t_hidden = self.time_mlp(time_cond)
         t = self.to_time_cond(t_hidden)
         output = self.seqTransDecoder(x, None, t)
         output = self.final_layer(output)

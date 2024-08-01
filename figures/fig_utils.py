@@ -79,7 +79,14 @@ def set_up_gui():
     world = nimble.simulation.World()
     world.setGravity([0, -9.81, 0])
     gui = NimbleGUI(world)
-    gui.serve(8090)
+    gui_inited = False
+    port = 8090
+    while not gui_inited:
+        try:
+            gui.serve(port)
+            gui_inited = True
+        except Exception:
+            port += 1
     return gui
 
 

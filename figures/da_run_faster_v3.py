@@ -93,8 +93,8 @@ def loop_all(opt):
 
 b3d_path = f'/mnt/d/Local/Data/MotionPriorData/hamner_dset/'
 
-""" To use this code,
-
+"""
+Pure-generation-based. The baseline trial is barely used.
 """
 
 if __name__ == "__main__":

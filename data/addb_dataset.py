@@ -152,9 +152,8 @@ class MotionDataset(Dataset):
             current_trial = i_trial
             pelvis_pos_loc = [self.opt.model_states_column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
             while current_index > 0:
-                self.trials[current_trial].converted_pose[:, pelvis_pos_loc] = walking_vel[current_index-self.trials[current_trial].length:current_index]
-                # height_m = self.trials[current_trial].height_m
-                # self.trials[current_trial].converted_pose[:, pelvis_pos_loc] = walking_vel[current_index-self.trials[current_trial].length:current_index] / height_m
+                self.trials[current_trial].converted_pose[:, pelvis_pos_loc] = walking_vel[current_index - self.trials[
+                    current_trial].length:current_index] / self.trials[current_trial].height_m
                 current_index -= self.trials[current_trial].length
                 current_trial -= 1
 
@@ -179,7 +178,6 @@ class MotionDataset(Dataset):
                 r_foot_vel_buffer, l_foot_vel_buffer, vel_from_t = get_vel_and_reset(r_foot_vel_buffer, l_foot_vel_buffer, vel_from_t, i_trial-1)
                 current_sub_trial_name = trial.sub_and_trial_name.split('_segment_')[0]
 
-            print(trial.sub_and_trial_name)
             r_foot_vel_buffer.append(trial.mtp_r_vel)
             l_foot_vel_buffer.append(trial.mtp_l_vel)
             body_center = trial.converted_pose[:, 0:3]
@@ -249,7 +247,7 @@ class MotionDataset(Dataset):
     def get_all_wins_including_shorter_than_window_len(self, col_loc_to_unmask):
         windows = []
         for i_trial, trial_ in enumerate(self.trials):
-            trial_len = trial_.length
+            trial_len = trial_.converted_pose.shape[0]
             i = - self.opt.window_len
             for i in range(0, trial_len - self.opt.window_len + 1, self.opt.window_len):
                 mask = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
@@ -258,11 +256,33 @@ class MotionDataset(Dataset):
                                           None, mask, trial_.height_m, trial_.weight_kg, trial_.cond))
             # The last pose is incomplete
             pose = torch.zeros([self.opt.window_len, trial_.converted_pose.shape[1]])
-            pose[:trial_len-i-self.opt.window_len, ...] = trial_.converted_pose[i+self.opt.window_len:i+2*self.opt.window_len, ...]
             mask = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
+
+            pose[:trial_len-i-self.opt.window_len, ...] = trial_.converted_pose[i+self.opt.window_len:i+2*self.opt.window_len, ...]
             mask[:trial_len-i-self.opt.window_len, col_loc_to_unmask] = 1      # 0 for masking, 1 for unmasking
             windows.append(WindowData(pose, trial_.model_offsets, i_trial, None, mask, trial_.height_m, trial_.weight_kg, trial_.cond))
         return windows
+
+    def get_overlapping_wins(self, col_loc_to_unmask, step_len):
+        windows, s_list, e_list = [], [], []
+        for i_trial, trial_ in enumerate(self.trials):
+            trial_len = trial_.converted_pose.shape[0]
+            for i in range(-(self.opt.window_len - step_len), trial_len - step_len, step_len):
+                s = max(0, i)
+                e = min(trial_len, i+self.opt.window_len)
+                s_list.append(s)
+                e_list.append(e)
+                mask = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
+                mask[:, col_loc_to_unmask] = 1
+                mask[e-s:, :] = 0
+                data_ = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
+                try:
+                    data_[:e-s] = trial_.converted_pose[s:e, ...]
+                except:
+                    xxx =1
+                windows.append(WindowData(data_, trial_.model_offsets, i_trial,
+                                          None, mask, trial_.height_m, trial_.weight_kg, trial_.cond))
+        return windows, s_list, e_list
 
     def get_one_win_from_the_end_of_each_trial(self, col_loc_to_unmask):
         windows = []
@@ -345,17 +365,14 @@ class MotionDataset(Dataset):
 
             if self.specific_dset and self.specific_dset not in subject_path:
                 continue
-            for keyword in self.dset_keyworks_to_exclude:
-                if keyword in subject_path:
-                    continue
+            if sum([keyword in subject_path for keyword in self.dset_keyworks_to_exclude]):
+                continue
 
             try:
                 subject = nimble.biomechanics.SubjectOnDisk(subject_path)
             except RuntimeError:
                 print(f'Loading subject {subject_path} failed, skipping')
                 continue
-            sub_mass = subject.getMassKg()
-            height_m = subject.getHeightM()
             contact_bodies = subject.getGroundForceBodies()
             if contact_bodies != ['calcn_r', 'calcn_l']:
                 continue
@@ -363,6 +380,12 @@ class MotionDataset(Dataset):
 
             subject_name = subject_path.split('/')[-1].split('.')[0]
             dset_name = subject_path.split('/')[-3]
+
+            if f'{dset_name}_{subject_name}' in WEIGHT_KG_OVERWRITE.keys():
+                weight_kg = WEIGHT_KG_OVERWRITE[f'{dset_name}_{subject_name}']
+            else:
+                weight_kg = subject.getMassKg()
+            height_m = subject.getHeightM()
 
             skel = subject.readSkel(0, geometryFolder=os.path.dirname(os.path.realpath(__file__)) + "/../../data/Geometry/")
             self.skels[dset_name+'_'+subject_name] = skel
@@ -418,7 +441,7 @@ class MotionDataset(Dataset):
                     cops = cops[:-1]
                     probably_missing = probably_missing[:-1]
 
-                force_v0, force_v1 = forces[:, :3] / sub_mass, forces[:, 3:] / sub_mass
+                force_v0, force_v1 = forces[:, :3] / weight_kg, forces[:, 3:] / weight_kg
                 states = np.concatenate([np.array(poses), force_v0, cops[:, :3], force_v1, cops[:, 3:]], axis=1)
                 if not self.is_lumbar_rotation_reasonable(np.array(states), opt.osim_dof_columns):
                     continue
@@ -430,15 +453,15 @@ class MotionDataset(Dataset):
                     #       f' flipped {len(grf_flag_counts)} times, thus setting all to True.', end='')
                     probably_missing = [False] * len(probably_missing)
 
-                pelvis_ty_col_loc = opt.osim_dof_columns.index('pelvis_ty')
-                states = norm_cops(skel, states, opt, sub_mass, height_m)
-                states[:, pelvis_ty_col_loc] = states[:, pelvis_ty_col_loc] / height_m
+                states = norm_cops(skel, states, opt, weight_kg, height_m)
                 if self.align_moving_direction_flag:
                     states, rot_mat = align_moving_direction(states, opt.osim_dof_columns)
                 else:
                     rot_mat = torch.eye(3).float()
 
                 if (not self.include_trials_shorter_than_window_len) and (states.shape[0] / sampling_rate * self.target_sampling_rate) < self.window_len + 2:
+                    continue
+                if states.shape[0] < 20:        # need to be longer than 20 frames for filtering
                     continue
                 if sampling_rate != self.target_sampling_rate:
                     states = linear_resample_data(states, sampling_rate, self.target_sampling_rate)
@@ -449,8 +472,13 @@ class MotionDataset(Dataset):
 
                 mtp_r_loc = data_filter(mtp_r_loc, 10, self.target_sampling_rate)
                 mtp_l_loc = data_filter(mtp_l_loc, 10, self.target_sampling_rate)
-                mtp_r_vel = from_foot_loc_to_foot_vel(mtp_r_loc, states[:, -len(KINETICS_ALL):][:, KINETICS_ALL.index('calcn_r_force_vy')], self.target_sampling_rate)
-                mtp_l_vel = from_foot_loc_to_foot_vel(mtp_l_loc, states[:, -len(KINETICS_ALL):][:, KINETICS_ALL.index('calcn_l_force_vy')], self.target_sampling_rate)
+
+                # vancriek dataset has one two foot on one plate issue.
+                if sum([keyword in subject_path.lower() for keyword in OVERGROUND_DSETS]) or ('camargo' in subject_path.lower() and '_split5' not in subject_path.lower()):
+                    mtp_r_vel, mtp_l_vel = np.zeros_like(mtp_r_loc), np.zeros_like(mtp_l_loc)
+                else:
+                    mtp_r_vel = from_foot_loc_to_foot_vel(mtp_r_loc, states[:, -len(KINETICS_ALL):][:, KINETICS_ALL.index('calcn_r_force_vy')], self.target_sampling_rate)
+                    mtp_l_vel = from_foot_loc_to_foot_vel(mtp_l_loc, states[:, -len(KINETICS_ALL):][:, KINETICS_ALL.index('calcn_l_force_vy')], self.target_sampling_rate)
                 mtp_r_vel, mtp_l_vel = mtp_r_vel.astype(np.float32), mtp_l_vel.astype(np.float32)
 
                 states_df = pd.DataFrame(states, columns=opt.osim_dof_columns)

@@ -35,6 +35,7 @@ class DatasetOpenCap(MotionDataset):
         for i_sub, subject_path in enumerate(subject_paths):
             model_offsets = get_model_offsets(skel).float()
             subject_name = subject_path.split('4CVPR/Data/')[1].split('/OpenCap/')[0]
+            trial_name = subject_path.split('/')[-1].split('.')[0]
             dset_name = subject_path.split('/')[-3]
 
             if f'uhlrich_dset_{subject_name}' in WEIGHT_KG_OVERWRITE.keys():
@@ -89,12 +90,21 @@ class DatasetOpenCap(MotionDataset):
             converted_states = torch.tensor(states_df.values).float()
             probably_missing = [False] * converted_states.shape[0]
             self.trials.append(TrialData(
-                converted_states, probably_missing, model_offsets, [], subject_path.split('/')[-1][:-4],
+                converted_states, probably_missing, model_offsets, [], f'{subject_name}__{trial_name}',
                 i_sub, skel.getHeight(np.zeros(skel.getNumDofs())), weight_kg, dset_name, rot_mat, pos_vec,
                 poses.shape[0], cond, mtp_r_vel, mtp_l_vel))
             self.dset_set.add(dset_name)
 
             print('Current trial num: {}'.format(len(self.trials)))
+
+
+def convert_overlapped_list_to_array(trial_len, win_list, s_, e_, fun=np.nanmedian):
+    array_val_expand = np.full((len(win_list), trial_len, win_list[0].shape[1]), np.nan)
+    for i_win, (win, s, e) in enumerate(zip(win_list, s_, e_)):
+        array_val_expand[i_win, s:e] = win[:e-s]
+    array_val = fun(array_val_expand, axis=0)
+    std_val = np.nanstd(array_val_expand, axis=0)
+    return array_val, std_val
 
 
 def loop_all(opt, trials, windows, kinematic_type_str):
@@ -123,13 +133,15 @@ def loop_all(opt, trials, windows, kinematic_type_str):
         state_pred_list_averaged.append(averaged)
         state_pred_list_std.append(std)
 
-    results_true, results_pred, results_pred_std = {}, {}, {}
-    for win, state_pred_mean, state_pred_std in zip(windows, state_pred_list_averaged, state_pred_list_std):
+    results_true, results_pred, results_pred_std, results_s, results_e = {}, {}, {}, {}, {}
+    for i_win, (win, state_pred_mean, state_pred_std) in enumerate(zip(windows, state_pred_list_averaged, state_pred_list_std)):
         trial = trials[win.trial_id]
         if trial.sub_and_trial_name not in results_true.keys():
             results_true.update({trial.sub_and_trial_name: []})
             results_pred.update({trial.sub_and_trial_name: []})
             results_pred_std.update({trial.sub_and_trial_name: []})
+            results_s.update({trial.sub_and_trial_name: []})
+            results_e.update({trial.sub_and_trial_name: []})
 
         true_val = inverse_convert_addb_state_to_model_input(
             model.normalizer.unnormalize(win.pose.unsqueeze(0)), opt.model_states_column_names,
@@ -137,47 +149,34 @@ def loop_all(opt, trials, windows, kinematic_type_str):
         mask = win.mask.squeeze().numpy()
         true_val = true_val * mask[:, 3].repeat(35).reshape((150, -1))
         state_pred_mean = state_pred_mean * mask[:, 3].repeat(35).reshape((150, -1))
-        state_pred_std = state_pred_std * mask[:, 3].repeat(35).reshape((150, -1))
-
-        # trial_of_this_win = trials[win.trial_id]
-        # skel = test_dataset.skels[trial.dset_name+'_'+trial.sub_and_trial_name.split('__')[0]]
-        """For opencap data, skel need to be stored after destructing the dataset"""
-        # true_val = inverse_norm_cops(skel, true_val, opt, trial_of_this_win.weight_kg, trial_of_this_win.height_m)
-        # state_pred_mean = inverse_norm_cops(skel, state_pred_mean, opt, trial_of_this_win.weight_kg, trial_of_this_win.height_m)
 
         results_true[trial.sub_and_trial_name].append(true_val)
-        results_pred[trial.sub_and_trial_name].append(state_pred_mean)
-        results_pred_std[trial.sub_and_trial_name].append(state_pred_std)
+        results_pred[trial.sub_and_trial_name].append(state_pred_mean.numpy())
+        results_s[trial.sub_and_trial_name].append(s_list[i_win])
+        results_e[trial.sub_and_trial_name].append(e_list[i_win])
 
     params_of_interest = ['calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz']
     params_of_interest_col_loc = [opt.osim_dof_columns.index(col) for col in params_of_interest]
     true_all, pred_all, pred_std_all = [], [], []
     for sub_and_trial in results_true.keys():
-        results_true[sub_and_trial] = np.concatenate(results_true[sub_and_trial], axis=0)
-        results_pred[sub_and_trial] = np.concatenate(results_pred[sub_and_trial], axis=0)
-        results_pred_std[sub_and_trial] = np.concatenate(results_pred_std[sub_and_trial], axis=0)
+        trial_len = [trial.converted_pose.shape[0] for trial in trials if trial.sub_and_trial_name == sub_and_trial][0]
+        results_true[sub_and_trial], _ = convert_overlapped_list_to_array(
+            trial_len, results_true[sub_and_trial], results_s[sub_and_trial], results_e[sub_and_trial])
+        results_pred[sub_and_trial], results_pred_std[sub_and_trial] = convert_overlapped_list_to_array(
+            trial_len, results_pred[sub_and_trial], results_s[sub_and_trial], results_e[sub_and_trial])
 
         stance_phase = np.abs(results_true[sub_and_trial][:, params_of_interest_col_loc[1]]) > 1e-5
         for trial in trials:
             if trial.sub_and_trial_name == sub_and_trial:
                 break
-        # true_moment, moment_names = osim_states_to_knee_moments_in_percent_BW_BH(
-        #     results_true[sub_and_trial][stance_phase], test_dataset.skels[trial.dset_name+'_'+trial.sub_and_trial_name.split('__')[0]], opt, trial.height_m)
-        # pred_moment, _ = osim_states_to_knee_moments_in_percent_BW_BH(
-        #     results_pred[sub_and_trial][stance_phase], test_dataset.skels[trial.dset_name+'_'+trial.sub_and_trial_name.split('__')[0]], opt, trial.height_m)
-        # true_states = np.concatenate([results_true[sub_and_trial][stance_phase], true_moment / 10 * trial.height_m * trial.weight_kg], axis=1)
-        # pred_states = np.concatenate([results_pred[sub_and_trial][stance_phase], pred_moment / 10 * trial.height_m * trial.weight_kg], axis=1)
-        # true_all.append(true_states)
-        # pred_all.append(pred_states)
-
         true_all.append(results_true[sub_and_trial][stance_phase])
         pred_all.append(results_pred[sub_and_trial][stance_phase])
         pred_std_all.append(results_pred_std[sub_and_trial][stance_phase])
     true_all = np.concatenate(true_all, axis=0)
     pred_all = np.concatenate(pred_all, axis=0)
     pred_std_all = np.concatenate(pred_std_all, axis=0)
-    # pickle.dump([true_all, pred_all, pred_std_all, opt.osim_dof_columns+moment_names], open(f"results/{kinematic_type_str}.pkl", "wb"))
     pickle.dump([true_all, pred_all, pred_std_all, opt.osim_dof_columns], open(f"results/{kinematic_type_str}.pkl", "wb"))
+
     for i_param, param in enumerate(params_of_interest[1:2]):
         idx = opt.osim_dof_columns.index(param)
         scores = get_scores(true_all[:, idx:idx+1], pred_all[:, idx:idx+1], [param], None)
@@ -189,9 +188,10 @@ def loop_all(opt, trials, windows, kinematic_type_str):
 
 
 if __name__ == "__main__":
-    skel_num = 3
+    skel_num = 2
+    win_step_length = 15
     opt = parse_opt()
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'6993_small'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'6993'}.pt"
     model = torch.load(opt.checkpoint)
     repr_dim = model["ema_state_dict"]["input_projection.weight"].shape[1]
     set_with_arm_opt(opt, False)
@@ -206,20 +206,15 @@ if __name__ == "__main__":
         divide_jittery=False,
         include_trials_shorter_than_window_len=True,
         specific_trial='walking',
+        # max_trial_num=3
     )
-    for trial_ in test_dataset.trials:
-        if 'walkingTS' in trial_.sub_and_trial_name:
-            trial_.converted_pose = trial_.converted_pose[50:]
-        else:
-            trial_.converted_pose = trial_.converted_pose[20:]
-        trial_.length = trial_.converted_pose.shape[0]
-    windows = test_dataset.get_all_wins_including_shorter_than_window_len(opt.kinematic_diffusion_col_loc)
+    windows, s_list, e_list = test_dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, win_step_length)
     trials = test_dataset.trials
     loop_all(opt, trials, windows, 'marker_based')
 
     """ Use opencap-based kinematics """
-    trials, windows = [], []
-    for sub_num in range(2, 4):
+    trials, windows, s_list, e_list = [], [], [], []
+    for sub_num in range(2, 12):
         test_dataset = DatasetOpenCap(
             data_path=f'/mnt/g/Shared drives/NMBL Shared Data/datasets/Uhlrich2023/Raw/4CVPR/Data/subject{sub_num}/OpenCap/',
             train=False,
@@ -227,15 +222,13 @@ if __name__ == "__main__":
             opt=opt,
             divide_jittery=False,
         )
-        for trial_ in test_dataset.trials:
-            if 'walkingTS' in trial_.sub_and_trial_name:
-                trial_.converted_pose = trial_.converted_pose[50:]
-            else:
-                trial_.converted_pose = trial_.converted_pose[20:]
-            trial_.length = trial_.converted_pose.shape[0]
-        windows_sub = test_dataset.get_all_wins_including_shorter_than_window_len(opt.kinematic_diffusion_col_loc)
+        windows_sub, s_list_sub, e_list_sub = test_dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, win_step_length)
+        for i_win in range(len(windows_sub)):
+            windows_sub[i_win].trial_id = len(trials) +windows_sub[i_win].trial_id
         windows.extend(windows_sub)
         trials.extend(test_dataset.trials)
+        s_list.extend(s_list_sub)
+        e_list.extend(e_list_sub)
 
     loop_all(opt, trials, windows, 'opencap_based')
 

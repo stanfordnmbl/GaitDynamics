@@ -5,6 +5,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import rc
 import matplotlib.gridspec as gridspec
+from matplotlib.legend_handler import HandlerPatch
+import matplotlib.patches as mpatches
+
+
+class HandlerArrow(HandlerPatch):
+    def create_artists(self, legend, orig_handle,
+                       xdescent, ydescent, width, height, fontsize, trans):
+        p = mpatches.FancyArrow(0.5*width, 1.9*height, 0, -2.*height, length_includes_head=True, head_width=0.3*width, overhang=.6)
+        self.update_prop(p, orig_handle, legend)
+        p.set_transform(trans)
+        return [p]
 
 
 def get_average_and_std(bl_true, bl_pred, ts_true, condition, params_of_interest_col_loc):
@@ -18,56 +29,75 @@ def get_average_and_std(bl_true, bl_pred, ts_true, condition, params_of_interest
     return true_averaged, pred_averaged, ts_averaged, true_std, pred_std, ts_std
 
 
-def format_ticks(ax_kam, ax_angles):
+def format_ticks(ax_kam):
     ax_kam.set_ylabel('Knee Adduction Moment (% BW·BH)', fontdict=FONT_DICT_SMALL)
-    ax_angles.set_ylabel('Trunk Sway Angle (deg)', fontdict=FONT_DICT_SMALL)    # \nTo Contralateral Leg        To Ipsilateral Leg
-    for ax in [ax_kam, ax_angles]:
-        ax.set_xlabel('Stance Phase (%)', fontdict=FONT_DICT_SMALL)
-        ax.set_xlim(0, 100)
-        ax.set_xticks(range(0, 101, 20))
-        ax.set_xticklabels(range(0, 101, 20), fontdict=FONT_DICT_SMALL)
-    ax_kam.set_ylim(-1, 3.5)
+    ax_kam.yaxis.set_label_coords(-0.1, 0.43)
+    ax_kam.set_xlabel('Stance Phase (%)', fontdict=FONT_DICT_SMALL)
+    ax_kam.set_xlim(0, 100)
+    ax_kam.set_xticks(range(0, 101, 20))
+    ax_kam.set_xticklabels(range(0, 101, 20), fontdict=FONT_DICT_SMALL)
+    ax_kam.set_ylim(-1, 3)
     ax_kam.set_yticks(range(-1, 4))
     ax_kam.set_yticklabels(range(-1, 4), fontdict=FONT_DICT_SMALL)
-    ax_angles.set_ylim(-23, 35)
-    ax_angles.set_yticks(range(-20, 31, 10))
-    ax_angles.set_yticklabels(range(-20, 31, 10), fontdict=FONT_DICT_SMALL)
+
+
+def curve_fun(x, y_start, scale):
+    y = [y_start + scale * np.log(x_-x[0]+1) for x_ in x]
+    return y
 
 
 def draw_fig():
     bl_true, bl_pred, _, _, columns, _, _, _, = \
-        pickle.load(open(f"results/da_guided_baseline.pkl", "rb"))
+        pickle.load(open(f"results/da_guided_baseline_stable.pkl", "rb"))
     ts_true, ts_pred, _, _, columns, _, _, _, = \
-        pickle.load(open(f"results/da_guided_trunk_sway.pkl", "rb"))
+        pickle.load(open(f"results/da_guided_trunk_sway_stable.pkl", "rb"))
     condition_list = list(bl_true.keys())
 
     params_of_interest = ['knee_moment_l_x', 'lumbar_bending']
     params_of_interest_col_loc = [columns.index(col) for col in params_of_interest]
 
-    colors = [np.array(x) / 255 for x in [[123, 204, 196], [67, 162, 202], [8, 104, 172]]]
-
+    color_bl = [.4, .4, .4]
+    color_exp = [.8, .6, .3]
+    color_pred = [.2, .6, .7]
     rc('font', family='Arial')
-    fig = plt.figure(figsize=(9, 3))
-    gs = gridspec.GridSpec(nrows=1, ncols=2, wspace=0.2, width_ratios=[4, 4])        # , width_ratios=[8, 1, 8]
-    ax_kam = fig.add_subplot(gs[0])
-    ax_angles = fig.add_subplot(gs[1])
-    for i, (ax, scale) in enumerate(zip([ax_kam, ax_angles], [1, - 180/np.pi])):
-        for i_condition, condition in enumerate(condition_list):
-            condition_val = condition.split('_')[-1]
-            true_averaged, pred_averaged, ts_averaged, true_std, pred_std, ts_std = [scale * ele for ele in get_average_and_std(
-                bl_true, bl_pred, ts_true, condition, params_of_interest_col_loc)]
+    fig = plt.figure(figsize=(3.5, 2.8))
+    ax = fig.gca()
+    i_param = 0
+    for i_condition, condition in enumerate(condition_list[-1:]):
+        condition_val = condition.split('_')[-1]
+        true_averaged, pred_averaged, ts_averaged, true_std, pred_std, ts_std = [ele for ele in get_average_and_std(
+            bl_true, bl_pred, ts_true, condition, params_of_interest_col_loc)]
 
-            ax.plot(pred_averaged[:, i], color=colors[i_condition], linewidth=LINE_WIDTH_THICK, label=f'{condition_val} x Normal Trunk Sway - Synthetic         ')
-            ax.grid(True, linewidth=1, alpha=0.5)
-            if i_condition == len(condition_list) - 1:
-                ax.plot(true_averaged[:, i], '--', color=[0.4, 0.4, 0.4], label='Normal Walking - Experimental')
-                ax.fill_between(range(len(true_averaged)), true_averaged[:, i] - true_std[:, i], true_averaged[:, i] + true_std[:, i], color='gray', alpha=0.3)
-                ax.plot(ts_averaged[:, i], '--', color='C3', label='Large Trunk Sway - Experimental')
-                ax.fill_between(range(len(ts_averaged)), ts_averaged[:, i] - ts_std[:, i], ts_averaged[:, i] + ts_std[:, i], color='C3', alpha=0.3)
-            format_axis(ax)
-    plt.legend(frameon=False, bbox_to_anchor=(0.4, 1.4), ncol=2)       # fontsize=font_size,
-    format_ticks(ax_kam, ax_angles)
-    plt.savefig(f'exports/da_guided_ts.png', dpi=300, bbox_inches='tight')
+        ax.plot(pred_averaged[:, i_param], color=color_pred, linewidth=LINE_WIDTH_THICK, label=f'Moment Reduction - Predicted')
+        if i_condition == 0:
+            ax.plot(true_averaged[:, i_param], linewidth=LINE_WIDTH_THICK, color=color_bl, label='Normal Walking - Experimental')
+            ax.plot(ts_averaged[:, i_param], linewidth=LINE_WIDTH_THICK, color=color_exp, label='Moment Reduction - Experimental')
+            for x_ in [60]:
+                arrow1 = plt.arrow(x_, true_averaged[x_, i_param] - 0.05, 0, ts_averaged[x_, i_param] - true_averaged[x_, i_param] + 0.2,
+                                   color=1-0.5*(1-np.array(color_exp)), linewidth=4, length_includes_head=True, head_width=5, head_length=0.2)
+        for x_ in [50]:
+            arrow2 = plt.arrow(x_, true_averaged[x_, i_param] - 0.05, 0, pred_averaged[x_, i_param] - true_averaged[x_, i_param] + 0.2,
+                               color=1-0.5*(1-np.array(color_pred)), linewidth=4, length_includes_head=True, head_width=5, head_length=0.2, label='')
+        # ax.grid(True, linewidth=1, alpha=0.5)
+        format_axis(ax)
+
+    format_ticks(ax)
+    plt.tight_layout(rect=[-0.02, -0.02, 1.02, 1.02])
+    ax.plot(true_averaged[:, i_param], linewidth=LINE_WIDTH_THICK, color=color_bl, label='Normal Walking - Experimental')
+
+    s, e = 14, 36
+    ax.plot(range(s, e), curve_fun(range(s, e), true_averaged[s, i_param], -0.14), '--', linewidth=LINE_WIDTH, color=color_bl, label='Normal Walking - Experimental')
+    ax.text(e+1, curve_fun(range(s, e), true_averaged[s, i_param], -0.14)[-1]-0.1, 'In-Lab Baseline', color=color_bl, fontdict=FONT_DICT_SMALL)
+
+    s, e = 14, 36
+    ax.plot(range(s, e), curve_fun(range(s, e), ts_averaged[s, i_param], -0.1), '--', linewidth=LINE_WIDTH, color=color_exp)
+    ax.text(e+1, curve_fun(range(s, e), ts_averaged[s, i_param], -0.1)[-1]-0.1, 'In-Lab Intervention', color=color_exp, fontdict=FONT_DICT_SMALL)
+
+    s, e = 14, 36
+    ax.plot(range(s, e), curve_fun(range(s, e), pred_averaged[s, i_param], -0.1), '--', linewidth=LINE_WIDTH, color=color_pred)
+    ax.text(e+1, curve_fun(range(s, e), pred_averaged[s, i_param], -0.1)[-1]-0.1, 'FAIR Prediction', color=color_pred, fontdict=FONT_DICT_SMALL)
+
+    plt.savefig(f'exports/da_guided_ts.png', dpi=300)
     plt.show()
 
 

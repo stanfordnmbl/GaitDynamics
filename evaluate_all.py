@@ -28,10 +28,8 @@ def loop_all(opt):
             opt=opt,
             divide_jittery=False,
             specific_dset=dset,
-            # max_trial_num=1,     # !!!
-            # trial_start_num=10,   # !!!
         )
-        windows = test_dataset.get_all_wins_within_gait_cycle()
+        windows = test_dataset.get_all_wins_within_gait_cycle([0])
         if len(windows) == 0:
             continue
 
@@ -86,7 +84,7 @@ def loop_all(opt):
             state_pred_list_batch = model.eval_loop(opt, state_true, masks, num_of_generation_per_window=skel_num-1)
             pos_vec = np.array([test_dataset.trials[windows[i_win_vec].trial_id].pos_vec_for_pos_alignment
                                 for i_win_vec in range(len(windows[i_win:i_win+opt.batch_size_inference]))])
-            height_m_tensor = torch.tensor([win.height_m for win in windows[i_win:i_win+opt.batch_size_inference]]).unsqueeze(1)
+            height_m_tensor = torch.tensor([win.height_m for win in windows[i_win:i_win+opt.batch_size_inference]])
             state_pred_list_batch = inverse_convert_addb_state_to_model_input(
                 state_pred_list_batch, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, pos_vec, height_m_tensor)
             for i_skel in range(skel_num-1):
@@ -110,7 +108,7 @@ def loop_all(opt):
                 results_pred_std[trial.dset_name].update({trial.sub_and_trial_name: []})
             true_val = inverse_convert_addb_state_to_model_input(
                 model.normalizer.unnormalize(win.pose.unsqueeze(0)), opt.model_states_column_names,
-                opt.joints_3d, opt.osim_dof_columns, trial.pos_vec_for_pos_alignment, win.height_m).squeeze().numpy()
+                opt.joints_3d, opt.osim_dof_columns, trial.pos_vec_for_pos_alignment, torch.tensor(win.height_m)).squeeze().numpy()
             results_true[trial.dset_name][trial.sub_and_trial_name].append(true_val)
             results_pred[trial.dset_name][trial.sub_and_trial_name].append(state_pred_mean)
             results_pred_std[trial.dset_name][trial.sub_and_trial_name].append(state_pred_std)
@@ -175,8 +173,8 @@ if __name__ == "__main__":
     skel_num = 4
     opt = parse_opt()
 
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'4925'}.pt"
-    # opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'include_no_grf_trials_for_vel'}/weights/train-{'9768'}.pt"
+    # opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'4925'}.pt"
+    opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'fixed_txtytz_vel'}/weights/train-{'6993'}.pt"
 
     cols_to_mask = {
         'ankle': opt.knee_diffusion_col_loc,

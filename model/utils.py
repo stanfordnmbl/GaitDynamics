@@ -88,6 +88,9 @@ def inverse_norm_cops(skel, states, opt, sub_mass, height_m):
     poses = states[:, opt.kinematic_osim_col_loc]
     forces = states[:, opt.grf_osim_col_loc]
     normed_cops = states[:, opt.cop_osim_col_loc]
+    if len(skel.getDofs()) != poses.shape[1]:        # With Arm model
+        print('With Arm model is used. Adding 6 zeros to the end of the poses.')
+        poses = np.concatenate([poses, np.zeros((poses.shape[0], 10))], axis=-1)
     foot_loc = get_multi_body_loc_using_nimble_by_body_names(('calcn_r', 'calcn_l'), skel, poses)
 
     for i_plate in range(2):
@@ -176,7 +179,7 @@ def inverse_convert_addb_state_to_model_input(model_states, model_states_column_
 
     for i_col, col in enumerate(['pelvis_tx', 'pelvis_ty', 'pelvis_tz']):
         model_states_dict[col] = torch.cumsum(model_states_dict[col], dim=-1) / sampling_fre
-    model_states_dict['pelvis_ty'] = model_states_dict['pelvis_ty'] * height_m.unsqueeze(-1).expand(model_states_dict['pelvis_ty'].shape)
+        model_states_dict[col] = model_states_dict[col] * height_m.unsqueeze(-1).expand(model_states_dict[col].shape)
 
     # convert 6v to euler
     for joint_name, joints_with_3_dof in joints_3d.items():
@@ -335,7 +338,7 @@ def moving_average_filtering(x, N):
     return (cumsum[N:] - cumsum[:-N]) / float(N)
 
 
-def from_foot_loc_to_foot_vel(mtp_loc, foot_grf, sampling_rate, grf_thd=2):         # 2 times of body mass Kg
+def from_foot_loc_to_foot_vel(mtp_loc, foot_grf, sampling_rate, grf_thd=4):         # 2 times of body mass Kg
     foot_vel = np.diff(mtp_loc, axis=0) * sampling_rate
     foot_vel = np.concatenate([foot_vel, foot_vel[-1][None, :]], axis=0)
     low_grf_loc = foot_grf < grf_thd

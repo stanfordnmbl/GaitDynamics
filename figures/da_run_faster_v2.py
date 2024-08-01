@@ -128,8 +128,8 @@ def loop_all(opt):
 
 b3d_path = f'/mnt/d/Local/Data/MotionPriorData/hamner_dset/'
 
-""" To use this code,
-
+""" 
+Gradient-based, which computes gradient of vel w.r.t. angles.
 """
 
 if __name__ == "__main__":

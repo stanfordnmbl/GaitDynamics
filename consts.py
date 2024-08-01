@@ -44,6 +44,21 @@ FROZEN_DOFS = ['mtp_angle_r', 'mtp_angle_l',
 DSET_SHORT_NAMES = ['Camargo2021', 'Carter2023', 'Fregly2012', 'Falisse2017', 'Hammer2013', 'Han2023', 'Li2021', 'Moore2015',
                     'Santos2017', 'Tan2021', 'Tan2022', 'Tiziana2019', 'Uhlrich2023', 'vanderZee2022', 'Wang2023']
 DATASETS_NO_ARM = [name_ + '_Formatted_No_Arm' for name_ in DSET_SHORT_NAMES]
+OVERGROUND_DSETS = ['fregly', 'falisse', 'han', 'santos', 'uhlrich', 'tiziana', 'vancriek']
+
+# If the provided weight doesn't match static trial force plate measurements, then use this dictionary to overwrite.
+WEIGHT_KG_OVERWRITE = {
+    'uhlrich_dset_subject2': 79.2,
+    'uhlrich_dset_subject3': 66.3,
+    'uhlrich_dset_subject4': 60.0,
+    'uhlrich_dset_subject5': 82.7,
+    'uhlrich_dset_subject6': 62.6,
+    'uhlrich_dset_subject7': 60.9,
+    'uhlrich_dset_subject8': 62.4,
+    # 'uhlrich_dset_subject9': 0.0,
+    'uhlrich_dset_subject10': 56.6,
+    'uhlrich_dset_subject11': 94.9,
+}
 
 NOT_IN_GAIT_PHASE = -1000
 

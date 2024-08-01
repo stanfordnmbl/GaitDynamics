@@ -45,7 +45,7 @@ def loop_all(opt):
         divide_jittery=False,
         max_trial_num=max_trial_num,
         trial_start_num=trial_start_num,
-        specific_trial='300'
+        specific_trial='500'
     )
     windows_manipulated_exp = test_dataset_mani.get_one_win_from_the_end_of_each_trial(test_dataset_mani.manipulated_col_loc)
 
@@ -57,7 +57,7 @@ def loop_all(opt):
         divide_jittery=False,
         max_trial_num=max_trial_num,
         trial_start_num=trial_start_num,
-        specific_trial='300'
+        specific_trial='500'
     )
     windows_bl_exp = test_dataset.get_one_win_from_the_end_of_each_trial([0])
 
@@ -90,7 +90,7 @@ def loop_all(opt):
         value_diff_weight[test_dataset_mani.do_not_follow_col_loc] = 0
 
         value_diff_thd = torch.zeros([len(opt.model_states_column_names)])
-        value_diff_thd[:] = 3         # large value for no constraint
+        value_diff_thd[:] = 1         # large value for no constraint
         value_diff_thd[test_dataset_mani.manipulated_col_loc] = 999
         value_diff_thd[test_dataset_mani.do_not_follow_col_loc] = 999
 
@@ -175,12 +175,12 @@ b3d_path = f'/mnt/d/Local/Data/MotionPriorData/hamner_dset/'
 """
 
 if __name__ == "__main__":
-    skel_num = 5
+    skel_num = 2
     opt = parse_opt()
     opt.n_guided_steps = 5
     opt.guidance_lr = 0.02
 
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'6993'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'5994'}.pt"
 
     loop_all(opt)
 
