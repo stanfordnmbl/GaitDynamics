@@ -18,8 +18,8 @@ def select_the_best_generation(state_pred_list_batch, skel, trial_of_this_win):
     knee_angle_r_max, i_win_list = [], []
     for i_win, state_pred in enumerate(state_pred_list_batch):
         state_pred = inverse_norm_cops(skel, state_pred[0].numpy(), opt, trial_of_this_win.weight_kg, trial_of_this_win.height_m)
-        if len(extract_gait_parameters_from_osim_states(state_pred, skel, opt)['hip_flexion_r_max']):
-            knee_angle_r_max.append(extract_gait_parameters_from_osim_states(state_pred, skel, opt)['hip_flexion_r_max'][0])
+        if len(extract_gait_parameters_from_osim_states(state_pred, skel, opt)['knee_angle_r_max']):
+            knee_angle_r_max.append(extract_gait_parameters_from_osim_states(state_pred, skel, opt)['knee_angle_r_max'][0])
             i_win_list.append(i_win)
 
     i_median_gait = np.argsort(knee_angle_r_max)[len(knee_angle_r_max)//2]
@@ -35,19 +35,18 @@ def select_the_best_generation(state_pred_list_batch, skel, trial_of_this_win):
 
 
 def loop_all(opt):
-    model = torch.load(opt.checkpoint)
-    repr_dim = model["ema_state_dict"]["input_projection.weight"].shape[1]
     set_with_arm_opt(opt, False)
-    model = MotionModel(opt, repr_dim)
-    for speed in range(3, 6):
+    model = MotionModel(opt)
+    for speed in [0.8, 1, 1.2, 1.4]:
+        print('Generating speed: ', speed)
         test_dataset = MotionDataset(
             data_path=b3d_path,
             train=False,
             normalizer=model.normalizer,
             opt=opt,
             divide_jittery=False,
-            max_trial_num=2,
-            specific_trial=f'{speed}00'
+            max_trial_num=1,
+            # specific_trial=f'{speed}00'
         )
         windows_exp = test_dataset.get_one_win_from_the_end_of_each_trial([0])
 
@@ -58,7 +57,7 @@ def loop_all(opt):
             skel = test_dataset.skels[dset_sub_name]
 
             state_manipulated = torch.zeros([1, 150, 75])
-            state_manipulated[:, :, 0] = speed
+            state_manipulated[:, :, 0] = speed / win_exp.height_m * model.normalizer.scaler.scale_[0] + model.normalizer.scaler.min_[0]
             masks = torch.zeros([1, 150, 75])
             masks[:, :, 0] = 1
             cond = torch.stack([win_exp.cond])
@@ -88,6 +87,7 @@ def loop_all(opt):
         std_ = np.std(angle_resampled, axis=0)
         plt.plot(average_knee_angle_exp * 180 / np.pi, label='Experimental')
         plt.fill_between(range(101), (average_knee_angle_exp - std_) * 180 / np.pi, (average_knee_angle_exp + std_) * 180 / np.pi, alpha=0.3)
+        plt.grid()
     plt.show()
 
 

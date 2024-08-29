@@ -15,11 +15,8 @@ import pickle
 
 
 def loop_all(opt):
-    model = torch.load(opt.checkpoint)
-    repr_dim = model["ema_state_dict"]["input_projection.weight"].shape[1]
     set_with_arm_opt(opt, False)
-
-    model = MotionModel(opt, repr_dim)
+    model = MotionModel(opt)
     model.diffusion.set_normalizer(model.normalizer)
 
     max_trial_num = 2

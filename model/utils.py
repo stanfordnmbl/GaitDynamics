@@ -178,8 +178,8 @@ def inverse_convert_addb_state_to_model_input(model_states, model_states_column_
                          col in osim_dof_columns}
 
     for i_col, col in enumerate(['pelvis_tx', 'pelvis_ty', 'pelvis_tz']):
-        model_states_dict[col] = torch.cumsum(model_states_dict[col], dim=-1) / sampling_fre
         model_states_dict[col] = model_states_dict[col] * height_m.unsqueeze(-1).expand(model_states_dict[col].shape)
+        model_states_dict[col] = torch.cumsum(model_states_dict[col], dim=-1) / sampling_fre
 
     # convert 6v to euler
     for joint_name, joints_with_3_dof in joints_3d.items():

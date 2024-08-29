@@ -15,10 +15,8 @@ if __name__ == "__main__":
     carter_data_path = '/dataNAS/people/alanttan/mfm/data/b3d_no_arm/train_cleaned/Carter2023_Formatted_No_Arm/'
     opt.checkpoint = f"/dataNAS/people/alanttan/mfm/code/runs/train/t_plus_cond/weights/train-{'6993'}.pt"
 
-    model = torch.load(opt.checkpoint)
-    repr_dim = model["ema_state_dict"]["input_projection.weight"].shape[1]
     set_with_arm_opt(opt, False)
-    model = MotionModel(opt, repr_dim)
+    model = MotionModel(opt)
 
     subjects = list(sorted(set([x[0].split('Carter2023_Formatted_No_Arm/')[1].split('_split')[0]
                                 for x in os.walk(carter_data_path)])))

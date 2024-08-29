@@ -9,17 +9,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import collections
 from model.utils import inverse_convert_addb_state_to_model_input, inverse_norm_cops
-from fig_utils import show_skeletons, set_up_gui
+from fig_utils import show_skeletons, set_up_gui, VanCriekMetaData
 import pickle
-
-
-def get_sub_meta(sub, meta_table):
-    sub_meta = meta_table[meta_table['ID'] == sub]
-    assert len(sub_meta) == 1
-    sub_meta_dict = sub_meta.iloc[0].to_dict()
-    if np.isnan(sub_meta_dict['FAC']):
-        sub_meta_dict['FAC'] = 0
-    return sub_meta_dict
 
 
 def metric_smoothness(pred_array, diff_array, param_col_loc):
@@ -65,12 +56,10 @@ def show_pca(data_transformed, trial_lens, fac_of_trials):
 
 
 def loop_all():
-    meta_table = pd.read_csv('/mnt/g/Shared drives/NMBL Shared Data/datasets/VanCriekinge2023/meta_data.csv')
-    meta_table.columns = [col.split('\n')[0] for col in meta_table.columns]
     data_path = '/mnt/d/Local/Data/MotionPriorData/vancriek_dset/'
     stroke_subjects = [data_path + 'stroke/' + sub_name + '/' for sub_name in os.listdir(data_path + 'stroke')]
     healhty_subjects = [data_path + 'healthy/' + sub_name + '/' for sub_name in os.listdir(data_path + 'healthy')]
-    all_subjects = stroke_subjects[:10] + healhty_subjects[:10]  # !!!
+    all_subjects = stroke_subjects[:] + healhty_subjects[:]
 
     fac_of_subs, ood_metric, baseline_metric = [], [], []
     save_data_for_z_score = []
@@ -91,8 +80,8 @@ def loop_all():
         if len(test_dataset.trials) == 0:
             continue
         fac_of_subs.append(
-            int(get_sub_meta(test_dataset.trials[0].sub_and_trial_name.split('__')[0], meta_table)['FAC']))
-        windows = test_dataset.get_all_wins_including_shorter_than_window_len(opt.kinematic_diffusion_col_loc)
+            int(meta_data.get_sub_meta(test_dataset.trials[0].sub_and_trial_name.split('__')[0])['FAC']))
+        windows = test_dataset.get_all_wins(opt.kinematic_diffusion_col_loc)
         windows = windows[:-1]  # remove the last incomplete window
 
         mean_speed = np.mean([model.normalizer.unnormalize(trial_.converted_pose.unsqueeze(0))[:, :,
@@ -114,7 +103,7 @@ def loop_all():
             state_true_filled = state_true*masks + state_true_filled*(1-masks)
 
             constraint = {'value': state_true_filled.clone(), 'cond': cond, 'total_timesteps': 500}
-            state_pred_list = model.diffusion.noise_denoise_at_each_t_ddpm(
+            state_pred_list = model.diffusion.noise_denoise_at_each_t(
                 shape=(state_true_filled.shape[0], model.horizon, model.repr_dim),
                 constraint=constraint)
 
@@ -122,23 +111,23 @@ def loop_all():
             diff = [((state_true - state_pred.cpu()) * masks).numpy() for state_pred in state_pred_list]
             diff_list_sub.append(diff)
 
-            # [DEBUG]
-            state_pred_to_show = [model.normalizer.unnormalize(state_pred).cpu() for state_pred in state_pred_list]
-            for j_win in range(i_win, i_win+state_true.shape[0]):
-                height_m_tensor = torch.tensor([win.height_m for win in windows[j_win:j_win+1]])
-                name_states_dict = {}
-                for i_generation, states in enumerate([model.normalizer.unnormalize(state_true)] + state_pred_to_show[::]):
-                    states = inverse_convert_addb_state_to_model_input(
-                        states, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], height_m_tensor)
-                    skel_ = list(test_dataset.skels.values())[0]
-                    win_osim = inverse_norm_cops(skel_, states[j_win], opt, windows[j_win].weight_kg, windows[j_win].height_m).detach().numpy()
-                    if i_generation == 0:
-                        name = 'True'
-                    else:
-                        name = f'Generation {i_generation}'
-                    name_states_dict.update({name: win_osim})
-                for _ in range(1):
-                    show_skeletons(opt, name_states_dict, gui, skel_)
+            # # [DEBUG]
+            # state_pred_to_show = [model.normalizer.unnormalize(state_pred).cpu() for state_pred in state_pred_list]
+            # for j_win in range(i_win, i_win+state_true.shape[0]):
+            #     height_m_tensor = torch.tensor([win.height_m for win in windows[j_win:j_win+1]])
+            #     name_states_dict = {}
+            #     for i_generation, states in enumerate([model.normalizer.unnormalize(state_true)] + state_pred_to_show[::]):
+            #         states = inverse_convert_addb_state_to_model_input(
+            #             states, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], height_m_tensor)
+            #         skel_ = list(test_dataset.skels.values())[0]
+            #         win_osim = inverse_norm_cops(skel_, states[j_win], opt, windows[j_win].weight_kg, windows[j_win].height_m).detach().numpy()
+            #         if i_generation == 0:
+            #             name = 'True'
+            #         else:
+            #             name = f'Generation {i_generation}'
+            #         name_states_dict.update({name: win_osim})
+            #     for _ in range(1):
+            #         show_skeletons(opt, name_states_dict, gui, skel_)
 
         pred_array = np.array(pred_list_sub).swapaxes(0, 1)
         pred_array = pred_array.reshape(pred_array.shape[0], -1, pred_array.shape[-1])
@@ -190,8 +179,7 @@ if __name__ == "__main__":
     skel_num = 2
     opt = parse_opt()
     opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'6993_gait_only'}.pt"
-    model = torch.load(opt.checkpoint)
-    repr_dim = model["ema_state_dict"]["input_projection.weight"].shape[1]
     set_with_arm_opt(opt, False)
-    model = MotionModel(opt, repr_dim)
+    model = MotionModel(opt)
+    meta_data = VanCriekMetaData()
     loop_all()

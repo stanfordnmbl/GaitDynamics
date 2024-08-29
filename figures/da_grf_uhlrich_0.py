@@ -4,15 +4,19 @@ import torch
 import os
 import pandas as pd
 from consts import OSIM_DOF_ALL, KINETICS_ALL, WEIGHT_KG_OVERWRITE
-from model.model import MotionModel
 from data.addb_dataset import MotionDataset, TrialData
 import numpy as np
-from figures.fig_utils import get_scores
+from fig_utils import get_scores
 import matplotlib.pyplot as plt
 import nimblephysics as nimble
 from data.osim_fk import get_model_offsets, forward_kinematics
 from model.utils import linear_resample_data
 from model.utils import convert_addb_state_to_model_input, inverse_convert_addb_state_to_model_input, align_moving_direction
+import inspect, sys
+currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
+parentdir = os.path.dirname(currentdir)
+sys.path.insert(0, parentdir)
+from da_grf_test_set_0 import cols_to_unmask, load_model, convert_overlapped_list_to_array, load_baseline_model
 
 
 class DatasetOpenCap(MotionDataset):
@@ -97,13 +101,13 @@ class DatasetOpenCap(MotionDataset):
             print('Current trial num: {}'.format(len(self.trials)))
 
 
-def convert_overlapped_list_to_array(trial_len, win_list, s_, e_, fun=np.nanmedian):
-    array_val_expand = np.full((len(win_list), trial_len, win_list[0].shape[1]), np.nan)
-    for i_win, (win, s, e) in enumerate(zip(win_list, s_, e_)):
-        array_val_expand[i_win, s:e] = win[:e-s]
-    array_val = fun(array_val_expand, axis=0)
-    std_val = np.nanstd(array_val_expand, axis=0)
-    return array_val, std_val
+# def convert_overlapped_list_to_array(trial_len, win_list, s_, e_, fun=np.nanmedian):
+#     array_val_expand = np.full((len(win_list), trial_len, win_list[0].shape[1]), np.nan)
+#     for i_win, (win, s, e) in enumerate(zip(win_list, s_, e_)):
+#         array_val_expand[i_win, s:e] = win[:e-s]
+#     array_val = fun(array_val_expand, axis=0)
+#     std_val = np.nanstd(array_val_expand, axis=0)
+#     return array_val, std_val
 
 
 def loop_all(opt, trials, windows, kinematic_type_str):
@@ -164,17 +168,14 @@ def loop_all(opt, trials, windows, kinematic_type_str):
         results_pred[sub_and_trial], results_pred_std[sub_and_trial] = convert_overlapped_list_to_array(
             trial_len, results_pred[sub_and_trial], results_s[sub_and_trial], results_e[sub_and_trial])
 
-        stance_phase = np.abs(results_true[sub_and_trial][:, params_of_interest_col_loc[1]]) > 1e-5
-        for trial in trials:
-            if trial.sub_and_trial_name == sub_and_trial:
-                break
-        true_all.append(results_true[sub_and_trial][stance_phase])
-        pred_all.append(results_pred[sub_and_trial][stance_phase])
-        pred_std_all.append(results_pred_std[sub_and_trial][stance_phase])
+        # stance_phase = np.abs(results_true[sub_and_trial][:, params_of_interest_col_loc[1]]) > 1e-5
+        true_all.append(results_true[sub_and_trial])        # [stance_phase]
+        pred_all.append(results_pred[sub_and_trial])
+        pred_std_all.append(results_pred_std[sub_and_trial])
     true_all = np.concatenate(true_all, axis=0)
     pred_all = np.concatenate(pred_all, axis=0)
     pred_std_all = np.concatenate(pred_std_all, axis=0)
-    pickle.dump([true_all, pred_all, pred_std_all, opt.osim_dof_columns], open(f"figures/results/{kinematic_type_str}.pkl", "wb"))
+    pickle.dump([true_all, pred_all, pred_std_all, opt.osim_dof_columns], open(f"results/{kinematic_type_str}.pkl", "wb"))
 
     for i_param, param in enumerate(params_of_interest[1:2]):
         idx = opt.osim_dof_columns.index(param)
@@ -185,61 +186,27 @@ def loop_all(opt, trials, windows, kinematic_type_str):
         plt.plot(pred_all[:, idx:idx+1], label='Pred')
         plt.fill_between(range(len(true_all)), pred_all[:, idx] - pred_std_all[:, idx], pred_all[:, idx] + pred_std_all[:, idx], color='C1', alpha=0.25)
 
-def load_model(opt):
-    model = torch.load(opt.checkpoint)
-    repr_dim = model["ema_state_dict"]["input_projection.weight"].shape[1]
-    set_with_arm_opt(opt, False)
-    model = MotionModel(opt, repr_dim)
-    return model
 
 opt = parse_opt()
-cols_to_unmask = {
-    'none': opt.kinematic_diffusion_col_loc,
-    'trunk': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('force' not in col and 'lumbar' not in col)],
-    'pelvis': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('force' not in col and 'pelvis' not in col) or 'pelvis_t' in col],
-    'hip': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('force' not in col and 'hip' not in col)],
-    'knee': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('force' not in col and 'knee' not in col)],
-    'ankle': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('force' not in col and 'ankle' not in col)],
-}
-cols_to_unmask.update({
-    'trunk_pelvis': list(set(cols_to_unmask['trunk']).intersection(cols_to_unmask['pelvis'])),
-    'trunk_hip': list(set(cols_to_unmask['trunk']).intersection(cols_to_unmask['hip'])),
-    'pelvis_hip': list(set(cols_to_unmask['pelvis']).intersection(cols_to_unmask['hip'])),
-})
-# cols_to_unmask = {key: cols_to_unmask[key] for key in ['trunk_pelvis', 'trunk_hip', 'pelvis_hip']}  # !!!
+
 
 if __name__ == "__main__":
     skel_num = 2
     win_step_length = 15
 
-    """ Test subjects, use marker-based kinematics """
-    opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'fixed_txtytz_vel'}/weights/train-{'6993'}.pt"
-    model = load_model(opt)
-    dset_name = 'addb'
+    """ Uhlrich dataset, use marker-based kinematics """
+    # model, model_key = load_model(opt, use_server=False)
+    model, model_key = load_baseline_model(opt, model_to_test=3)
+    dset_name = 'uhlrich'
     test_dataset = MotionDataset(
-        data_path=opt.data_path_test,
+        data_path='/mnt/d/Local/Data/MotionPriorData/uhlrich_dset/',
         train=False,
         normalizer=model.normalizer,
         opt=opt,
         divide_jittery=False,
         include_trials_shorter_than_window_len=True,
-        dset_keyworks_to_exclude=['Uhlrich'],
-        # max_trial_num=3
+        specific_trial='walking',
     )
-
-    # """ Uhlrich dataset, use marker-based kinematics """
-    # opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'6993'}.pt"
-    # model = load_model(opt)
-    # dset_name = 'uhlrich'
-    # test_dataset = MotionDataset(
-    #     data_path='/mnt/d/Local/Data/MotionPriorData/uhlrich_dset/',
-    #     train=False,
-    #     normalizer=model.normalizer,
-    #     opt=opt,
-    #     divide_jittery=False,
-    #     include_trials_shorter_than_window_len=True,
-    #     specific_trial='walking',
-    # )
 
     for mask_key, unmask_col_loc in cols_to_unmask.items():
         print(mask_key)
@@ -257,7 +224,7 @@ if __name__ == "__main__":
     #         opt=opt,
     #         divide_jittery=False,
     #     )
-    #     windows_sub, s_list_sub, e_list_sub = test_dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, win_step_length)
+    #     windows_sub, s_list_sub, e_list_sub = test_dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, win_step_length, check_grf_validity=False)
     #     for i_win in range(len(windows_sub)):
     #         windows_sub[i_win].trial_id = len(trials) +windows_sub[i_win].trial_id
     #     windows.extend(windows_sub)
@@ -267,7 +234,7 @@ if __name__ == "__main__":
     #
     # loop_all(opt, trials, windows, 'opencap_based')
     #
-    # plt.show()
+    plt.show()
 
 
 

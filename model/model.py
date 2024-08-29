@@ -19,6 +19,9 @@ from model.utils import extract, make_beta_schedule, fix_seed, identity, maybe_w
 from consts import *
 from data.osim_fk import forward_kinematics
 import matplotlib.pyplot as plt
+from torch.nn import TransformerEncoderLayer, TransformerEncoder
+from torch import Tensor
+import math
 
 
 fix_seed()
@@ -28,7 +31,6 @@ class MotionModel:
     def __init__(
             self,
             opt,
-            repr_dim,
             normalizer=None,
             EMA=True,
             learning_rate=4e-4,
@@ -40,7 +42,7 @@ class MotionModel:
         state = AcceleratorState()
         num_processes = state.num_processes
 
-        self.repr_dim = repr_dim
+        self.repr_dim = len(opt.model_states_column_names)
 
         self.horizon = horizon = opt.window_len
 
@@ -65,7 +67,7 @@ class MotionModel:
         #     activation=F.gelu,
         # )
         model = DanceDecoder(
-            nfeats=repr_dim,
+            nfeats=self.repr_dim,
             seq_len=horizon,
             latent_dim=256,
             ff_size=1024,
@@ -78,7 +80,7 @@ class MotionModel:
         diffusion = GaussianDiffusion(
             model,
             horizon,
-            repr_dim,
+            self.repr_dim,
             opt,
             # schedule="cosine",
             n_timestep=1000,
@@ -157,8 +159,7 @@ class MotionModel:
             joint_loss = np.zeros([opt.model_states_column_names.__len__()])
             dataset_loss_record = np.zeros([train_dataset.trial_num])
 
-            # train
-            self.train()            # switch to train mode.
+            self.train()
 
             for step, x in enumerate(load_loop(train_data_loader)):
                 cond = x[5]
@@ -217,21 +218,9 @@ class MotionModel:
                                 loss_val_name_pairs_dset.append((loss_count[0] / loss_count[1], dset_name))
                         log_dict = {name: loss for loss, name in loss_val_name_pairs_dset + loss_val_name_pairs_joints + loss_val_name_pairs_terms}
 
-                        # loss_trial = {trial_.dset_name + trial_.sub_and_trial_name: [0, 0] for trial_ in train_dataset.trials}
-                        # for dset_name, sub_and_trial_name, trial_loss in zip(dset_names, sub_and_trial_names, dataset_loss_record):
-                        #     trial_name_full = dset_name + sub_and_trial_name
-                        #     if trial_loss == 0:
-                        #         continue        # if 0, then the trial is not used for training, thus skipping
-                        #     loss_trial[trial_name_full] = [loss_trial[trial_name_full][0] + trial_loss, loss_trial[trial_name_full][1] + 1]
-                        # loss_val_name_pairs_trial = []
-                        # for trial_name_full, loss_count in loss_trial.items():
-                        #     if loss_count[1] != 0:
-                        #         loss_val_name_pairs_trial.append((loss_count[0] / loss_count[1], trial_name_full))
-                        # log_dict = {name: loss for loss, name in loss_val_name_pairs_trial}
-
                         wandb.log(log_dict)
 
-            if (epoch % 999) == 0:
+            if (epoch % 999) == 0 or epoch == opt.epochs:
                 torch.save(ckpt, os.path.join(wdir, f"train-{epoch}.pt"))
                 print(f"[MODEL SAVED at Epoch {epoch}]")
         if self.accelerator.is_main_process and opt.log_with_wandb:
@@ -299,7 +288,7 @@ class GaussianDiffusion(nn.Module):
         self.horizon = horizon
         self.transition_dim = repr_dim
         self.model = model
-        self.ema = EMA(0.9999)
+        self.ema = EMA(0.99)
         self.master_model = copy.deepcopy(self.model)
         self.opt = opt
 
@@ -1095,8 +1084,8 @@ class GaussianDiffusion(nn.Module):
         losses = [
             1. * loss_simple.mean(),         # TODO tune this
             0 * loss_vel.mean(),
-            1. * loss_fk.mean(),
-            1. * loss_drift.mean(),
+            0. * loss_fk.mean(),
+            0. * loss_drift.mean(),
             # 1. * loss_floor_penetration.mean(),
             0. * loss_slide.mean()]
         return sum(losses), losses + [loss_simple]
@@ -1167,6 +1156,209 @@ class GaussianDiffusion(nn.Module):
         return samples
 
 
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len, dropout: float = 0.):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(max_len * 2) / d_model))
+        pe = torch.zeros(max_len, 1, d_model)
+        pe[:, 0, 0::2] = torch.sin(position * div_term)
+        try:
+            pe[:, 0, 1::2] = torch.cos(position * div_term)
+        except RuntimeError:
+            pe[:, 0, 1::2] = torch.cos(position * div_term)[:, :-1]
+
+        pe = pe.transpose(0, 1)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x: Tensor) -> Tensor:
+        """
+        Args:
+            x: Tensor, shape [batch_size, seq_len, embedding_dim]
+        """
+        x = x + self.pe[:, :x.shape[1], :]
+        return self.dropout(x)
+
+
+class ClassForAdaptingBaselineModelInTheOriginalFramework:
+    @staticmethod
+    def state_dict():
+        return None
+
+    @staticmethod
+    def update_model_average(a, b):
+        return None
+
+
+class TransformerEncoderArchitecture(nn.Module):
+    def __init__(self, repr_dim, opt, nlayers=6, nhead=8, dim_feedforward=512,
+                 patch_len=1, patch_step_len=1, device='cuda'):
+        super().__init__()
+        self.ema = EMA(0.99)
+        self.patch_len = patch_len
+        self.patch_step_len = patch_step_len
+        self.pad_len = 0
+        self.input_dim = len(opt.kinematic_diffusion_col_loc)
+        self.output_dim = repr_dim - self.input_dim
+        self.embedding_dim = 192
+
+        self.input_to_embedding = nn.Linear(self.input_dim * patch_len, self.embedding_dim)
+        self.embedding_to_output = nn.Linear(self.embedding_dim, self.output_dim)
+        self.opt = opt
+        self.input_col_loc = opt.kinematic_diffusion_col_loc
+        self.output_col_loc = [i for i in range(repr_dim) if i not in self.input_col_loc]
+
+        self.d_model = int(self.embedding_dim)
+        encoder_layers = TransformerEncoderLayer(self.d_model, nhead, dim_feedforward, batch_first=True)
+        self.transformer = TransformerEncoder(encoder_layers, nlayers)
+        self.device = device
+        self.patch_num = int(150 / self.patch_len)
+        self.pos_encoding = PositionalEncoding(self.embedding_dim, self.patch_num)
+        self.master_model = ClassForAdaptingBaselineModelInTheOriginalFramework()
+        self.ema = ClassForAdaptingBaselineModelInTheOriginalFramework()
+        self.model = ClassForAdaptingBaselineModelInTheOriginalFramework()
+
+    def set_normalizer(self, normalizer):
+        self.normalizer = normalizer
+
+    def end_to_end_prediction(self, x, cond):
+        input = x[0][:, :, self.input_col_loc]
+        sequence = self.input_to_embedding(input)
+        sequence = self.pos_encoding(sequence)
+        sequence = self.transformer(sequence)
+        output_pred = self.embedding_to_output(sequence)
+        return output_pred
+
+    def predict_samples(self, x, constraint):
+        x[0] = x[0] * constraint['mask']
+        output_pred = self.end_to_end_prediction(x, constraint['cond'])
+        x[0][:, :, self.output_col_loc] = output_pred
+        return x[0]
+
+    def forward(self, x, cond, t_override):
+        output_true = x[0][:, :, self.output_col_loc]
+        output_pred = self.end_to_end_prediction(x, cond)
+        loss_simple = torch.zeros(x[0].shape).to(x[0].device)
+        loss_simple[:, :, self.output_col_loc] = F.mse_loss(output_pred, output_true, reduction="none")
+
+        losses = [
+            1. * loss_simple.mean(),
+            torch.tensor(0.).to(loss_simple.device),
+            torch.tensor(0.).to(loss_simple.device),
+            torch.tensor(0.).to(loss_simple.device),
+            torch.tensor(0).to(loss_simple.device)]
+        return sum(losses), losses + [loss_simple]
+
+
+class LstmArchitecture(nn.Module):
+    def __init__(self, repr_dim, opt):
+        super(LstmArchitecture, self).__init__()
+        self.ema = EMA(0.99)
+        self.opt = opt
+        self.input_dim = len(opt.kinematic_diffusion_col_loc)
+        self.output_dim = repr_dim - self.input_dim
+        self.input_col_loc = opt.kinematic_diffusion_col_loc
+        self.output_col_loc = [i for i in range(repr_dim) if i not in self.input_col_loc]
+        self.device = 'cuda'
+        self.master_model = ClassForAdaptingBaselineModelInTheOriginalFramework()
+        self.ema = ClassForAdaptingBaselineModelInTheOriginalFramework()
+        self.model = ClassForAdaptingBaselineModelInTheOriginalFramework()
+
+        lstm_unit = 256
+        nlayer = 2
+        fcnn_unit = 256
+        self.rnn_layer = nn.LSTM(self.input_dim, lstm_unit, nlayer, batch_first=True, bidirectional=True)
+        self.linear_1 = nn.Linear(lstm_unit*2, fcnn_unit, bias=True)
+        self.linear_2 = nn.Linear(fcnn_unit, self.output_dim, bias=True)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(0.2)
+        for name, param in self.rnn_layer.named_parameters():
+            if 'weight' in name:
+                nn.init.xavier_normal_(param)
+
+    def set_normalizer(self, normalizer):
+        self.normalizer = normalizer
+
+    def end_to_end_prediction(self, x):
+        input = x[0][:, :, self.input_col_loc]
+        x, _ = self.rnn_layer(input)
+        x = self.dropout(x)
+        x = self.linear_1(x)
+        x = self.relu(x)
+        output_pred = self.linear_2(x)
+        return output_pred
+
+    def predict_samples(self, x, constraint):
+        x[0] = x[0] * constraint['mask']
+        output_pred = self.end_to_end_prediction(x)
+        x[0][:, :, self.output_col_loc] = output_pred
+        return x[0]
+
+    def forward(self, x, cond, t_override):
+        output_true = x[0][:, :, self.output_col_loc]
+        output_pred = self.end_to_end_prediction(x)
+        loss_simple = torch.zeros(x[0].shape).to(x[0].device)
+        loss_simple[:, :, self.output_col_loc] = F.mse_loss(output_pred, output_true, reduction="none")
+
+        losses = [
+            1. * loss_simple.mean(),
+            torch.tensor(0.).to(loss_simple.device),
+            torch.tensor(0.).to(loss_simple.device),
+            torch.tensor(0.).to(loss_simple.device),
+            torch.tensor(0).to(loss_simple.device)]
+        return sum(losses), losses + [loss_simple]
+
+
+class BaselineModel(MotionModel):
+    def __init__(
+            self,
+            opt,
+            model_architecture_class,
+            normalizer=None,
+            EMA=True,
+            learning_rate=4e-4,
+            weight_decay=0.02,
+    ):
+        self.opt = opt
+        ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+        self.accelerator = Accelerator(kwargs_handlers=[ddp_kwargs])
+        self.repr_dim = len(opt.model_states_column_names)
+        self.horizon = horizon = opt.window_len
+        self.accelerator.wait_for_everyone()
+
+        self.model = model_architecture_class(self.repr_dim, opt)
+        self.diffusion = self.model
+        self.diffusion = self.accelerator.prepare(self.diffusion)
+        optim = Adan(self.diffusion.parameters(), lr=learning_rate, weight_decay=weight_decay)
+        self.optim = self.accelerator.prepare(optim)
+
+        print("Model has {} parameters".format(sum(y.numel() for y in self.model.parameters())))
+
+        checkpoint = None
+        if opt.checkpoint_bl != "":
+            checkpoint = torch.load(
+                opt.checkpoint_bl, map_location=self.accelerator.device
+            )
+            self.normalizer = checkpoint["normalizer"]
+
+        if opt.checkpoint_bl != "":
+            self.model.load_state_dict(
+                maybe_wrap(
+                    checkpoint["ema_state_dict" if EMA else "model_state_dict"],
+                    1,
+                )
+            )
+
+    def eval_loop(self, opt, state_true, masks, value_diff_thd=None, value_diff_weight=None, cond=None,
+                  num_of_generation_per_window=1, mode="inpaint"):
+        self.eval()
+        constraint = {'mask': masks.to(self.accelerator.device), 'value': state_true, 'cond': cond}
+        state_true = state_true.to(self.accelerator.device)
+        state_pred_list = [self.diffusion.predict_samples([state_true], constraint)
+                           for _ in range(num_of_generation_per_window)]
+        state_pred_list = [self.normalizer.unnormalize(state_pred.detach().cpu()) for state_pred in state_pred_list]
+        return torch.stack(state_pred_list)
 
 
 

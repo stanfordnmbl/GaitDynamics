@@ -41,7 +41,7 @@ FROZEN_DOFS = ['mtp_angle_r', 'mtp_angle_l',
                'wrist_flex_r', 'wrist_dev_r', 'wrist_flex_l', 'wrist_dev_l']
 
 # 'Falisse2017' has 3 contact bodies
-DSET_SHORT_NAMES = ['Camargo2021', 'Carter2023', 'Fregly2012', 'Falisse2017', 'Hammer2013', 'Han2023', 'Li2021', 'Moore2015',
+DSET_SHORT_NAMES = ['Camargo2021', 'Carter2023', 'Fregly2012', 'Falisse2017', 'Hamner2013', 'Han2023', 'Li2021', 'Moore2015',
                     'Santos2017', 'Tan2021', 'Tan2022', 'Tiziana2019', 'Uhlrich2023', 'vanderZee2022', 'Wang2023']
 DATASETS_NO_ARM = [name_ + '_Formatted_No_Arm' for name_ in DSET_SHORT_NAMES]
 OVERGROUND_DSETS = ['fregly', 'falisse', 'han', 'santos', 'uhlrich', 'tiziana', 'vancriek']
@@ -62,10 +62,7 @@ WEIGHT_KG_OVERWRITE = {
 
 NOT_IN_GAIT_PHASE = -1000
 
-# Carter GRF are too noisy
-# Hammer2013 only have 2 windows, too sensitive.
-# Han is not a pure gait dataset.
-EXCLUDE_FROM_ASB = ['Carter2023_Formatted_No_Arm', 'Hammer2013_Formatted_No_Arm', 'Han2023_Formatted_No_Arm']
+EXCLUDE_FROM_ASB = ['Carter2023_Formatted_No_Arm', 'Hamner2013_Formatted_No_Arm', 'Han2023_Formatted_No_Arm']
 
 
 

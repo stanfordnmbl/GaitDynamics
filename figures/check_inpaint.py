@@ -10,11 +10,8 @@ import matplotlib.pyplot as plt
 
 
 def inpaint(opt):
-    model = torch.load(opt.checkpoint)
-    repr_dim = model["ema_state_dict"]["input_projection.weight"].shape[1]
     set_with_arm_opt(opt, False)
-
-    model = MotionModel(opt, repr_dim)
+    model = MotionModel(opt)
     render_count = 10
 
     test_dataset = MotionDataset(

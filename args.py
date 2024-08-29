@@ -7,11 +7,11 @@ from consts import *
 def parse_opt():
     machine_specific_config = json.load(open(os.path.dirname(os.path.realpath(__file__)) + '/machine_specific_config.json', 'r'))
     parser = argparse.ArgumentParser()
-    parser.add_argument("--exp_name", default="only_walking", help="save to project/name")
+    parser.add_argument("--exp_name", default="baseline_lstm", help="save to project/name")
     parser.add_argument("--with_arm", type=bool, default=False, help="whether osim model has arm DoFs")
     parser.add_argument("--with_kinematics_vel", type=bool, default=True, help="whether to include 1st derivative of kinematics")
     parser.add_argument("--log_with_wandb", type=bool, default=machine_specific_config['log_with_wandb'], help="log with wandb")
-    parser.add_argument("--epochs", type=int, default=7000)
+    parser.add_argument("--epochs", type=int, default=7680)
     parser.add_argument("--target_sampling_rate", type=int, default=100)
     parser.add_argument("--window_len", type=int, default=150)
     parser.add_argument("--guide_x_start_the_beginning_step", type=int, default=-10)      # negative value means no guidance
@@ -47,8 +47,12 @@ def parse_opt():
     parser.add_argument(
         "--checkpoint", type=str, default="", help="trained checkpoint path (optional)"
     )
+    parser.add_argument(
+        "--checkpoint_bl", type=str, default="", help="trained checkpoint path (optional)"
+    )
     opt = parser.parse_args()
     opt.data_path_parent = machine_specific_config['b3d_path']
+    opt.use_server = machine_specific_config['use_server']
     set_with_arm_opt(opt, opt.with_arm)
     return opt
 
@@ -80,6 +84,7 @@ def set_with_arm_opt(opt, with_arm):
     opt.ankle_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'ankle' in col]
     opt.hip_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'hip' in col]
     opt.kinematic_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'force' not in col]
+    opt.kinetic_diffusion_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if i_col not in opt.kinematic_diffusion_col_loc]
     opt.grf_osim_col_loc = [i_col for i_col, col in enumerate(opt.osim_dof_columns) if 'force' in col and '_cop_' not in col]
     opt.cop_osim_col_loc = [i_col for i_col, col in enumerate(opt.osim_dof_columns) if '_cop_' in col]
     opt.kinematic_osim_col_loc = [i_col for i_col, col in enumerate(opt.osim_dof_columns) if 'force' not in col]

@@ -19,7 +19,9 @@ def get_average_and_std(bl_true, bl_pred, ts_true, condition, params_of_interest
 
 
 def format_ticks(ax):
-    ax.set_ylabel('MAE of GRF Estimation (% BW)', fontdict=FONT_DICT_SMALL)
+    ax.set_ylabel('Mean Absolute Error of GRF (% BW)', fontdict=FONT_DICT_SMALL)
+    ax.set_yticks([0, 2, 4, 6, 8, 10])
+    ax.set_yticklabels([0, 2, 4, 6, 8, 10], fontdict=FONT_DICT_SMALL)
     ax.set_xticks([0.3, 1.3, 2.3])
     ax.set_xticklabels(['Vertical', 'Anterior-posterior', 'Medial-lateral'], fontdict=FONT_DICT_SMALL)
 
@@ -27,7 +29,7 @@ def format_ticks(ax):
 def draw_fig():
     params_of_interest = ['calcn_l_force_vy', 'calcn_l_force_vx', 'calcn_l_force_vz']
     mae_dict, mae_std_dict = {}, {}
-    for file_name in ['marker_based', 'opencap_based']:
+    for file_name in ['uhlrich_marker_based_none', 'opencap_based']:
         true_all, pred_all, pred_std_all, columns = pickle.load(open(f"results/{file_name}.pkl", "rb"))
         params_of_interest_col_loc = [columns.index(col) for col in params_of_interest]
         mae_dict[file_name] = []
@@ -36,10 +38,10 @@ def draw_fig():
             mae_dict[file_name].append(np.mean(np.abs(true_all[:, param_col_loc] - pred_all[:, param_col_loc])))
             mae_std_dict[file_name].append(np.std(np.abs((true_all[:, param_col_loc] - pred_all[:, param_col_loc]))))
 
-    #         plt.figure()
-    #         plt.plot(true_all[:, param_col_loc], label='True')
-    #         plt.plot(pred_all[:, param_col_loc], label='Pred')
-    # plt.show()
+            plt.figure()
+            plt.plot(true_all[:, param_col_loc], label='True')
+            plt.plot(pred_all[:, param_col_loc], label='Pred')
+    plt.show()
 
     # mae_dict['opencap_reported'] = [1.01, 0.28, 0.13]
     mae_dict['opencap_reported'] = [0.82, 0.21, 0.11]
@@ -47,12 +49,12 @@ def draw_fig():
     colors = [np.array(x) / 255 for x in [[155, 155, 155], [0, 155, 155], [0, 111, 111]]]
 
     rc('font', family='Arial')
-    fig = plt.figure(figsize=(5, 3))
+    fig = plt.figure(figsize=(5, 3.5))
     for i_axis, axis in enumerate(['Vertical', 'Anterior-Posterior', 'Medial-Lateral']):
         bars = plt.bar([i_axis, i_axis + 0.3, i_axis + 0.6], [ele * 100 / 9.81 for ele in
                                                               [mae_dict['opencap_reported'][i_axis],
                                                                mae_dict['opencap_based'][i_axis],
-                                                               mae_dict['marker_based'][i_axis]]], color=colors, width=0.3)
+                                                               mae_dict['uhlrich_marker_based_none'][i_axis]]], color=colors, width=0.3)
 
     # ebar, caplines, barlinecols = plt.errorbar(bar_locs, mean_, std_,
     #                                            capsize=0, ecolor='black', fmt='none', lolims=True,
@@ -77,7 +79,9 @@ def draw_fig():
     #             ax.fill_between(range(len(ts_averaged)), ts_averaged[:, i] - ts_std[:, i], ts_averaged[:, i] + ts_std[:, i], color='C3', alpha=0.3)
 
     format_axis(plt.gca())
-    plt.legend(bars, ['Physics-based Foot-Ground Contact Model', 'FAIR Model - Smartphone-based Kinematics', 'FAIR Model - Marker-based Kinematics'], frameon=False, bbox_to_anchor=(0.25, 1.))       # fontsize=font_size,
+    # plt.legend(bars, ['Physics-based Foot-Ground Contact Model', 'Diffusion - Smartphone-based Kinematics', 'Diffusion - Marker-based Kinematics'],
+    plt.legend(bars, ['Physics-based Foot-Ground Contact Model', 'Proposed Model - Smartphone Input', 'Proposed Model - Marker Data Input'],
+               frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0.2, 1.06))       # fontsize=font_size,
     format_ticks(plt.gca())
     plt.savefig(f'exports/da_grf.png', dpi=300, bbox_inches='tight')
     plt.show()

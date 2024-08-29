@@ -79,7 +79,7 @@ def get_diff_of_a_subject(sub):
         value_diff_weight[test_dataset_mani.do_not_follow_col_loc] = 0
 
         value_diff_thd = torch.zeros([len(opt.model_states_column_names)])
-        value_diff_thd[:] = 0         # large value for no constraint     # !!!
+        value_diff_thd[:] = 0         # large value for no constraint
         value_diff_thd[test_dataset_mani.manipulated_col_loc] = 0
 
         state_pred_list_batch = model.eval_loop(opt, state_manipulated, masks, value_diff_thd, value_diff_weight, cond=cond,
@@ -138,15 +138,13 @@ if __name__ == "__main__":
     # carter_data_path = '/mnt/d/Local/Data/MotionPriorData/b3d_no_arm/train_cleaned/Carter2023_Formatted_No_Arm/'
     # opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'6993'}.pt"
 
-    model = torch.load(opt.checkpoint)
-    repr_dim = model["ema_state_dict"]["input_projection.weight"].shape[1]
     set_with_arm_opt(opt, False)
-    model = MotionModel(opt, repr_dim)
+    model = MotionModel(opt)
 
     subjects = list(sorted(set([x[0].split('Carter2023_Formatted_No_Arm/')[1].split('_split')[0]
                                 for x in os.walk(carter_data_path)])))
     delta_exp, delta_syn = {param: [] for param in param_to_plot}, {param: [] for param in param_to_plot}
-    for i_sub, sub_ in enumerate(subjects[:10]):        # !!! only check the first 10 subjects
+    for i_sub, sub_ in enumerate(subjects[:]):
         if 'P0' not in sub_:
             continue
         get_diff_of_a_subject(sub_)

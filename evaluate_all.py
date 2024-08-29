@@ -7,14 +7,12 @@ from data.addb_dataset import MotionDataset
 from model.model import inverse_convert_addb_state_to_model_input
 import numpy as np
 import pickle
+import nimblephysics as nimble
 
 
 def loop_all(opt):
-    model = torch.load(opt.checkpoint)
-    repr_dim = model["ema_state_dict"]["input_projection.weight"].shape[1]
     set_with_arm_opt(opt, False)
-
-    model = MotionModel(opt, repr_dim)
+    model = MotionModel(opt)
     dset_list = DATASETS_NO_ARM
     results_true, results_pred, results_pred_std, results_bl, height_m_all, weight_kg_all = {}, {}, {}, {}, {}, {}
     is_output_label_array = torch.zeros([150, 35])
@@ -76,7 +74,7 @@ def loop_all(opt):
             elif da_to_test == 2:
                 # For reconstruct kinematics
                 masks = torch.zeros_like(state_true)      # 0 for masking, 1 for unmasking
-                masks[:, :, cols_to_mask[mask_key]] = 1
+                masks[:, :, cols_to_unmask[mask_key]] = 1
                 save_name = f'downstream_reconstruct_kinematics_{mask_key}'
             else:
                 raise ValueError('da_to_test should be 0, 1, or 2')
@@ -169,14 +167,44 @@ def get_baseline_val(dset, windows, trials):
     return bl_pred
 
 
+def get_average_age_height_weight():
+    # data_path = opt.data_path_train
+    subject_paths = []
+    for data_path in [opt.data_path_train, opt.data_path_test]:
+        for root, dirs, files in os.walk(data_path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                if file.endswith(".b3d"):
+                    subject_paths.append(file_path)
+    weight_list, height_list, age_list = [], [], []
+    for i_sub, subject_path in enumerate(subject_paths):
+        if 'split' in subject_path and 'split0' not in subject_path:
+            continue
+        try:
+            subject = nimble.biomechanics.SubjectOnDisk(subject_path)
+        except:
+            continue
+        # print(i_sub, subject_path)
+        weight_list.append(subject.getMassKg())
+        height_list.append(subject.getHeightM())
+        if subject.getAgeYears() > 0:
+            age_list.append(subject.getAgeYears())
+        else:
+            print(subject_path)
+    print('age: {:.1f}±{:.1f} years; height: {:.2f}±{:.2f} m; weight: {:.1f}±{:.1f} kg'.format(
+        np.mean(age_list), np.std(age_list), np.mean(height_list), np.std(height_list), np.mean(weight_list), np.std(weight_list)))
+    exit(0)
+
+
 if __name__ == "__main__":
     skel_num = 4
     opt = parse_opt()
+    get_average_age_height_weight()
 
     # opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'4925'}.pt"
     opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'fixed_txtytz_vel'}/weights/train-{'6993'}.pt"
 
-    cols_to_mask = {
+    cols_to_unmask = {
         'ankle': opt.knee_diffusion_col_loc,
         'knee': opt.knee_diffusion_col_loc,
         'hip': opt.hip_diffusion_col_loc,

@@ -1,3 +1,5 @@
+import json
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -39,6 +41,7 @@ class MotionDataset(Dataset):
             specific_trial=None,
             dset_keyworks_to_exclude=(),
             include_trials_shorter_than_window_len=False,
+            restrict_contact_bodies=True,
     ):
         self.data_path = data_path
         self.trial_start_num = trial_start_num
@@ -50,6 +53,7 @@ class MotionDataset(Dataset):
         self.specific_dset = specific_dset
         self.specific_trial = specific_trial
         self.dset_keyworks_to_exclude = dset_keyworks_to_exclude
+        self.restrict_contact_bodies = restrict_contact_bodies
         self.skels = {}
 
         self.train = train
@@ -244,7 +248,7 @@ class MotionDataset(Dataset):
                                               i_trial, gait_phase_label, mask, trial_.height_m, trial_.weight_kg, trial_.cond))
         return windows
 
-    def get_all_wins_including_shorter_than_window_len(self, col_loc_to_unmask):
+    def get_all_wins(self, col_loc_to_unmask, including_shorter_than_window_len=True):
         windows = []
         for i_trial, trial_ in enumerate(self.trials):
             trial_len = trial_.converted_pose.shape[0]
@@ -254,32 +258,35 @@ class MotionDataset(Dataset):
                 mask[:, col_loc_to_unmask] = 1
                 windows.append(WindowData(trial_.converted_pose[i:i+self.opt.window_len, ...], trial_.model_offsets, i_trial,
                                           None, mask, trial_.height_m, trial_.weight_kg, trial_.cond))
-            # The last pose is incomplete
-            pose = torch.zeros([self.opt.window_len, trial_.converted_pose.shape[1]])
-            mask = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
+            if including_shorter_than_window_len:
+                # The last pose is incomplete
+                pose = torch.zeros([self.opt.window_len, trial_.converted_pose.shape[1]])
+                mask = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
 
-            pose[:trial_len-i-self.opt.window_len, ...] = trial_.converted_pose[i+self.opt.window_len:i+2*self.opt.window_len, ...]
-            mask[:trial_len-i-self.opt.window_len, col_loc_to_unmask] = 1      # 0 for masking, 1 for unmasking
-            windows.append(WindowData(pose, trial_.model_offsets, i_trial, None, mask, trial_.height_m, trial_.weight_kg, trial_.cond))
+                pose[:trial_len-i-self.opt.window_len, ...] = trial_.converted_pose[i+self.opt.window_len:i+2*self.opt.window_len, ...]
+                mask[:trial_len-i-self.opt.window_len, col_loc_to_unmask] = 1      # 0 for masking, 1 for unmasking
+                windows.append(WindowData(pose, trial_.model_offsets, i_trial, None, mask, trial_.height_m, trial_.weight_kg, trial_.cond))
         return windows
 
-    def get_overlapping_wins(self, col_loc_to_unmask, step_len):
+    def get_overlapping_wins(self, col_loc_to_unmask, step_len, start_trial=0, end_trial=None):
+        if end_trial is None:
+            end_trial = len(self.trials)
         windows, s_list, e_list = [], [], []
-        for i_trial, trial_ in enumerate(self.trials):
+        for i_trial in range(start_trial, end_trial):
+            trial_ = self.trials[i_trial]
             trial_len = trial_.converted_pose.shape[0]
-            for i in range(-(self.opt.window_len - step_len), trial_len - step_len, step_len):
+            for i in range(0, trial_len - self.opt.window_len + step_len, step_len):
                 s = max(0, i)
                 e = min(trial_len, i+self.opt.window_len)
+                # if not list(set(np.where(trial_.probably_missing==0)[0]).intersection(set(range(s, e)))):
+                #     continue
                 s_list.append(s)
                 e_list.append(e)
                 mask = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
                 mask[:, col_loc_to_unmask] = 1
                 mask[e-s:, :] = 0
                 data_ = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
-                try:
-                    data_[:e-s] = trial_.converted_pose[s:e, ...]
-                except:
-                    xxx =1
+                data_[:e-s] = trial_.converted_pose[s:e, ...]
                 windows.append(WindowData(data_, trial_.model_offsets, i_trial,
                                           None, mask, trial_.height_m, trial_.weight_kg, trial_.cond))
         return windows, s_list, e_list
@@ -371,11 +378,9 @@ class MotionDataset(Dataset):
             try:
                 subject = nimble.biomechanics.SubjectOnDisk(subject_path)
             except RuntimeError:
-                print(f'Loading subject {subject_path} failed, skipping')
+                print(f'Failed loading subject {subject_path}, skipping')
                 continue
             contact_bodies = subject.getGroundForceBodies()
-            if contact_bodies != ['calcn_r', 'calcn_l']:
-                continue
             print(f'Loading subject: {subject_path}')
 
             subject_name = subject_path.split('/')[-1].split('.')[0]
@@ -405,8 +410,11 @@ class MotionDataset(Dataset):
             for trial_id in tqdm(range(trial_start_num_, subject.getNumTrials())):
                 sampling_rate = int(1 / subject.getTrialTimestep(trial_id))
                 sub_and_trial_name = subject_name + '__' + subject.getTrialName(trial_id)
-                if self.specific_trial and self.specific_trial not in sub_and_trial_name:
-                    continue
+                if self.specific_trial:
+                    if isinstance(self.specific_trial, str) and self.specific_trial not in sub_and_trial_name:
+                        continue
+                    if isinstance(self.specific_trial, list) and not sum([trial in sub_and_trial_name for trial in self.specific_trial]):
+                        continue
 
                 trial_length = subject.getTrialLength(trial_id)
                 probably_missing: List[bool] = [reason != nimble.biomechanics.MissingGRFReason.notMissingGRF for reason
@@ -421,11 +429,17 @@ class MotionDataset(Dataset):
                     print(f'{subject_name}, {trial_id} has no processing passes, skipping')
                     continue
                 poses = [frame.pos for frame in first_passes]
-                forces = [frame.groundContactForce for frame in first_passes]
-                if len(forces[0]) != 6:
-                    continue        # only include data with 2 contact bodies.
-                forces = np.array(forces)
+                forces = np.array([frame.groundContactForce for frame in first_passes])
                 cops = np.array([frame.groundContactCenterOfPressure for frame in first_passes])
+                if self.restrict_contact_bodies and len(forces[0]) != 6:
+                    continue        # only include data with 2 contact bodies.
+                else:
+                    r_foot_idx, l_foot_idx = contact_bodies.index('calcn_r'), contact_bodies.index('calcn_l')
+                    foot_idx = [r_foot_idx*3, r_foot_idx*3+1, r_foot_idx*3+2, l_foot_idx*3, l_foot_idx*3+1, l_foot_idx*3+2]
+                    contact_bodies = ['calcn_r', 'calcn_l']
+                    forces = forces[:, foot_idx]
+                    cops = cops[:, foot_idx]
+
                 # This is to compensate an AddBiomechanics bug that first GRF is always 0.
                 if len(poses) < 10:
                     continue
@@ -466,6 +480,7 @@ class MotionDataset(Dataset):
                 if sampling_rate != self.target_sampling_rate:
                     states = linear_resample_data(states, sampling_rate, self.target_sampling_rate)
                     probably_missing = linear_resample_data(np.array(probably_missing).astype(float), sampling_rate, self.target_sampling_rate).astype(bool)
+                probably_missing = np.array(probably_missing).astype(np.float64)
 
                 foot_locations, _, _, _ = forward_kinematics(states[:, :-len(KINETICS_ALL)], model_offsets)
                 mtp_r_loc, mtp_l_loc = foot_locations[1].squeeze().cpu().numpy(), foot_locations[3].squeeze().cpu().numpy()

@@ -6,7 +6,7 @@ from scipy.signal import find_peaks
 import nimblephysics as nimble
 from nimblephysics import NimbleGUI
 import time
-
+import pandas as pd
 from data.addb_dataset import MotionDataset
 
 FONT_SIZE_LARGE = 15
@@ -21,7 +21,7 @@ LINE_WIDTH_THICK = 2
 
 
 def naive_stance_phase_extractor(v_grf):
-    """ Can only be used for clean data such as Hammer2013. """
+    """ Can only be used for clean data such as Hamner2013. """
     stance_vgrf_thd = 5    # 100% of body mass. Needs to be large because some datasets are noisy.
     stance_start_valid, stance_end_valid = [], []
     stance_flag = np.abs(v_grf) > stance_vgrf_thd
@@ -124,6 +124,26 @@ def get_scores(y_true, y_pred, y_fields, exclude_swing_phase=False):
         score_one_field = {'field': field, 'r2': r2, 'rmse': rmse, 'cor_value': cor_value, 'mae': mae}
         scores.append(score_one_field)
     return scores
+
+
+class VanCriekMetaData:
+    def __init__(self):
+        self.meta_table = pd.read_csv('/mnt/g/Shared drives/NMBL Shared Data/datasets/VanCriekinge2023/meta_data.csv')
+        self.meta_table.columns = [col.split('\n')[0] for col in self.meta_table.columns]
+
+    def get_sub_meta(self, sub):
+        # meta_table = pd.read_csv('/mnt/g/Shared drives/NMBL Shared Data/datasets/VanCriekinge2023/meta_data.csv')
+        # meta_table.columns = [col.split('\n')[0] for col in meta_table.columns]
+        sub_meta = self.meta_table[self.meta_table['ID'] == sub]
+        assert len(sub_meta) == 1
+        sub_meta_dict = sub_meta.iloc[0].to_dict()
+        if np.isnan(sub_meta_dict['FAC']):
+            sub_meta_dict['FAC'] = 0
+        return sub_meta_dict
+
+
+vancriek_bad_sub_and_trial_names = ['TVC23__BWA5_segment_0'] + \
+                                   []
 
 
 def format_errorbar_cap(caplines, size=15):

@@ -16,11 +16,8 @@ from model.utils import extract, make_beta_schedule, linear_resample_data, updat
 
 
 def loop_all(opt):
-    model = torch.load(opt.checkpoint)
-    repr_dim = model["ema_state_dict"]["input_projection.weight"].shape[1]
     set_with_arm_opt(opt, False)
-
-    model = MotionModel(opt, repr_dim)
+    model = MotionModel(opt)
     dset_list = DATASETS_NO_ARM
     results_true, results_pred, height_m_all, weight_kg_all = {}, {}, {}, {}
     is_output_label_array = torch.zeros([150, 35])

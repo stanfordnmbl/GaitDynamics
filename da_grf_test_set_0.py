@@ -2,11 +2,12 @@ import pickle
 from args import parse_opt, set_with_arm_opt
 import torch
 from consts import OSIM_DOF_ALL, KINETICS_ALL, WEIGHT_KG_OVERWRITE, DATASETS_NO_ARM
-from model.model import MotionModel
+from model.model import MotionModel, BaselineModel, TransformerEncoderArchitecture, LstmArchitecture
 from data.addb_dataset import MotionDataset, TrialData
 import numpy as np
 from model.utils import convert_addb_state_to_model_input, inverse_convert_addb_state_to_model_input, align_moving_direction
 import os
+import matplotlib.pyplot as plt
 
 
 def convert_overlapped_list_to_array(trial_len, win_list, s_, e_, fun=np.nanmedian):
@@ -16,6 +17,38 @@ def convert_overlapped_list_to_array(trial_len, win_list, s_, e_, fun=np.nanmedi
     array_val = fun(array_val_expand, axis=0)
     std_val = np.nanstd(array_val_expand, axis=0)
     return array_val, std_val
+
+
+def load_model(opt):
+    if opt.use_server:
+        opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'diffusion'}/weights/train-{'6993'}.pt"
+    else:
+        opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'7680_diffusion'}.pt"
+    set_with_arm_opt(opt, False)
+    model = MotionModel(opt)
+    model_key = 'diffusion'
+    return model, model_key
+
+
+def load_baseline_model(opt, model_to_test):
+    if model_to_test == 1:
+        model_architecture_class = TransformerEncoderArchitecture
+        if opt.use_server:
+            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'baseline_tf'}/weights/train-{'7680'}.pt"
+        else:
+            opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'7680_tf'}.pt"
+        model_key = 'baseline_tf'
+    elif model_to_test == 3:
+        model_architecture_class = LstmArchitecture
+        if opt.use_server:
+            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'baseline_lstm2'}/weights/train-{'7680'}.pt"
+        else:
+            opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'7680_lstm'}.pt"
+        model_key = 'baseline_lstm'
+
+    set_with_arm_opt(opt, False)
+    model = BaselineModel(opt, model_architecture_class, EMA=False)
+    return model, model_key
 
 
 def loop_all(opt, trials, windows, s_list, e_list):
@@ -76,27 +109,20 @@ def loop_all(opt, trials, windows, s_list, e_list):
 
         for trial in trials:
             if trial.sub_and_trial_name == sub_and_trial:
+                probably_missing = trial.probably_missing
                 break
-        true_all.append(results_true[sub_and_trial])
-        pred_all.append(results_pred[sub_and_trial])
-        pred_std_all.append(results_pred_std[sub_and_trial])
+        true_all.append(results_true[sub_and_trial][np.where(probably_missing==0)[0]])
+        pred_all.append(results_pred[sub_and_trial][np.where(probably_missing==0)[0]])
+        pred_std_all.append(results_pred_std[sub_and_trial][np.where(probably_missing==0)[0]])
     true_all = np.concatenate(true_all, axis=0)
     pred_all = np.concatenate(pred_all, axis=0)
     pred_std_all = np.concatenate(pred_std_all, axis=0)
     return true_all, pred_all, pred_std_all
 
 
-def load_model(opt):
-    model = torch.load(opt.checkpoint)
-    repr_dim = model["ema_state_dict"]["input_projection.weight"].shape[1]
-    set_with_arm_opt(opt, False)
-    model = MotionModel(opt, repr_dim)
-    return model
-
-
 def loop_mask_conditions():
-
     n_split = 10
+    results_dict = {}
     for mask_key, unmask_col_loc in cols_to_unmask.items():
         print(mask_key)
         true_sub_dict, pred_sub_dict, pred_std_sub_dict = {}, {}, {}
@@ -127,16 +153,60 @@ def loop_mask_conditions():
                 s_list_splits = [s_list]
                 e_list_splits = [e_list]
 
-            for trials, windows, dset_name, s_list, e_list in zip(trials_splits, windows_splits, dset_names, s_list_splits, e_list_splits):
-                true_sub, pred_sub, pred_std_sub = loop_all(opt, trials, windows, s_list, e_list)
-                true_sub_dict[dset_name] = true_sub
-                pred_sub_dict[dset_name] = pred_sub
-                pred_std_sub_dict[dset_name] = pred_std_sub
+            # to speed up
+            if speed_up and len(windows_splits) > 0 and len(windows_splits[-1]) > 200:
+                windows_splits = [windows_splits[-1][:200]]
+                trials_splits = [trials_splits[-1]]
+                dset_names = [dset_names[-1]]
+                s_list_splits = [s_list_splits[-1][:200]]
+                e_list_splits = [e_list_splits[-1][:200]]
 
-        pickle.dump([true_sub_dict, pred_sub_dict, pred_std_sub_dict, opt.osim_dof_columns], open(f"figures/results/addb_marker_based_{mask_key}.pkl", "wb"))
+            for trials, windows, dset_name, s_list, e_list in zip(trials_splits, windows_splits, dset_names, s_list_splits, e_list_splits):
+                if 'diffusion_model_for_filling' in locals() or 'diffusion_model_for_filling' in globals():
+                    windows = fill_missing_with_diffusion(windows, diffusion_model_for_filling)
+                true_sub, pred_sub, pred_std_sub = loop_all(opt, trials, windows, s_list, e_list)
+                true_sub_dict[dset_name] = true_sub[:, params_of_interest_col_loc]
+                pred_sub_dict[dset_name] = pred_sub[:, params_of_interest_col_loc]
+                pred_std_sub_dict[dset_name] = pred_std_sub[:, params_of_interest_col_loc]
+        results_dict.update({mask_key: [true_sub_dict, pred_sub_dict, pred_std_sub_dict, params_of_interest]})
+    pickle.dump(results_dict, open(f"figures/results/addb_marker_based_{model_key}.pkl", "wb"))
+
+
+def fill_missing_with_diffusion(windows, diffusion_model_for_filling):
+    for i_win in range(0, len(windows), opt.batch_size_inference):
+        state_true = torch.stack([win.pose for win in windows[i_win:i_win+opt.batch_size_inference]])
+        masks = torch.stack([win.mask for win in windows[i_win:i_win+opt.batch_size_inference]])
+        cond = torch.stack([win.cond for win in windows[i_win:i_win+opt.batch_size_inference]])
+
+        constraint = {'mask': masks, 'value': state_true.clone(), 'cond': cond}
+        shape = (state_true.shape[0], state_true.shape[1], state_true.shape[2])
+        samples = (diffusion_model_for_filling.diffusion.inpaint_ddim_loop(shape, constraint=constraint))
+        samples = state_true * masks + (1.0 - masks) * samples.to(state_true.device)
+        samples[:, :, opt.kinetic_diffusion_col_loc] = state_true[:, :, opt.kinetic_diffusion_col_loc]      # reserve true GRF
+
+        unmasked_samples_in_temporal_dim = (masks.sum(axis=2)).bool()
+
+        # import matplotlib.pyplot as plt
+        # plt.figure()
+        # plt.plot(samples[1, :, opt.model_states_column_names.index('knee_angle_r')].detach().cpu().numpy())
+        # plt.plot(state_true[1, :, opt.model_states_column_names.index('knee_angle_r')].detach().cpu().numpy())
+        # plt.figure()
+        # plt.plot(samples[1, :, opt.model_states_column_names.index('calcn_r_force_vy')].detach().cpu().numpy())
+        # plt.plot(state_true[1, :, opt.model_states_column_names.index('calcn_r_force_vy')].detach().cpu().numpy())
+        # plt.show()
+
+        for j_win in range(len(samples)):
+            windows[j_win+i_win].pose = samples[j_win]
+            updated_mask = windows[j_win+i_win].mask
+            updated_mask[unmasked_samples_in_temporal_dim[j_win], :] = 1
+            updated_mask[:, opt.kinetic_diffusion_col_loc] = 0
+            windows[j_win+i_win].mask = updated_mask
+    return windows
 
 
 opt = parse_opt()
+params_of_interest = ['calcn_l_force_vy', 'calcn_l_force_vx', 'calcn_l_force_vz']
+params_of_interest_col_loc = [opt.osim_dof_columns.index(col) for col in params_of_interest]
 cols_to_unmask = {
     'none': opt.kinematic_diffusion_col_loc,
     'velocity': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('force' not in col and 'pelvis_t' not in col)],
@@ -159,23 +229,35 @@ cols_to_unmask.update({
     'velocity_hip': list(set(cols_to_unmask['velocity']).intersection(cols_to_unmask['hip'])),
     'trunk_pelvis_knee_ankle': list(list(set(cols_to_unmask['trunk']).intersection(cols_to_unmask['pelvis']).intersection(cols_to_unmask['knee']).intersection(cols_to_unmask['ankle']))),
 })
-# cols_to_unmask = {key: cols_to_unmask[key] for key in ['velocity', 'trunk', 'trunk_pelvis_knee_ankle', 'velocity_hip']}  # !!!
+# cols_to_unmask = {key: cols_to_unmask[key] for key in ['none']}  # !!!
 
 dset_to_split = ['Camargo2021_Formatted_No_Arm', 'Moore2015_Formatted_No_Arm', 'vanderZee2022_Formatted_No_Arm']
-dset_to_skip = ['Santos2017_Formatted_No_Arm', 'Li2021_Formatted_No_Arm', 'Fregly2012_Formatted_No_Arm', 'Uhlrich2023_Formatted_No_Arm', 'Han2023_Formatted_No_Arm']
+dset_to_skip = ['Santos2017_Formatted_No_Arm']
 dset_specific_trial = {dset: None for dset in DATASETS_NO_ARM}
+dset_specific_trial['Falisse2017_Formatted_No_Arm'] = 'Gait'
+dset_specific_trial['Li2021_Formatted_No_Arm'] = 'Trial'
+dset_specific_trial['Han2023_Formatted_No_Arm'] = 'walk'
 dset_specific_trial['Uhlrich2023_Formatted_No_Arm'] = 'walking'
 dset_specific_trial['Wang2023_Formatted_No_Arm'] = ['walk', 'run']
+skel_num = 2
+win_step_length = 15
 
 if __name__ == "__main__":
-    skel_num = 2
-    win_step_length = 15
+    model_to_test = 0       # 0 for diffusion, 1 for diffusion+transformer, 2 for tcn, 3 for LSTM
+    speed_up = False
+    max_trial_num = None     # None for all trials
 
-    """ Test subjects, use marker-based kinematics """
-    # opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'small_model'}/weights/train-{'6993'}.pt"
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'6993'}.pt"
+    if model_to_test == 0:
+        model, model_key = load_model(opt)
+    elif model_to_test == 1:
+        diffusion_model_for_filling, _ = load_model(opt)
+        model, model_key = load_baseline_model(opt, model_to_test=model_to_test)
+    elif model_to_test == 2:
+        model, model_key = load_baseline_model(opt, model_to_test=model_to_test)
+        opt.batch_size = opt.batch_size*100
+    elif model_to_test == 3:
+        model, model_key = load_baseline_model(opt, model_to_test=model_to_test)
 
-    model = load_model(opt)
     test_dataset_dict = {}
     for dset in DATASETS_NO_ARM:
         if dset in dset_to_skip:
@@ -188,7 +270,9 @@ if __name__ == "__main__":
             opt=opt,
             specific_dset=dset,
             specific_trial=dset_specific_trial[dset],
-            # max_trial_num=3
+            include_trials_shorter_than_window_len=True,
+            restrict_contact_bodies=False,
+            max_trial_num=max_trial_num,
         )
         test_dataset_dict[dset] = test_dataset
     loop_mask_conditions()
