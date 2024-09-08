@@ -5,8 +5,8 @@ import os
 from model.model import MotionModel
 from data.addb_dataset import MotionDataset
 from fig_utils import show_skeletons, set_up_gui
-from model.utils import inverse_convert_addb_state_to_model_input, osim_states_to_knee_moments_in_percent_BW_BH, \
-    linear_resample_data_as_num_of_dp
+from model.utils import inverse_convert_addb_state_to_model_input, linear_resample_data_as_num_of_dp, \
+    osim_states_to_moments_in_percent_BW_BH_via_cross_product
 from model.utils import inverse_norm_cops
 import pickle
 
@@ -22,7 +22,7 @@ def get_start_end_of_gait_cycle(grf_v):
 class MotionDatasetManipulated(MotionDataset):
     def customized_param_manipulation(self, trial_df, mtp_r_vel, mtp_l_vel):
         trial_df['lumbar_bending'] = trial_df['lumbar_bending'] * self.opt.x_times_lumbar_bending
-        self.manipulated_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'lumbar' in col] + \
+        self.manipulated_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('lumbar' in col) and ('_vel' not in col)] + \
                                    [opt.model_states_column_names.index('pelvis_tx')]
         self.do_not_follow_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if '_vel' in col]
         return trial_df, mtp_r_vel, mtp_l_vel
@@ -108,8 +108,8 @@ def loop_all(opt):
             true_val = inverse_norm_cops(skel_0, true_val, opt, trial_of_this_win.weight_kg, trial_of_this_win.height_m)
             state_pred = inverse_norm_cops(skel_1, state_pred, opt, trial_of_this_win.weight_kg, trial_of_this_win.height_m)
 
-            true_moment, moment_names = osim_states_to_knee_moments_in_percent_BW_BH(true_val, skel_0, opt, trial_of_this_win.height_m)
-            pred_moments, _ = osim_states_to_knee_moments_in_percent_BW_BH(state_pred, skel_1, opt, trial_of_this_win.height_m)
+            true_moment, moment_names, _ = osim_states_to_moments_in_percent_BW_BH_via_cross_product(true_val, skel_0, opt, trial_of_this_win.height_m)
+            pred_moments, _, _ = osim_states_to_moments_in_percent_BW_BH_via_cross_product(state_pred, skel_1, opt, trial_of_this_win.height_m)
 
             l_grf_v = true_val[:, opt.osim_dof_columns.index('calcn_l_force_vy')] * windows_manipulated[i_win].mask[:, test_dataset_mani.manipulated_col_loc[0]].numpy()
             if get_start_end_of_gait_cycle(l_grf_v):

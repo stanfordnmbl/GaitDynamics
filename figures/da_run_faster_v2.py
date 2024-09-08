@@ -4,14 +4,10 @@ import torch
 import os
 from model.model import MotionModel
 from data.addb_dataset import MotionDataset
-from fig_utils import show_skeletons, set_up_gui, extract_gait_parameters_from_osim_states, \
-    extract_gait_parameters_from_osim_states_and_append
+from fig_utils import show_skeletons, set_up_gui, extract_gait_parameters_from_osim_states_and_append
 import matplotlib.pyplot as plt
-from model.utils import inverse_convert_addb_state_to_model_input, osim_states_to_knee_moments_in_percent_BW_BH, \
-    linear_resample_data_as_num_of_dp
-import nimblephysics as nimble
-from model.utils import cross_product_2d, get_multi_body_loc_using_nimble_by_body_names, inverse_norm_cops
-import pickle
+from model.utils import inverse_convert_addb_state_to_model_input
+from model.utils import inverse_norm_cops
 
 
 def loop_all(opt):

@@ -7,7 +7,6 @@ import nimblephysics as nimble
 from nimblephysics import NimbleGUI
 import time
 import pandas as pd
-from data.addb_dataset import MotionDataset
 
 FONT_SIZE_LARGE = 15
 FONT_SIZE = 13

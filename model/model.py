@@ -1,3 +1,5 @@
+from typing import Any
+
 import numpy as np
 from functools import partial
 import torch.nn.functional as F
@@ -14,6 +16,8 @@ from model.dance_decoder import DanceDecoder
 import os
 import torch
 import torch.nn as nn
+
+from model.rotary_embedding_torch import RotaryEmbedding
 from model.utils import extract, make_beta_schedule, fix_seed, identity, maybe_wrap, \
     inverse_convert_addb_state_to_model_input
 from consts import *
@@ -1181,125 +1185,127 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
-class ClassForAdaptingBaselineModelInTheOriginalFramework:
-    @staticmethod
-    def state_dict():
-        return None
+class PositionWiseFeedForward(nn.Module):
+    def __init__(self, d_model, d_ff):
+        super(PositionWiseFeedForward, self).__init__()
+        self.fc1 = nn.Linear(d_model, d_ff)
+        self.fc2 = nn.Linear(d_ff, d_model)
+        self.relu = nn.ReLU()
 
-    @staticmethod
-    def update_model_average(a, b):
-        return None
+    def forward(self, x):
+        return self.fc2(self.relu(self.fc1(x)))
+
+
+class EncoderLayer(nn.Module):
+    def __init__(self, d_model, num_heads=8, d_ff=512, dropout=0.1):
+        super(EncoderLayer, self).__init__()
+        self.rotary = None
+        self.rotary = RotaryEmbedding(dim=d_model)
+        self.use_rotary = self.rotary is not None
+
+        self.self_attn = nn.MultiheadAttention(d_model, num_heads, batch_first=True)
+        self.feed_forward = PositionWiseFeedForward(d_model, d_ff)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        qk = self.rotary.rotate_queries_or_keys(x) if self.use_rotary else x
+        attn_output, _ = self.self_attn(qk, qk, x, need_weights=False)
+        x = self.norm1(x + self.dropout(attn_output))
+        ff_output = self.feed_forward(x)
+        x = self.norm2(x + self.dropout(ff_output))
+        return x
 
 
 class TransformerEncoderArchitecture(nn.Module):
-    def __init__(self, repr_dim, opt, nlayers=6, nhead=8, dim_feedforward=512,
-                 patch_len=1, patch_step_len=1, device='cuda'):
-        super().__init__()
-        self.ema = EMA(0.99)
-        self.patch_len = patch_len
-        self.patch_step_len = patch_step_len
-        self.pad_len = 0
+    def __init__(self, repr_dim, opt, nlayers=6):
+        super(TransformerEncoderArchitecture, self).__init__()
         self.input_dim = len(opt.kinematic_diffusion_col_loc)
         self.output_dim = repr_dim - self.input_dim
-        self.embedding_dim = 192
-
-        self.input_to_embedding = nn.Linear(self.input_dim * patch_len, self.embedding_dim)
-        self.embedding_to_output = nn.Linear(self.embedding_dim, self.output_dim)
+        embedding_dim = 192
+        self.input_to_embedding = nn.Linear(self.input_dim, embedding_dim)
+        self.encoder_layers = nn.Sequential(*[EncoderLayer(embedding_dim) for _ in range(nlayers)])
+        self.embedding_to_output = nn.Linear(embedding_dim, self.output_dim)
         self.opt = opt
         self.input_col_loc = opt.kinematic_diffusion_col_loc
         self.output_col_loc = [i for i in range(repr_dim) if i not in self.input_col_loc]
 
-        self.d_model = int(self.embedding_dim)
-        encoder_layers = TransformerEncoderLayer(self.d_model, nhead, dim_feedforward, batch_first=True)
-        self.transformer = TransformerEncoder(encoder_layers, nlayers)
-        self.device = device
-        self.patch_num = int(150 / self.patch_len)
-        self.pos_encoding = PositionalEncoding(self.embedding_dim, self.patch_num)
-        self.master_model = ClassForAdaptingBaselineModelInTheOriginalFramework()
-        self.ema = ClassForAdaptingBaselineModelInTheOriginalFramework()
-        self.model = ClassForAdaptingBaselineModelInTheOriginalFramework()
+    def get_optimizer(self):
+        return Adan(self.parameters(), lr=4e-4, weight_decay=0.02)
 
-    def set_normalizer(self, normalizer):
-        self.normalizer = normalizer
+    def loss_fun(self, output_pred, output_true):
+        return F.mse_loss(output_pred, output_true, reduction='none')
 
-    def end_to_end_prediction(self, x, cond):
+    def end_to_end_prediction(self, x):
         input = x[0][:, :, self.input_col_loc]
         sequence = self.input_to_embedding(input)
-        sequence = self.pos_encoding(sequence)
-        sequence = self.transformer(sequence)
+        sequence = self.encoder_layers(sequence)
         output_pred = self.embedding_to_output(sequence)
         return output_pred
 
     def predict_samples(self, x, constraint):
         x[0] = x[0] * constraint['mask']
-        output_pred = self.end_to_end_prediction(x, constraint['cond'])
+        output_pred = self.end_to_end_prediction(x)
         x[0][:, :, self.output_col_loc] = output_pred
         return x[0]
 
-    def forward(self, x, cond, t_override):
-        output_true = x[0][:, :, self.output_col_loc]
-        output_pred = self.end_to_end_prediction(x, cond)
-        loss_simple = torch.zeros(x[0].shape).to(x[0].device)
-        loss_simple[:, :, self.output_col_loc] = F.mse_loss(output_pred, output_true, reduction="none")
 
-        losses = [
-            1. * loss_simple.mean(),
-            torch.tensor(0.).to(loss_simple.device),
-            torch.tensor(0.).to(loss_simple.device),
-            torch.tensor(0.).to(loss_simple.device),
-            torch.tensor(0).to(loss_simple.device)]
-        return sum(losses), losses + [loss_simple]
-
-
-class LstmArchitecture(nn.Module):
+class SugaiNetArchitecture(nn.Module):
+    """ LSTM Network-Based Estimation of Ground Reaction Forces During Walking
+     in Stroke Patients Using Markerless Motion Capture System """
     def __init__(self, repr_dim, opt):
-        super(LstmArchitecture, self).__init__()
-        self.ema = EMA(0.99)
-        self.opt = opt
+        super(SugaiNetArchitecture, self).__init__()
         self.input_dim = len(opt.kinematic_diffusion_col_loc)
         self.output_dim = repr_dim - self.input_dim
         self.input_col_loc = opt.kinematic_diffusion_col_loc
         self.output_col_loc = [i for i in range(repr_dim) if i not in self.input_col_loc]
         self.device = 'cuda'
-        self.master_model = ClassForAdaptingBaselineModelInTheOriginalFramework()
-        self.ema = ClassForAdaptingBaselineModelInTheOriginalFramework()
-        self.model = ClassForAdaptingBaselineModelInTheOriginalFramework()
 
-        lstm_unit = 256
-        nlayer = 2
-        fcnn_unit = 256
-        self.rnn_layer = nn.LSTM(self.input_dim, lstm_unit, nlayer, batch_first=True, bidirectional=True)
-        self.linear_1 = nn.Linear(lstm_unit*2, fcnn_unit, bias=True)
-        self.linear_2 = nn.Linear(fcnn_unit, self.output_dim, bias=True)
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(0.2)
-        for name, param in self.rnn_layer.named_parameters():
-            if 'weight' in name:
-                nn.init.xavier_normal_(param)
+        self.hidden1 = nn.LSTM(self.input_dim, 216, 1, batch_first=True)
+        self.dropout1 = nn.Dropout(0.2)
+        self.hidden2 = nn.LSTM(216, 76, 1, batch_first=True)
+        self.dropout2 = nn.Dropout(0.25)
+        self.output = nn.Linear(76, self.output_dim, bias=True)
+
+    def end_to_end_prediction(self, x):
+        input = x[0][:, :, self.input_col_loc]
+        x, _ = self.hidden1(input)
+        x = self.dropout1(x)
+        x, _ = self.hidden2(x)
+        x = self.dropout2(x)
+        output_pred = self.output(x)
+        return output_pred
+
+    def get_optimizer(self):
+        return torch.optim.Adam(self.parameters(), lr=5e-3)
+
+    def loss_fun(self, output_pred, output_true):
+        return F.l1_loss(output_pred, output_true, reduction='none')
+
+
+class DiffusionShellForAdaptingTheOriginalFramework(nn.Module):
+    def __init__(self, model):
+        super(DiffusionShellForAdaptingTheOriginalFramework, self).__init__()
+        self.device = 'cuda'
+        self.model = model
+        self.ema = EMA(0.99)
+        self.master_model = copy.deepcopy(self.model)
 
     def set_normalizer(self, normalizer):
         self.normalizer = normalizer
 
-    def end_to_end_prediction(self, x):
-        input = x[0][:, :, self.input_col_loc]
-        x, _ = self.rnn_layer(input)
-        x = self.dropout(x)
-        x = self.linear_1(x)
-        x = self.relu(x)
-        output_pred = self.linear_2(x)
-        return output_pred
-
     def predict_samples(self, x, constraint):
         x[0] = x[0] * constraint['mask']
-        output_pred = self.end_to_end_prediction(x)
-        x[0][:, :, self.output_col_loc] = output_pred
+        output_pred = self.model.end_to_end_prediction(x)
+        x[0][:, :, self.model.output_col_loc] = output_pred
         return x[0]
 
     def forward(self, x, cond, t_override):
-        output_true = x[0][:, :, self.output_col_loc]
-        output_pred = self.end_to_end_prediction(x)
+        output_true = x[0][:, :, self.model.output_col_loc]
+        output_pred = self.model.end_to_end_prediction(x)
         loss_simple = torch.zeros(x[0].shape).to(x[0].device)
-        loss_simple[:, :, self.output_col_loc] = F.mse_loss(output_pred, output_true, reduction="none")
+        loss_simple[:, :, self.model.output_col_loc] = self.model.loss_fun(output_pred, output_true)
 
         losses = [
             1. * loss_simple.mean(),
@@ -1315,10 +1321,7 @@ class BaselineModel(MotionModel):
             self,
             opt,
             model_architecture_class,
-            normalizer=None,
             EMA=True,
-            learning_rate=4e-4,
-            weight_decay=0.02,
     ):
         self.opt = opt
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
@@ -1328,9 +1331,9 @@ class BaselineModel(MotionModel):
         self.accelerator.wait_for_everyone()
 
         self.model = model_architecture_class(self.repr_dim, opt)
-        self.diffusion = self.model
+        self.diffusion = DiffusionShellForAdaptingTheOriginalFramework(self.model)
         self.diffusion = self.accelerator.prepare(self.diffusion)
-        optim = Adan(self.diffusion.parameters(), lr=learning_rate, weight_decay=weight_decay)
+        optim = self.model.get_optimizer()
         self.optim = self.accelerator.prepare(optim)
 
         print("Model has {} parameters".format(sum(y.numel() for y in self.model.parameters())))
@@ -1359,6 +1362,110 @@ class BaselineModel(MotionModel):
                            for _ in range(num_of_generation_per_window)]
         state_pred_list = [self.normalizer.unnormalize(state_pred.detach().cpu()) for state_pred in state_pred_list]
         return torch.stack(state_pred_list)
+
+
+class Transpose(torch.nn.Module):
+    def __init__(self, dim1, dim2):
+        super().__init__()
+        self._dim1, self._dim2 = dim1, dim2
+
+    def extra_repr(self):
+        return "{}, {}".format(self._dim1, self._dim2)
+
+    def forward(self, input):
+        return input.transpose(self._dim1, self._dim2)
+
+
+class GroundLinkArchitecture(nn.Module):
+    def __init__(self, repr_dim, opt):
+        super().__init__()
+        self.input_dim = len(opt.kinematic_diffusion_col_loc)
+        self.output_dim = repr_dim - self.input_dim
+        self.input_col_loc = opt.kinematic_diffusion_col_loc
+        self.output_col_loc = [i for i in range(repr_dim) if i not in self.input_col_loc]
+        self.device = 'cuda'
+
+        cnn_kernel = 7
+        cnn_dropout = 0.0
+        fc_depth = 3
+        fc_dropout = 0.2
+        cnn_features = [self.input_dim, 128, 128, 256, 256]
+        features_out = self.output_dim
+        ## Preprocess part
+        pre_layers = [  # N x F x J x [...]
+            torch.nn.Flatten(start_dim=2, end_dim=-1),  # N x F x C
+            Transpose(-2, -1),  # N x C x F
+        ]
+        ## Convolutional part
+        conv = lambda c_in, c_out: torch.nn.Conv1d(c_in, c_out, cnn_kernel, padding=cnn_kernel // 2,
+                                                   padding_mode="replicate")
+        cnn_layers = []
+        for c_in, c_out in zip(cnn_features[:-1], cnn_features[1:]):  # N x C x F
+            cnn_layers += [
+                torch.nn.Dropout(p=cnn_dropout),  # N x Ci x F
+                conv(c_in, c_out),  # N x Ci x F
+                torch.nn.ELU(),  # N x Ci x F
+            ]
+        ## Fully connected part
+        fc_layers = [Transpose(-2, -1)]  # N x F x Cn
+        for _ in range(fc_depth - 1):
+            fc_layers += [  # N x F x Ci
+                torch.nn.Dropout(p=fc_dropout),  # N x F x Ci
+                torch.nn.Linear(cnn_features[-1], cnn_features[-1]),  # N x F x Ci
+                torch.nn.ELU()  # N x F x Ci
+            ]
+        fc_layers += [  # N x F x Ci
+            torch.nn.Dropout(p=fc_dropout),  # N x F x 2*Co
+            torch.nn.Linear(cnn_features[-1], features_out, bias=False),  # N x F x Co
+            # torch.nn.Unflatten(-1, (2, features_out)),  # N x F x 2 x Co
+            # torch.nn.Softplus(),  # N x F x 2 x Co
+        ]
+        # commented Softplus because they were only predicting positive vGRF, whereas we have normalized 3D GRF.
+        layers = pre_layers + cnn_layers + fc_layers
+        layers = self.initialize(layers)
+        self.pre_layers = torch.nn.Sequential(*layers[:len(pre_layers)])
+        self.cnn_layers = torch.nn.Sequential(*layers[len(pre_layers):len(pre_layers) + len(cnn_layers)])
+        self.fc_layers = torch.nn.Sequential(*layers[len(pre_layers) + len(cnn_layers):])
+
+    def end_to_end_prediction(self, x):
+        input = x[0][:, :, self.input_col_loc]
+        sequence = self.pre_layers(input)
+        sequence = self.cnn_layers(sequence)
+        output_pred = self.fc_layers(sequence)
+        return output_pred
+
+    def get_optimizer(self):
+        return torch.optim.Adam(self.parameters(), lr=3e-5)
+
+    def loss_fun(self, output_pred, output_true):
+        return F.mse_loss(output_pred, output_true, reduction='none')
+
+    @staticmethod
+    def initialize(layers):
+        GAINS = {
+            torch.nn.Sigmoid: torch.nn.init.calculate_gain("sigmoid"),
+            torch.nn.ReLU: torch.nn.init.calculate_gain("relu"),
+            torch.nn.LeakyReLU: torch.nn.init.calculate_gain("leaky_relu"),
+            torch.nn.ELU: torch.nn.init.calculate_gain("relu"),
+            torch.nn.Softplus: torch.nn.init.calculate_gain("relu"),
+        }
+        for layer, activation in zip(layers[:-1], layers[1:]):
+            if len(list(layer.parameters())) > 0 and type(activation) in GAINS:
+                if not isinstance(activation, type):
+                    activation = type(activation)
+                if activation not in GAINS:
+                    raise Exception("Initialization not defined for activation '{}'.".format(type(activation)))
+                if isinstance(layer, torch.nn.Linear):
+                    torch.nn.init.xavier_normal_(layer.weight, GAINS[activation])
+                    if layer.bias is not None:
+                        torch.nn.init.zeros_(layer.bias)
+                elif isinstance(layer, torch.nn.Conv1d):
+                    torch.nn.init.xavier_normal_(layer.weight, GAINS[activation])
+                    if layer.bias is not None:
+                        torch.nn.init.zeros_(layer.bias)
+                else:
+                    raise Exception("Initialization not defined for layer '{}'.".format(type(layer)))
+        return layers
 
 
 

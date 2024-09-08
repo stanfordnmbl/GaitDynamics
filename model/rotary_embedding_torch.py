@@ -5,8 +5,6 @@ import torch
 from einops import rearrange, repeat
 from torch import einsum, nn
 
-# helper functions
-
 
 def exists(val):
     return val is not None
@@ -33,9 +31,6 @@ def broadcat(tensors, dim=-1):
     return torch.cat(tensors, dim=dim)
 
 
-# rotary embedding helper functions
-
-
 def rotate_half(x):
     x = rearrange(x, "... (d r) -> ... d r", r=2)
     x1, x2 = x.unbind(dim=-1)
@@ -57,21 +52,6 @@ def apply_rotary_emb(freqs, t, start_index=0):
     )
     t = (t * freqs.cos()) + (rotate_half(t) * freqs.sin())
     return torch.cat((t_left, t, t_right), dim=-1)
-
-
-# learned rotation helpers
-
-
-def apply_learned_rotations(rotations, t, start_index=0, freq_ranges=None):
-    if exists(freq_ranges):
-        rotations = einsum("..., f -> ... f", rotations, freq_ranges)
-        rotations = rearrange(rotations, "... r f -> ... (r f)")
-
-    rotations = repeat(rotations, "... n -> ... (n r)", r=2)
-    return apply_rotary_emb(rotations, t, start_index=start_index)
-
-
-# classes
 
 
 class RotaryEmbedding(nn.Module):

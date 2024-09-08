@@ -1,4 +1,5 @@
 import json
+import pickle
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -42,6 +43,7 @@ class MotionDataset(Dataset):
             dset_keyworks_to_exclude=(),
             include_trials_shorter_than_window_len=False,
             restrict_contact_bodies=True,
+            use_camargo_lumbar_reconstructed=False,
     ):
         self.data_path = data_path
         self.trial_start_num = trial_start_num
@@ -54,6 +56,7 @@ class MotionDataset(Dataset):
         self.specific_trial = specific_trial
         self.dset_keyworks_to_exclude = dset_keyworks_to_exclude
         self.restrict_contact_bodies = restrict_contact_bodies
+        self.use_camargo_lumbar_reconstructed = use_camargo_lumbar_reconstructed
         self.skels = {}
 
         self.train = train
@@ -74,6 +77,15 @@ class MotionDataset(Dataset):
         if self.trial_num == 0:
             print("No trials loaded")
             return None
+        self.dset_and_trials = {}
+        for i_trial, trial in enumerate(self.trials):
+            if trial.dset_name not in self.dset_and_trials.keys():
+                self.dset_and_trials[trial.dset_name] = [i_trial]
+            else:
+                self.dset_and_trials[trial.dset_name].append(i_trial)
+        self.dset_num = len(self.dset_and_trials.keys())
+        for dset_name in self.dset_and_trials.keys():
+            print(f"{dset_name}: {len(self.dset_and_trials[dset_name])} trials")
         total_hour = sum([trial.length for trial in self.trials]) / self.target_sampling_rate / 60 / 60
         total_clip_num = sum([trial.length for trial in self.trials]) / self.target_sampling_rate / 3
         print(f"In total, {self.trial_num} trials, {total_hour} hours, {total_clip_num} clips not considering overlapping")
@@ -197,7 +209,8 @@ class MotionDataset(Dataset):
         return self.opt.pseudo_dataset_len
 
     def __getitem__(self, _):
-        i_trial = torch.randint(0, self.trial_num, (1,)).item()        # a random trial regardless of its length
+        dset_name = random.sample(self.dset_and_trials.keys(), 1)[0]
+        i_trial = random.sample(self.dset_and_trials[dset_name], 1)[0]
         slice_index = random.sample(self.trials[i_trial].available_win_start, 1)[0]
         converted_pose = self.trials[i_trial].converted_pose[slice_index:slice_index+self.window_len, ...]
         return (converted_pose, self.trials[i_trial].model_offsets, i_trial, slice_index,
@@ -268,14 +281,18 @@ class MotionDataset(Dataset):
                 windows.append(WindowData(pose, trial_.model_offsets, i_trial, None, mask, trial_.height_m, trial_.weight_kg, trial_.cond))
         return windows
 
-    def get_overlapping_wins(self, col_loc_to_unmask, step_len, start_trial=0, end_trial=None):
+    def get_overlapping_wins(self, col_loc_to_unmask, step_len, start_trial=0, end_trial=None, including_shorter_than_window_len=False):
         if end_trial is None:
             end_trial = len(self.trials)
         windows, s_list, e_list = [], [], []
         for i_trial in range(start_trial, end_trial):
             trial_ = self.trials[i_trial]
             trial_len = trial_.converted_pose.shape[0]
-            for i in range(0, trial_len - self.opt.window_len + step_len, step_len):
+            if including_shorter_than_window_len:
+                e_of_trial = trial_len
+            else:
+                e_of_trial = trial_len - self.opt.window_len + step_len
+            for i in range(0, e_of_trial, step_len):
                 s = max(0, i)
                 e = min(trial_len, i+self.opt.window_len)
                 # if not list(set(np.where(trial_.probably_missing==0)[0]).intersection(set(range(s, e)))):
@@ -407,6 +424,11 @@ class MotionDataset(Dataset):
                 dset_name = subject_name.split('_')[0]
 
             trial_start_num_ = self.trial_start_num if self.trial_start_num >= 0 else max(0, subject.getNumTrials() + self.trial_start_num)
+
+            if self.use_camargo_lumbar_reconstructed and 'Camargo2021' in subject_path:
+                camargo_reconstructed_dict, lumbar_dof = pickle.load( open(f"{self.data_path}/camargo_lumbar_reconstructed.pkl", "rb" ))
+                lumbar_col_loc = [opt.osim_dof_columns.index(col) for col in lumbar_dof]
+
             for trial_id in tqdm(range(trial_start_num_, subject.getNumTrials())):
                 sampling_rate = int(1 / subject.getTrialTimestep(trial_id))
                 sub_and_trial_name = subject_name + '__' + subject.getTrialName(trial_id)
@@ -481,6 +503,12 @@ class MotionDataset(Dataset):
                     states = linear_resample_data(states, sampling_rate, self.target_sampling_rate)
                     probably_missing = linear_resample_data(np.array(probably_missing).astype(float), sampling_rate, self.target_sampling_rate).astype(bool)
                 probably_missing = np.array(probably_missing).astype(np.float64)
+
+                # !!! insert here.
+                if 'camargo_reconstructed_dict' in locals():
+                    if sub_and_trial_name in camargo_reconstructed_dict.keys():
+                        assert states.shape[0] == camargo_reconstructed_dict[sub_and_trial_name].shape[0]
+                        states[:, lumbar_col_loc] = camargo_reconstructed_dict[sub_and_trial_name]
 
                 foot_locations, _, _, _ = forward_kinematics(states[:, :-len(KINETICS_ALL)], model_offsets)
                 mtp_r_loc, mtp_l_loc = foot_locations[1].squeeze().cpu().numpy(), foot_locations[3].squeeze().cpu().numpy()

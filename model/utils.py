@@ -17,11 +17,20 @@ from data.osim_fk import get_model_offsets, forward_kinematics
 
 def cross_product_2d(a, b):
     if len(a.shape) != 2 or len(b.shape) != 2:
-        raise ValueError("Input vectors must be 3-dimensional.")
+        raise ValueError("Input vectors must be 2-dimensional.")
 
     return np.array([a[:, 1]*b[:, 2] - a[:, 2]*b[:, 1],
                      a[:, 2]*b[:, 0] - a[:, 0]*b[:, 2],
                      a[:, 0]*b[:, 1] - a[:, 1]*b[:, 0]]).T
+
+
+def cross_product_1d(a, b):
+    if len(a.shape) != 1 or len(b.shape) != 1:
+        raise ValueError("Input vectors must be 1-dimensional.")
+
+    return np.array([a[1]*b[2] - a[2]*b[1],
+                     a[2]*b[0] - a[0]*b[2],
+                     a[0]*b[1] - a[1]*b[0]])
 
 
 def identity(t, *args, **kwargs):
@@ -203,21 +212,75 @@ def inverse_convert_addb_state_to_model_input(model_states, model_states_column_
     return osim_states
 
 
-def osim_states_to_knee_moments_in_percent_BW_BH(osim_states, skel, opt, height_m):
+def osim_states_to_moments_in_percent_BW_BH_via_cross_product(osim_states, skel, opt, height_m):
     if isinstance(osim_states, torch.Tensor):
         osim_states = osim_states.numpy()
     forces = osim_states[:, opt.grf_osim_col_loc]
     cops = osim_states[:, opt.cop_osim_col_loc]
     poses = osim_states[:, opt.kinematic_osim_col_loc]
-    knee_loc = get_multi_joint_loc_using_tom_fk(['knee_r', 'knee_l'], skel, poses)
-    vector = (knee_loc - cops).numpy()
-    knee_moment_r = cross_product_2d(vector[:, :3], forces[:, :3]) / (height_m * 9.81) * 100
-    knee_moment_l = cross_product_2d(vector[:, 3:], forces[:, 3:]) / (height_m * 9.81) * 100
-    knee_moment_r[:, 0] = -knee_moment_r[:, 0]
-    knee_moment_l[:, 0] = knee_moment_l[:, 0]
-    moments = np.concatenate([knee_moment_r, knee_moment_l], axis=-1)
-    moment_names = ['knee_moment_r_x', 'knee_moment_r_y', 'knee_moment_r_z', 'knee_moment_l_x', 'knee_moment_l_y', 'knee_moment_l_z']
+
+    moments, moment_names = [], []
+    for joint in ['ankle', 'knee', 'hip']:
+        joint_pairs = [f'{joint}_r', f'{joint}_l']
+        joint_coordinates = get_multi_joint_loc_using_tom_fk(joint_pairs, skel, poses)
+        vector = (joint_coordinates - cops).numpy()
+        moment_r = cross_product_2d(vector[:, :3], forces[:, :3]) / (height_m * 9.81) * 100
+        moment_l = cross_product_2d(vector[:, 3:], forces[:, 3:]) / (height_m * 9.81) * 100
+        moment_r[:, 0] = -moment_r[:, 0]
+        moments.append(moment_r)
+        moments.append(moment_l)
+        moment_names += [f'{joint}_moment_{side}_{axis}' for side in ['r', 'l'] for axis in ['x', 'y', 'z']]
+    moments = np.concatenate(moments, axis=-1)
     return moments, moment_names
+
+
+def get_param_from_osim(osim_states_unfiltered, skel, opt, heights_weights):
+    height_m, weights_kg = heights_weights
+    # moments_cross_product, moments_cross_product_names = osim_states_to_moments_in_percent_BW_BH_via_cross_product(osim_states_unfiltered, skel, opt, height_m)
+    skel.clearExternalForces()
+    skel.setGravity([0, -9.81, 0])
+    contact_bodies = [skel.getBodyNode(name) for name in ['calcn_r', 'calcn_l']]
+
+    osim_states = data_filter(osim_states_unfiltered, 2, opt.target_sampling_rate, 2)
+    osim_states_vel, osim_states_acc = update_d_dd(osim_states, 1 /opt.target_sampling_rate)
+    moments_id = []
+
+    for i_frame in range(osim_states.shape[0]):
+        skel.setPositions(osim_states[i_frame, opt.kinematic_osim_col_loc])
+        # skel.setVelocities(np.zeros_like(osim_states_vel[i_frame, opt.kinematic_osim_col_loc]))
+        skel.setVelocities(osim_states_vel[i_frame, opt.kinematic_osim_col_loc])
+        f_r = osim_states[i_frame, opt.grf_osim_col_loc[:3]] * weights_kg
+        cop_r_world = osim_states[i_frame, opt.cop_osim_col_loc[:3]]
+        R_bw = skel.getBodyNode('calcn_r').getWorldTransform().rotation().T
+        f_r_body = R_bw @ f_r
+        cop_r_body = R_bw @ (cop_r_world - skel.getBodyNode('calcn_r').getWorldTransform().translation())
+        torque_r_body = cross_product_1d(cop_r_body, f_r_body)
+        f_l = osim_states[i_frame, opt.grf_osim_col_loc[3:6]] * weights_kg
+        cop_l_world = osim_states[i_frame, opt.cop_osim_col_loc[3:6]]
+        R_bw = skel.getBodyNode('calcn_l').getWorldTransform().rotation().T
+        f_l_body = R_bw @ f_l
+        cop_l_body = R_bw @ (cop_l_world - skel.getBodyNode('calcn_l').getWorldTransform().translation())
+        torque_l_body = cross_product_1d(cop_l_body, f_l_body)
+        forces = [np.concatenate([torque_r_body, f_r_body]), np.concatenate([torque_l_body, f_l_body])]
+
+        moments = skel.getMultipleContactInverseDynamics(
+            osim_states_acc[i_frame, opt.kinematic_osim_col_loc].reshape([-1, 1]), contact_bodies, forces)
+        moments_id.append(moments.jointTorques)
+    moments_id = np.array(moments_id)
+    moments_id_names = [item.getName() for item in skel.getDofs()]
+    scale = height_m * (weights_kg * 9.81) / 100
+
+
+def model_states_osim_dof_conversion(model_states, opt):
+    states = [dof for dof in model_states if '_vel' not in dof]
+    osim_dofs = copy.deepcopy(states)
+    for joint in opt.joints_3d:
+        has_this_joint = f'{joint}_0' in states
+        if has_this_joint:
+            [osim_dofs.remove(f'{joint}_{i_}') for i_ in range(6)]
+            osim_dofs.extend(JOINTS_3D_ALL[joint])
+    osim_dofs = [dof for dof in opt.osim_dof_columns if dof in osim_dofs]
+    return osim_dofs
 
 
 def align_moving_direction(poses, column_names):

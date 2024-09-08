@@ -1,11 +1,14 @@
+import copy
 import pickle
 from args import parse_opt, set_with_arm_opt
 import torch
-from consts import OSIM_DOF_ALL, KINETICS_ALL, WEIGHT_KG_OVERWRITE, DATASETS_NO_ARM
-from model.model import MotionModel, BaselineModel, TransformerEncoderArchitecture, LstmArchitecture
-from data.addb_dataset import MotionDataset, TrialData
+from consts import DATASETS_NO_ARM
+from model.model import MotionModel, BaselineModel, TransformerEncoderArchitecture, SugaiNetArchitecture, \
+    GroundLinkArchitecture
+from data.addb_dataset import MotionDataset
 import numpy as np
-from model.utils import convert_addb_state_to_model_input, inverse_convert_addb_state_to_model_input, align_moving_direction
+from model.utils import inverse_convert_addb_state_to_model_input, inverse_norm_cops, \
+    osim_states_to_moments_in_percent_BW_BH_via_cross_product, model_states_osim_dof_conversion
 import os
 import matplotlib.pyplot as plt
 
@@ -21,7 +24,7 @@ def convert_overlapped_list_to_array(trial_len, win_list, s_, e_, fun=np.nanmedi
 
 def load_model(opt):
     if opt.use_server:
-        opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'diffusion'}/weights/train-{'6993'}.pt"
+        opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'diffusion_balanced_dsets2'}/weights/train-{'7680'}.pt"
     else:
         opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'7680_diffusion'}.pt"
     set_with_arm_opt(opt, False)
@@ -34,41 +37,43 @@ def load_baseline_model(opt, model_to_test):
     if model_to_test == 1:
         model_architecture_class = TransformerEncoderArchitecture
         if opt.use_server:
-            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'baseline_tf'}/weights/train-{'7680'}.pt"
+            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'tf_balanced_dsets'}/weights/train-{'7680'}.pt"
         else:
             opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'7680_tf'}.pt"
         model_key = 'baseline_tf'
-    elif model_to_test == 3:
-        model_architecture_class = LstmArchitecture
+    elif model_to_test == 2:
+        model_architecture_class = GroundLinkArchitecture
         if opt.use_server:
-            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'baseline_lstm2'}/weights/train-{'7680'}.pt"
+            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'GroundLinkArchitecture'}/weights/train-{'7680'}.pt"
         else:
-            opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'7680_lstm'}.pt"
-        model_key = 'baseline_lstm'
+            opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'7680_groundlink'}.pt"
+        model_key = 'baseline_groundlink'
+    elif model_to_test == 3:
+        model_architecture_class = SugaiNetArchitecture
+        if opt.use_server:
+            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'SugaiNetArchitecture'}/weights/train-{'1998'}.pt"
+        else:
+            opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'1998_sugainet'}.pt"
+        model_key = 'baseline_sugainet'
 
     set_with_arm_opt(opt, False)
-    model = BaselineModel(opt, model_architecture_class, EMA=False)
+    model = BaselineModel(opt, model_architecture_class, EMA=True)
     return model, model_key
 
 
-def loop_all(opt, trials, windows, s_list, e_list):
+def loop_all(opt, skels, trials, windows, windows_reconstructed, s_list, e_list):
     state_pred_list = [[] for _ in range(skel_num-1)]
-    for i_win in range(0, len(windows), opt.batch_size_inference):
-        state_true = torch.stack([win.pose for win in windows[i_win:i_win+opt.batch_size_inference]])
-        masks = torch.stack([win.mask for win in windows[i_win:i_win+opt.batch_size_inference]])
-        cond = torch.stack([win.cond for win in windows[i_win:i_win+opt.batch_size_inference]])
-        height_m_tensor = torch.tensor([win.height_m for win in windows[i_win:i_win+opt.batch_size_inference]])
+    for i_win in range(0, len(windows_reconstructed), opt.batch_size_inference):
+        state_true = torch.stack([win.pose for win in windows_reconstructed[i_win:i_win+opt.batch_size_inference]])
+        masks = torch.stack([win.mask for win in windows_reconstructed[i_win:i_win+opt.batch_size_inference]])
+        cond = torch.stack([win.cond for win in windows_reconstructed[i_win:i_win+opt.batch_size_inference]])
 
         state_pred_list_batch = model.eval_loop(opt, state_true, masks, cond=cond, num_of_generation_per_window=skel_num-1)
-        pos_vec = np.array([trials[windows[i_win_vec].trial_id].pos_vec_for_pos_alignment
-                            for i_win_vec in range(len(windows[i_win:i_win+opt.batch_size_inference]))])
-        state_pred_list_batch = inverse_convert_addb_state_to_model_input(
-            state_pred_list_batch, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, pos_vec, height_m_tensor)
         for i_skel in range(skel_num-1):
             state_pred_list[i_skel] += state_pred_list_batch[i_skel]
 
     for i_skel in range(skel_num-1):
-        assert len(state_pred_list[i_skel]) == len(windows)
+        assert len(state_pred_list[i_skel]) == len(windows_reconstructed)
     state_pred_list_averaged, state_pred_list_std = [], []
     for i_win in range(len(state_pred_list[0])):
         win_skels = [state_pred_list[i_skel][i_win] for i_skel in range(skel_num-1)]
@@ -78,6 +83,7 @@ def loop_all(opt, trials, windows, s_list, e_list):
         state_pred_list_std.append(std)
 
     results_true, results_pred, results_pred_std, results_s, results_e = {}, {}, {}, {}, {}
+    heights_weights = {}
     for i_win, (win, state_pred_mean, state_pred_std) in enumerate(zip(windows, state_pred_list_averaged, state_pred_list_std)):
         trial = trials[win.trial_id]
         if trial.sub_and_trial_name not in results_true.keys():
@@ -86,13 +92,12 @@ def loop_all(opt, trials, windows, s_list, e_list):
             results_pred_std.update({trial.sub_and_trial_name: []})
             results_s.update({trial.sub_and_trial_name: []})
             results_e.update({trial.sub_and_trial_name: []})
+            heights_weights[trial.sub_and_trial_name] = win.height_m, win.weight_kg
 
-        true_val = inverse_convert_addb_state_to_model_input(
-            model.normalizer.unnormalize(win.pose.unsqueeze(0)), opt.model_states_column_names,
-            opt.joints_3d, opt.osim_dof_columns, trial.pos_vec_for_pos_alignment, torch.tensor(win.height_m)).squeeze().numpy()
+        true_val = model.normalizer.unnormalize(win.pose.unsqueeze(0))[0].numpy()
         mask = win.mask.squeeze().numpy()
-        true_val = true_val * np.bool_(mask.sum(axis=1)).repeat(35).reshape((150, -1))
-        state_pred_mean = state_pred_mean * np.bool_(mask.sum(axis=1)).repeat(35).reshape((150, -1))
+        true_val = true_val * np.bool_(mask.sum(axis=1)).repeat(true_val.shape[1]).reshape((150, -1))
+        state_pred_mean = state_pred_mean * np.bool_(mask.sum(axis=1)).repeat(true_val.shape[1]).reshape((150, -1))
 
         results_true[trial.sub_and_trial_name].append(true_val)
         results_pred[trial.sub_and_trial_name].append(state_pred_mean.numpy())
@@ -107,6 +112,22 @@ def loop_all(opt, trials, windows, s_list, e_list):
         results_pred[sub_and_trial], results_pred_std[sub_and_trial] = convert_overlapped_list_to_array(
             trial_len, results_pred[sub_and_trial], results_s[sub_and_trial], results_e[sub_and_trial])
 
+        sub_name = sub_and_trial.split('__')[0]
+        skel_list = [skel for dset_sub_name, skel in skels.items() if sub_name == dset_sub_name[-len(sub_name):]]
+        assert len(skel_list) == 1
+        skel = skel_list[0]
+
+        height_m_tensor = torch.tensor([heights_weights[sub_and_trial][0]])
+        for results_ in [results_true, results_pred, results_pred_std]:
+            results_[sub_and_trial] = inverse_convert_addb_state_to_model_input(
+                torch.from_numpy(results_[sub_and_trial]).unsqueeze(0), opt.model_states_column_names,
+                opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], height_m_tensor)[0].numpy()
+            pelvis_col_loc = [opt.osim_dof_columns.index(col) for col in ['pelvis_tx', 'pelvis_ty', 'pelvis_tz']]
+            results_[sub_and_trial][:, pelvis_col_loc] = np.diff(results_[sub_and_trial][:, pelvis_col_loc], prepend=0, axis=0) * opt.target_sampling_rate
+            results_[sub_and_trial] = inverse_norm_cops(skel, results_[sub_and_trial], opt, heights_weights[sub_and_trial][1], heights_weights[sub_and_trial][0])
+            params, param_columns = osim_states_to_moments_in_percent_BW_BH_via_cross_product(results_[sub_and_trial], skel, opt, heights_weights[sub_and_trial][0])
+            results_[sub_and_trial] = np.concatenate([results_[sub_and_trial], params], axis=-1)
+
         for trial in trials:
             if trial.sub_and_trial_name == sub_and_trial:
                 probably_missing = trial.probably_missing
@@ -117,7 +138,8 @@ def loop_all(opt, trials, windows, s_list, e_list):
     true_all = np.concatenate(true_all, axis=0)
     pred_all = np.concatenate(pred_all, axis=0)
     pred_std_all = np.concatenate(pred_std_all, axis=0)
-    return true_all, pred_all, pred_std_all
+    column_names = opt.osim_dof_columns + param_columns
+    return true_all, pred_all, pred_std_all, column_names
 
 
 def loop_mask_conditions():
@@ -125,6 +147,15 @@ def loop_mask_conditions():
     results_dict = {}
     for mask_key, unmask_col_loc in cols_to_unmask.items():
         print(mask_key)
+        masked_state_names = [opt.model_states_column_names[i] for i in opt.kinematic_diffusion_col_loc if i not in unmask_col_loc]
+        masked_osim_dofs = model_states_osim_dof_conversion(masked_state_names, opt)
+        masked_col_loc = [i for i, dof in enumerate(opt.osim_dof_columns) if dof in masked_osim_dofs]
+
+        if mask_key == 'none':
+            col_name_to_save = opt.osim_dof_columns
+        else:
+            col_name_to_save = params_of_interest+masked_osim_dofs
+
         true_sub_dict, pred_sub_dict, pred_std_sub_dict = {}, {}, {}
         for dset in test_dataset_dict.keys():
             if dset in dset_to_split:
@@ -162,17 +193,25 @@ def loop_mask_conditions():
                 e_list_splits = [e_list_splits[-1][:200]]
 
             for trials, windows, dset_name, s_list, e_list in zip(trials_splits, windows_splits, dset_names, s_list_splits, e_list_splits):
-                if 'diffusion_model_for_filling' in locals() or 'diffusion_model_for_filling' in globals():
-                    windows = fill_missing_with_diffusion(windows, diffusion_model_for_filling)
-                true_sub, pred_sub, pred_std_sub = loop_all(opt, trials, windows, s_list, e_list)
-                true_sub_dict[dset_name] = true_sub[:, params_of_interest_col_loc]
-                pred_sub_dict[dset_name] = pred_sub[:, params_of_interest_col_loc]
-                pred_std_sub_dict[dset_name] = pred_std_sub[:, params_of_interest_col_loc]
-        results_dict.update({mask_key: [true_sub_dict, pred_sub_dict, pred_std_sub_dict, params_of_interest]})
+                if ('diffusion_model_for_filling' in locals() or 'diffusion_model_for_filling' in globals()) and mask_key != 'none':
+                    windows_reconstructed = fill_missing_with_diffusion(windows, diffusion_model_for_filling)
+                else:
+                    windows_reconstructed = windows
+                true_sub, pred_sub, pred_std_sub, column_names = loop_all(opt, test_dataset_dict[dset].skels, trials, windows, windows_reconstructed, s_list, e_list)
+                if mask_key == 'none':
+                    col_name_to_save = column_names
+                else:
+                    col_name_to_save = params_of_interest+masked_osim_dofs
+                col_loc_to_save = [column_names.index(col) for col in col_name_to_save]
+                true_sub_dict[dset_name] = true_sub[:, col_loc_to_save]
+                pred_sub_dict[dset_name] = pred_sub[:, col_loc_to_save]
+                pred_std_sub_dict[dset_name] = pred_std_sub[:, col_loc_to_save]
+        results_dict.update({mask_key: [true_sub_dict, pred_sub_dict, pred_std_sub_dict, col_name_to_save]})
     pickle.dump(results_dict, open(f"figures/results/addb_marker_based_{model_key}.pkl", "wb"))
 
 
 def fill_missing_with_diffusion(windows, diffusion_model_for_filling):
+    windows = copy.deepcopy(windows)
     for i_win in range(0, len(windows), opt.batch_size_inference):
         state_true = torch.stack([win.pose for win in windows[i_win:i_win+opt.batch_size_inference]])
         masks = torch.stack([win.mask for win in windows[i_win:i_win+opt.batch_size_inference]])
@@ -182,7 +221,7 @@ def fill_missing_with_diffusion(windows, diffusion_model_for_filling):
         shape = (state_true.shape[0], state_true.shape[1], state_true.shape[2])
         samples = (diffusion_model_for_filling.diffusion.inpaint_ddim_loop(shape, constraint=constraint))
         samples = state_true * masks + (1.0 - masks) * samples.to(state_true.device)
-        samples[:, :, opt.kinetic_diffusion_col_loc] = state_true[:, :, opt.kinetic_diffusion_col_loc]      # reserve true GRF
+        samples[:, :, opt.kinetic_diffusion_col_loc] = state_true[:, :, opt.kinetic_diffusion_col_loc]      # reset GRF to true values
 
         unmasked_samples_in_temporal_dim = (masks.sum(axis=2)).bool()
 
@@ -206,7 +245,6 @@ def fill_missing_with_diffusion(windows, diffusion_model_for_filling):
 
 opt = parse_opt()
 params_of_interest = ['calcn_l_force_vy', 'calcn_l_force_vx', 'calcn_l_force_vz']
-params_of_interest_col_loc = [opt.osim_dof_columns.index(col) for col in params_of_interest]
 cols_to_unmask = {
     'none': opt.kinematic_diffusion_col_loc,
     'velocity': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('force' not in col and 'pelvis_t' not in col)],
@@ -235,7 +273,7 @@ dset_to_split = ['Camargo2021_Formatted_No_Arm', 'Moore2015_Formatted_No_Arm', '
 dset_to_skip = ['Santos2017_Formatted_No_Arm']
 dset_specific_trial = {dset: None for dset in DATASETS_NO_ARM}
 dset_specific_trial['Falisse2017_Formatted_No_Arm'] = 'Gait'
-dset_specific_trial['Li2021_Formatted_No_Arm'] = 'Trial'
+dset_specific_trial['Li2021_Formatted_No_Arm'] = ['Trial25', 'Trial26']     # Other trials do not have valid pelvis angles
 dset_specific_trial['Han2023_Formatted_No_Arm'] = 'walk'
 dset_specific_trial['Uhlrich2023_Formatted_No_Arm'] = 'walking'
 dset_specific_trial['Wang2023_Formatted_No_Arm'] = ['walk', 'run']
@@ -243,7 +281,7 @@ skel_num = 2
 win_step_length = 15
 
 if __name__ == "__main__":
-    model_to_test = 0       # 0 for diffusion, 1 for diffusion+transformer, 2 for tcn, 3 for LSTM
+    model_to_test = 3       # 0 for diffusion, 1 for diffusion+transformer, 2 for groundlink, 3 for Sugai LSTM
     speed_up = False
     max_trial_num = None     # None for all trials
 
@@ -258,6 +296,7 @@ if __name__ == "__main__":
     elif model_to_test == 3:
         model, model_key = load_baseline_model(opt, model_to_test=model_to_test)
 
+    print(model_key)
     test_dataset_dict = {}
     for dset in DATASETS_NO_ARM:
         if dset in dset_to_skip:

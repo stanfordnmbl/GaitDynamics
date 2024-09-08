@@ -1,10 +1,8 @@
 import pickle
-from consts import NOT_IN_GAIT_PHASE, EXCLUDE_FROM_ASB
-from fig_utils import FONT_DICT_SMALL, FONT_SIZE_SMALL, LINE_WIDTH, LINE_WIDTH_THICK, format_axis
+from fig_utils import FONT_DICT_SMALL, FONT_SIZE_SMALL, format_axis
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import rc
-import matplotlib.gridspec as gridspec
 
 
 def get_average_and_std(bl_true, bl_pred, ts_true, condition, params_of_interest_col_loc):
@@ -43,7 +41,6 @@ def draw_fig():
             plt.plot(pred_all[:, param_col_loc], label='Pred')
     plt.show()
 
-    # mae_dict['opencap_reported'] = [1.01, 0.28, 0.13]
     mae_dict['opencap_reported'] = [0.82, 0.21, 0.11]
 
     colors = [np.array(x) / 255 for x in [[155, 155, 155], [0, 155, 155], [0, 111, 111]]]
