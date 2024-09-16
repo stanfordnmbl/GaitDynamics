@@ -1,6 +1,6 @@
 from args import parse_opt
-from model.model import MotionModel, BaselineModel, TransformerEncoderArchitecture, SugaiNetArchitecture, \
-    GroundLinkArchitecture
+from model.model import MotionModel, BaselineModel, TransformerEncoderArchitecture
+from model_baseline.grf_baseline import GroundLinkArchitecture, SugaiNetArchitecture
 from data.addb_dataset import MotionDataset
 from torch.nn import functional as F
 import wandb

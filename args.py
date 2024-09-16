@@ -75,7 +75,8 @@ def set_with_arm_opt(opt, with_arm):
 
     if opt.with_kinematics_vel:
         opt.model_states_column_names = opt.model_states_column_names + [
-            f'{col}_vel' for i_col, col in enumerate(opt.model_states_column_names) if col not in KINETICS_ALL and 'pelvis_t' not in col]
+            f'{col}_vel' for i_col, col in enumerate(opt.model_states_column_names)
+            if col not in KINETICS_ALL and 'pelvis_t' not in col]
 
     opt.data_path_train = data_path + 'train_cleaned/'
     opt.data_path_test = data_path + 'test_cleaned/'

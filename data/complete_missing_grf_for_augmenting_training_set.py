@@ -1,18 +1,14 @@
 from args import parse_opt, set_with_arm_opt
 import torch
-from tqdm import tqdm
-import more_itertools as mit
 import os
 from consts import DATASETS_NO_ARM, NOT_IN_GAIT_PHASE
 from model.model import MotionModel
 from data.addb_dataset import MotionDataset
 import numpy as np
-from data.osim_fk import get_model_offsets, get_knee_rotation_coefficients, forward_kinematics
-import matplotlib.pyplot as plt
 import nimblephysics as nimble
 from model.utils import extract, make_beta_schedule, linear_resample_data, update_d_dd, fix_seed, nan_helper, \
     from_foot_loc_to_foot_vel, moving_average_filtering, convert_addb_state_to_model_input, identity, maybe_wrap, \
-    inverse_convert_addb_state_to_model_input, align_moving_direction, inverse_align_moving_direction
+    inverse_convert_addb_state_to_model_input, align_moving_direction
 
 
 def loop_all(opt):

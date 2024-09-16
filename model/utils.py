@@ -13,15 +13,20 @@ from consts import JOINTS_3D_ALL, FROZEN_DOFS
 from data.rotation_conversions import euler_angles_to_matrix, matrix_to_euler_angles
 import matplotlib.pyplot as plt
 from data.osim_fk import get_model_offsets, forward_kinematics
+import nimblephysics as nimble
 
 
 def cross_product_2d(a, b):
     if len(a.shape) != 2 or len(b.shape) != 2:
         raise ValueError("Input vectors must be 2-dimensional.")
-
-    return np.array([a[:, 1]*b[:, 2] - a[:, 2]*b[:, 1],
-                     a[:, 2]*b[:, 0] - a[:, 0]*b[:, 2],
-                     a[:, 0]*b[:, 1] - a[:, 1]*b[:, 0]]).T
+    if isinstance(a, torch.Tensor):
+        return torch.stack([a[:, 1] * b[:, 2] - a[:, 2] * b[:, 1],
+                            a[:, 2] * b[:, 0] - a[:, 0] * b[:, 2],
+                            a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]], dim=-1)
+    else:
+        return np.array([a[:, 1] * b[:, 2] - a[:, 2] * b[:, 1],
+                         a[:, 2] * b[:, 0] - a[:, 0] * b[:, 2],
+                         a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]]).T
 
 
 def cross_product_1d(a, b):
@@ -93,7 +98,7 @@ def get_multi_joint_loc_using_tom_fk(joint_names, skel, poses):
     return body_loc
 
 
-def inverse_norm_cops(skel, states, opt, sub_mass, height_m):
+def inverse_norm_cops(skel, states, opt, sub_mass, height_m, grf_thd_to_zero_cop=20):
     poses = states[:, opt.kinematic_osim_col_loc]
     forces = states[:, opt.grf_osim_col_loc]
     normed_cops = states[:, opt.cop_osim_col_loc]
@@ -107,8 +112,12 @@ def inverse_norm_cops(skel, states, opt, sub_mass, height_m):
         force_v[force_v == 0] = 1e-6
         vector = normed_cops[:, 3 * i_plate:3 * (i_plate + 1)] / force_v[:, 1:2] * height_m
         vector = np.nan_to_num(vector, posinf=0, neginf=0)
-        vector.clip(min=-0.4, max=0.4, out=vector)      # CoP should be within 0.4 m from the foot
+        # vector.clip(min=-0.4, max=0.4, out=vector)      # CoP should be within 0.4 m from the foot
         cops = vector + foot_loc[:, 3*i_plate:3*(i_plate+1)]
+
+        if grf_thd_to_zero_cop:
+            cops[force_v[:, 1] * sub_mass < grf_thd_to_zero_cop] = 0
+
         if isinstance(states, torch.Tensor):
             cops = torch.from_numpy(cops).to(states.dtype)
         else:
@@ -117,36 +126,41 @@ def inverse_norm_cops(skel, states, opt, sub_mass, height_m):
     return states
 
 
-def norm_cops(skel, states, opt, sub_mass, height_m):
+def norm_cops(skel, states, opt, sub_mass, height_m, grf_thd_to_zero_vector=20):       # !!!!!!!!
     states = torch.from_numpy(states)
     poses = states[:, opt.kinematic_osim_col_loc]
     forces = states[:, opt.grf_osim_col_loc]
     cops = states[:, opt.cop_osim_col_loc]
 
     heel_centers = torch.from_numpy(get_multi_body_loc_using_nimble_by_body_names(('calcn_r', 'calcn_l'), skel, poses)).to(states.dtype)
-    toe_centers = torch.from_numpy(get_multi_body_loc_using_nimble_by_body_names(('toes_r', 'toes_l'), skel, poses)).to(states.dtype)
+    # toe_centers = torch.from_numpy(get_multi_body_loc_using_nimble_by_body_names(('toes_r', 'toes_l'), skel, poses)).to(states.dtype)
     for i_plate in range(2):
-        force_v = forces[:, 3*i_plate:3*(i_plate+1)]
+        force_vector = forces[:, 3*i_plate:3*(i_plate+1)]
 
-        cop_to_toe = (toe_centers - cops)[:, 3*i_plate:3*(i_plate+1)]
-        cop_to_heel = (heel_centers - cops)[:, 3*i_plate:3*(i_plate+1)]
-
-        distance_to_toe = torch.norm(cop_to_toe, dim=-1)
-        distance_to_heel = torch.norm(cop_to_heel, dim=-1)
-        stance_phase = force_v[:, 1] > 0.5
-        use_toe = distance_to_toe < distance_to_heel
-
-        cop_to_foot = torch.zeros_like(cop_to_toe, dtype=cop_to_toe.dtype)
-        cop_to_foot[use_toe] = cop_to_toe[use_toe]
-        cop_to_foot[~use_toe] = cop_to_heel[~use_toe]
-
-        cop_to_foot[:, [0, 2]] = torch.clip(cop_to_foot[:, [0, 2]], -0.1, 0.1)
-
-        cops[use_toe&stance_phase, 3*i_plate:3*(i_plate+1)] = toe_centers[use_toe&stance_phase, 3*i_plate:3*(i_plate+1)] - cop_to_foot[use_toe&stance_phase]
-        cops[(~use_toe)&stance_phase, 3*i_plate:3*(i_plate+1)] = heel_centers[(~use_toe)&stance_phase, 3*i_plate:3*(i_plate+1)] - cop_to_foot[(~use_toe)&stance_phase]
+        # cop_to_toe = (toe_centers - cops)[:, 3*i_plate:3*(i_plate+1)]
+        # cop_to_heel = (heel_centers - cops)[:, 3*i_plate:3*(i_plate+1)]
+        #
+        # distance_to_toe = torch.norm(cop_to_toe, dim=-1)
+        # distance_to_heel = torch.norm(cop_to_heel, dim=-1)
+        # stance_phase = force_vector[:, 1] > 0.5
+        # use_toe = distance_to_toe < distance_to_heel
+        #
+        # cop_to_foot = torch.zeros_like(cop_to_toe, dtype=cop_to_toe.dtype)
+        # cop_to_foot[use_toe] = cop_to_toe[use_toe]
+        # cop_to_foot[~use_toe] = cop_to_heel[~use_toe]
+        #
+        # cop_to_foot[:, [0, 2]] = torch.clip(cop_to_foot[:, [0, 2]], -0.1, 0.1)
+        #
+        # cops[use_toe&stance_phase, 3*i_plate:3*(i_plate+1)] = toe_centers[use_toe&stance_phase, 3*i_plate:3*(i_plate+1)] - cop_to_foot[use_toe&stance_phase]
+        # cops[(~use_toe)&stance_phase, 3*i_plate:3*(i_plate+1)] = heel_centers[(~use_toe)&stance_phase, 3*i_plate:3*(i_plate+1)] - cop_to_foot[(~use_toe)&stance_phase]
 
         vector = (cops - heel_centers)[:, 3*i_plate:3*(i_plate+1)]
-        normed_vector = vector * force_v[:, 1:2] / height_m
+        stance_phase = force_vector[:, 1] > (50 / sub_mass)
+        if (vector[stance_phase, :].abs() > 0.4).sum() > 0.01 * len(stance_phase):
+            return False
+        normed_vector = vector * force_vector[:, 1:2] / height_m
+        if grf_thd_to_zero_vector:
+            normed_vector[force_vector[:, 1] * sub_mass < grf_thd_to_zero_vector] = 0
         states[:, opt.cop_osim_col_loc[3*i_plate:3*(i_plate+1)]] = normed_vector.to(states.dtype)
     return states
 
@@ -170,6 +184,8 @@ def convert_addb_state_to_model_input(pose_df, joints_3d, sampling_fre):
             pose_df = pose_df.drop(joints_euler_name, axis=1)
         for i in range(6):
             pose_df[joint_name + '_' + str(i)] = joint_6v[:, i]
+
+    # !!! TODO: _0_vel to angular velocity. Also, remove pelvis angles.
 
     vel_col_loc = [i for i, col in enumerate(pose_df.columns) if 'force' not in col and 'pelvis_t' not in col]
     vel_col_names = [f'{col}_vel' for i, col in enumerate(pose_df.columns) if 'force' not in col and 'pelvis_t' not in col]
@@ -234,41 +250,53 @@ def osim_states_to_moments_in_percent_BW_BH_via_cross_product(osim_states, skel,
     return moments, moment_names
 
 
-def get_param_from_osim(osim_states_unfiltered, skel, opt, heights_weights):
+def osim_states_to_moments_in_percent_BW_BH_via_inverse_dynamics(osim_states_unfiltered, skel, opt, heights_weights):
     height_m, weights_kg = heights_weights
-    # moments_cross_product, moments_cross_product_names = osim_states_to_moments_in_percent_BW_BH_via_cross_product(osim_states_unfiltered, skel, opt, height_m)
     skel.clearExternalForces()
     skel.setGravity([0, -9.81, 0])
-    contact_bodies = [skel.getBodyNode(name) for name in ['calcn_r', 'calcn_l']]
+    foot_body_ids = [skel.getBodyNode(body_).getIndexInSkeleton() for body_ in ['calcn_r', 'calcn_l']]
 
-    osim_states = data_filter(osim_states_unfiltered, 2, opt.target_sampling_rate, 2)
+    osim_states = copy.deepcopy(osim_states_unfiltered)
+    osim_states[:, opt.kinematic_osim_col_loc] = data_filter(
+        osim_states[:, opt.kinematic_osim_col_loc], 6, opt.target_sampling_rate, 2)
     osim_states_vel, osim_states_acc = update_d_dd(osim_states, 1 /opt.target_sampling_rate)
     moments_id = []
+    mResidualForceHelper = nimble.biomechanics.ResidualForceHelper(skel, foot_body_ids)
 
     for i_frame in range(osim_states.shape[0]):
         skel.setPositions(osim_states[i_frame, opt.kinematic_osim_col_loc])
-        # skel.setVelocities(np.zeros_like(osim_states_vel[i_frame, opt.kinematic_osim_col_loc]))
-        skel.setVelocities(osim_states_vel[i_frame, opt.kinematic_osim_col_loc])
         f_r = osim_states[i_frame, opt.grf_osim_col_loc[:3]] * weights_kg
         cop_r_world = osim_states[i_frame, opt.cop_osim_col_loc[:3]]
-        R_bw = skel.getBodyNode('calcn_r').getWorldTransform().rotation().T
-        f_r_body = R_bw @ f_r
-        cop_r_body = R_bw @ (cop_r_world - skel.getBodyNode('calcn_r').getWorldTransform().translation())
-        torque_r_body = cross_product_1d(cop_r_body, f_r_body)
+        torque_r_world = cross_product_1d(cop_r_world, f_r)
         f_l = osim_states[i_frame, opt.grf_osim_col_loc[3:6]] * weights_kg
         cop_l_world = osim_states[i_frame, opt.cop_osim_col_loc[3:6]]
-        R_bw = skel.getBodyNode('calcn_l').getWorldTransform().rotation().T
-        f_l_body = R_bw @ f_l
-        cop_l_body = R_bw @ (cop_l_world - skel.getBodyNode('calcn_l').getWorldTransform().translation())
-        torque_l_body = cross_product_1d(cop_l_body, f_l_body)
-        forces = [np.concatenate([torque_r_body, f_r_body]), np.concatenate([torque_l_body, f_l_body])]
+        torque_l_world = cross_product_1d(cop_l_world, f_l)
+        forces = np.concatenate([torque_r_world, f_r, torque_l_world, f_l])
+        id_ = mResidualForceHelper.calculateInverseDynamics(
+            osim_states[i_frame, opt.kinematic_osim_col_loc],
+            np.zeros_like(osim_states_vel[i_frame, opt.kinematic_osim_col_loc]),
+            np.zeros_like(osim_states_acc[i_frame, opt.kinematic_osim_col_loc]),
+            forces)
+        moments_id.append(id_)
 
-        moments = skel.getMultipleContactInverseDynamics(
-            osim_states_acc[i_frame, opt.kinematic_osim_col_loc].reshape([-1, 1]), contact_bodies, forces)
-        moments_id.append(moments.jointTorques)
     moments_id = np.array(moments_id)
     moments_id_names = [item.getName() for item in skel.getDofs()]
+
     scale = height_m * (weights_kg * 9.81) / 100
+    moments_cp, moment_names_cp = osim_states_to_moments_in_percent_BW_BH_via_cross_product(osim_states, skel, opt, height_m)
+    plt.figure()
+    plt.plot(- moments_id[:, moments_id_names.index('knee_angle_r')] / scale)
+    plt.plot(moments_cp[:, moment_names_cp.index('knee_moment_r_z')])
+    plt.title('Knee')
+    plt.figure()
+    plt.plot(moments_id[:, moments_id_names.index('ankle_angle_r')] / scale)
+    plt.plot(moments_cp[:, moment_names_cp.index('ankle_moment_r_z')])
+    plt.title('Ankle')
+    plt.figure()
+    plt.plot(moments_id[:, moments_id_names.index('hip_flexion_r')] / scale)
+    plt.plot(moments_cp[:, moment_names_cp.index('hip_moment_r_z')])
+    plt.title('Hip')
+    plt.show()
 
 
 def model_states_osim_dof_conversion(model_states, opt):
@@ -324,45 +352,6 @@ def align_moving_direction(poses, column_names):
     pose_clone[:, l_cop_col_loc] = l_cop_rotated.float()
 
     return pose_clone, rot_mat
-
-
-def inverse_align_moving_direction(poses, column_names, rot_mat_to_reset):
-    """ Has not been tested yet! """
-    pose_clone = torch.from_numpy(poses).clone().float()
-    pelvis_orientation_col_loc = [column_names.index(col) for col in JOINTS_3D_ALL['pelvis']]
-    p_pos_col_loc = [column_names.index(col) for col in [f'pelvis_t{x}' for x in ['x', 'y', 'z']]]
-    r_grf_col_loc = [column_names.index(col) for col in ['calcn_r_force_vx', 'calcn_r_force_vy', 'calcn_r_force_vz']]
-    l_grf_col_loc = [column_names.index(col) for col in ['calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz']]
-    r_cop_col_loc = [column_names.index(col) for col in ['calcn_r_normed_cop_x', 'calcn_r_normed_cop_y', 'calcn_r_normed_cop_z']]
-    l_cop_col_loc = [column_names.index(col) for col in ['calcn_l_normed_cop_x', 'calcn_l_normed_cop_y', 'calcn_l_normed_cop_z']]
-
-    if len(pelvis_orientation_col_loc) != 3 or len(p_pos_col_loc) != 3 or len(r_grf_col_loc) != 3 or len(
-            l_grf_col_loc) != 3:
-        raise ValueError('check column names')
-
-    pelvis_orientation = pose_clone[:, pelvis_orientation_col_loc]
-    pelvis_orientation = euler_angles_to_matrix(pelvis_orientation, "ZXY")
-    p_pos = pose_clone[:, p_pos_col_loc]
-    r_grf = pose_clone[:, r_grf_col_loc]
-    l_grf = pose_clone[:, l_grf_col_loc]
-    r_cop = pose_clone[:, r_cop_col_loc]
-    l_cop = pose_clone[:, l_cop_col_loc]
-
-    pelvis_orientation_rotated = torch.matmul(rot_mat_to_reset, pelvis_orientation)
-    p_pos_rotated = torch.matmul(rot_mat_to_reset, p_pos.unsqueeze(2)).squeeze(2)
-    r_grf_rotated = torch.matmul(rot_mat_to_reset, r_grf.unsqueeze(2)).squeeze(2)
-    l_grf_rotated = torch.matmul(rot_mat_to_reset, l_grf.unsqueeze(2)).squeeze(2)
-    r_cop_rotated = torch.matmul(rot_mat_to_reset, r_cop.unsqueeze(2)).squeeze(2)
-    l_cop_rotated = torch.matmul(rot_mat_to_reset, l_cop.unsqueeze(2)).squeeze(2)
-
-    pose_clone[:, pelvis_orientation_col_loc] = matrix_to_euler_angles(pelvis_orientation_rotated.float(), "ZXY")
-    pose_clone[:, p_pos_col_loc] = p_pos_rotated.float()
-    pose_clone[:, r_grf_col_loc] = r_grf_rotated.float()
-    pose_clone[:, l_grf_col_loc] = l_grf_rotated.float()
-    pose_clone[:, r_cop_col_loc] = r_cop_rotated.float()
-    pose_clone[:, l_cop_col_loc] = l_cop_rotated.float()
-
-    return pose_clone
 
 
 def data_filter(data, cut_off_fre, sampling_fre, filter_order=4):

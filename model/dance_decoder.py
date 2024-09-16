@@ -321,6 +321,9 @@ class DanceDecoder(nn.Module):
     def guided_forward(self, x, cond_embed, time_cond, guidance_weight):
         return self.forward(x, cond_embed, time_cond)
 
+    def __str__(self):
+        return 'diffusion'
+
     # No conditioning version
     def forward(self, x: Tensor, cond_embed: Tensor, time_cond: Tensor, cond_drop_prob: float = 0.0):
         x = self.input_projection(x)

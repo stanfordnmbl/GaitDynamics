@@ -1,25 +1,21 @@
-import json
 import pickle
-
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from torch.utils.data import Dataset
-from data.preprocess import increment_path, Normalizer
+from data.preprocess import Normalizer
 import os
 import torch
 import random
 from model.utils import linear_resample_data, update_d_dd, fix_seed, nan_helper, from_foot_loc_to_foot_vel, \
     convert_addb_state_to_model_input, align_moving_direction, data_filter, norm_cops, \
-    get_multi_body_loc_using_nimble_by_body_nodes, body_loc_to_cond
+    get_multi_body_loc_using_nimble_by_body_nodes, body_loc_to_cond, inverse_norm_cops
 from typing import Any, List
 import nimblephysics as nimble
 from consts import *
 from data.quaternion import rotation_6d_to_matrix, matrix_to_rotation_6d
 from data.osim_fk import get_model_offsets, forward_kinematics
-from nimblephysics import NimbleGUI
-import time
 import more_itertools as mit
 from scipy.interpolate import interp1d
 
@@ -239,7 +235,6 @@ class MotionDataset(Dataset):
         r_grf_rotated = torch.matmul(rot_mat, r_grf.unsqueeze(2)).squeeze(2)
         l_grf_rotated = torch.matmul(rot_mat, l_grf.unsqueeze(2)).squeeze(2)
 
-        # converted_pose = copy.deepcopy(converted_pose)
         converted_pose[:, pelvis_orientation_col_loc] = matrix_to_rotation_6d(pelvis_orientation_rotated.float())
         converted_pose[:, p_pos_col_loc] = p_pos_rotated.float()
         converted_pose[:, r_grf_col_loc] = r_grf_rotated.float()
@@ -295,8 +290,6 @@ class MotionDataset(Dataset):
             for i in range(0, e_of_trial, step_len):
                 s = max(0, i)
                 e = min(trial_len, i+self.opt.window_len)
-                # if not list(set(np.where(trial_.probably_missing==0)[0]).intersection(set(range(s, e)))):
-                #     continue
                 s_list.append(s)
                 e_list.append(e)
                 mask = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
@@ -341,8 +334,8 @@ class MotionDataset(Dataset):
     @staticmethod
     def grf_to_trial_gait_phase_label(v_grf, window_len, target_sampling_rate):
         stance_vgrf_thd = 1    # 100% of body mass. Needs to be large because some datasets are noisy.
-        stance_len_thds = [int(target_sampling_rate * 0.1), int(window_len * 0.8)]      # 0.1 s to 1 s
-        cycle_len_thds = [int(target_sampling_rate * 0.2), int(window_len)]      # 0.2 s to 1.5 s
+        stance_len_thds = [int(target_sampling_rate * 0.1), int(target_sampling_rate * 1.5)]      # 0.1 s to 1.5 s
+        cycle_len_thds = [int(target_sampling_rate * 0.2), int(target_sampling_rate * 2)]      # 0.2 s to 2 s
 
         trial_gait_phase_label = np.full([v_grf.shape[0]], NOT_IN_GAIT_PHASE)       # shape x
         stance_start_valid, stance_end_valid = [], []
@@ -365,7 +358,7 @@ class MotionDataset(Dataset):
                 continue
             trial_gait_phase_label[stance_start[i_start]:stance_start[i_start+1]] = np.linspace(0, 1000, stance_start[i_start+1]-stance_start[i_start])
             stance_start_valid.append(stance_start[i_start])
-            stance_end_valid.append(end_)
+            stance_end_valid.append(end_[0])
         return trial_gait_phase_label, stance_start_valid, stance_end_valid
 
     def get_attributes_of_trials(self):
@@ -405,6 +398,7 @@ class MotionDataset(Dataset):
 
             if f'{dset_name}_{subject_name}' in WEIGHT_KG_OVERWRITE.keys():
                 weight_kg = WEIGHT_KG_OVERWRITE[f'{dset_name}_{subject_name}']
+                print(f'Overwriting {dset_name}_{subject_name}\'s weight to {weight_kg} kg')
             else:
                 weight_kg = subject.getMassKg()
             height_m = subject.getHeightM()
@@ -489,7 +483,11 @@ class MotionDataset(Dataset):
                     #       f' flipped {len(grf_flag_counts)} times, thus setting all to True.', end='')
                     probably_missing = [False] * len(probably_missing)
 
-                states = norm_cops(skel, states, opt, weight_kg, height_m)
+                states = norm_cops(skel, states, opt, weight_kg, height_m, sampling_rate)
+                if states is False:
+                    print(f'{sub_and_trial_name} has CoP far away from foot, skipping')
+                    continue
+
                 if self.align_moving_direction_flag:
                     states, rot_mat = align_moving_direction(states, opt.osim_dof_columns)
                 else:
@@ -504,7 +502,6 @@ class MotionDataset(Dataset):
                     probably_missing = linear_resample_data(np.array(probably_missing).astype(float), sampling_rate, self.target_sampling_rate).astype(bool)
                 probably_missing = np.array(probably_missing).astype(np.float64)
 
-                # !!! insert here.
                 if 'camargo_reconstructed_dict' in locals():
                     if sub_and_trial_name in camargo_reconstructed_dict.keys():
                         assert states.shape[0] == camargo_reconstructed_dict[sub_and_trial_name].shape[0]

@@ -108,8 +108,8 @@ def loop_all(opt):
             true_val = inverse_norm_cops(skel_0, true_val, opt, trial_of_this_win.weight_kg, trial_of_this_win.height_m)
             state_pred = inverse_norm_cops(skel_1, state_pred, opt, trial_of_this_win.weight_kg, trial_of_this_win.height_m)
 
-            true_moment, moment_names, _ = osim_states_to_moments_in_percent_BW_BH_via_cross_product(true_val, skel_0, opt, trial_of_this_win.height_m)
-            pred_moments, _, _ = osim_states_to_moments_in_percent_BW_BH_via_cross_product(state_pred, skel_1, opt, trial_of_this_win.height_m)
+            true_moment, moment_names = osim_states_to_moments_in_percent_BW_BH_via_cross_product(true_val, skel_0, opt, trial_of_this_win.height_m)
+            pred_moments, _ = osim_states_to_moments_in_percent_BW_BH_via_cross_product(state_pred, skel_1, opt, trial_of_this_win.height_m)
 
             l_grf_v = true_val[:, opt.osim_dof_columns.index('calcn_l_force_vy')] * windows_manipulated[i_win].mask[:, test_dataset_mani.manipulated_col_loc[0]].numpy()
             if get_start_end_of_gait_cycle(l_grf_v):
@@ -159,7 +159,7 @@ if __name__ == "__main__":
     # opt.guidance_lr = 0.02
     # opt.n_guided_steps = 5
 
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'6993'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'7680_diffusion'}.pt"
 
     loop_all(opt)
 

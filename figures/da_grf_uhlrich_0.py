@@ -16,7 +16,7 @@ import inspect, sys
 currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
 parentdir = os.path.dirname(currentdir)
 sys.path.insert(0, parentdir)
-from da_grf_test_set_0 import cols_to_unmask, load_model, convert_overlapped_list_to_array, load_baseline_model
+from da_grf_test_set_0 import cols_to_unmask, convert_overlapped_list_to_array, load_baseline_model
 
 
 class DatasetOpenCap(MotionDataset):
@@ -99,15 +99,6 @@ class DatasetOpenCap(MotionDataset):
             self.dset_set.add(dset_name)
 
             print('Current trial num: {}'.format(len(self.trials)))
-
-
-# def convert_overlapped_list_to_array(trial_len, win_list, s_, e_, fun=np.nanmedian):
-#     array_val_expand = np.full((len(win_list), trial_len, win_list[0].shape[1]), np.nan)
-#     for i_win, (win, s, e) in enumerate(zip(win_list, s_, e_)):
-#         array_val_expand[i_win, s:e] = win[:e-s]
-#     array_val = fun(array_val_expand, axis=0)
-#     std_val = np.nanstd(array_val_expand, axis=0)
-#     return array_val, std_val
 
 
 def loop_all(opt, trials, windows, kinematic_type_str):
@@ -196,7 +187,7 @@ if __name__ == "__main__":
 
     """ Uhlrich dataset, use marker-based kinematics """
     # model, model_key = load_model(opt, use_server=False)
-    model, model_key = load_baseline_model(opt, model_to_test=3)
+    model, model_key = load_baseline_model(opt, model_to_test=1)
     dset_name = 'uhlrich'
     test_dataset = MotionDataset(
         data_path='/mnt/d/Local/Data/MotionPriorData/uhlrich_dset/',
