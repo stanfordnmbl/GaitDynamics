@@ -104,7 +104,7 @@ def show_skeletons(opt, name_states_dict, gui, skel):
                 forces = states[i_frame, opt.grf_osim_col_loc[3 * i_force:3 * (i_force + 1)]]
                 cop = states[i_frame, opt.cop_osim_col_loc[3 * i_force:3 * (i_force + 1)]]
                 gui.nativeAPI().createLine(f'line_{i_skel}_{i_force}', [cop, cop + 0.1 * forces], color=[1, 0., 0., 1])
-        time.sleep(0.05)
+        time.sleep(0.2)
 
 
 def get_scores(y_true, y_pred, y_fields, exclude_swing_phase=False):

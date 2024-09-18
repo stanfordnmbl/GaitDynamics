@@ -563,7 +563,7 @@ class GaussianDiffusion(nn.Module):
         batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
 
         guide_x_start_the_beginning_step = 1000
-        n_guided_steps = 5
+        n_guided_steps = 10
         guidance_lr = 0.02
 
         times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
@@ -594,6 +594,7 @@ class GaussianDiffusion(nn.Module):
             pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
             if time_next < 0:
                 x = x_start
+                x = value * mask + (1.0 - mask) * x
                 return x
 
             alpha = self.alphas_cumprod[time]
@@ -1076,17 +1077,16 @@ class GaussianDiffusion(nn.Module):
         # loss_floor_penetration = loss_floor_penetration * extract(self.p2_loss_weight, t, loss_floor_penetration.shape)
 
         foot_acc_pred = (foot_locations_pred[..., 2:, :] - 2 * foot_locations_pred[..., 1:-1, :] + foot_locations_pred[..., :-2, :]).abs() * self.opt.target_sampling_rate ** 2
-        stance_based_on_foot_vel = (torch.norm(foot_acc_pred, dim=-1) < 0.3)[..., None].expand(-1, -1, -1, 3)       # TODO tune this. (0.3 m/s2)
+        stance_based_on_foot_vel = (torch.norm(foot_acc_pred, dim=-1) < 0.3)[..., None].expand(-1, -1, -1, 3)
         foot_acc_pred[~stance_based_on_foot_vel] = 0
         loss_slide = self.loss_fn(foot_acc_pred, foot_acc_pred * 0, reduction="none")
         loss_slide = loss_slide * extract(self.p2_loss_weight, t, loss_slide.shape[1:])
 
         losses = [
-            1. * loss_simple.mean(),         # TODO tune this
+            1. * loss_simple.mean(),
             0 * loss_vel.mean(),
             0. * loss_fk.mean(),
             0. * loss_drift.mean(),
-            # 1. * loss_floor_penetration.mean(),
             0. * loss_slide.mean()]
         return sum(losses), losses + [loss_simple]
 

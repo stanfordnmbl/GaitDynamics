@@ -88,7 +88,7 @@ def forward_kinematics(pose, offsets, with_arm=False):
     """
     if isinstance(pose, np.ndarray):
         pose = torch.from_numpy(pose)
-    pose = pose.to(torch.device('cuda:0'))      # TODO: Error-prone
+    pose = pose.to(torch.device('cuda:0'))      # Error-prone
     if len(pose.shape) == 2:
         pose = pose[None, ...]
     if len(offsets.shape) == 3:

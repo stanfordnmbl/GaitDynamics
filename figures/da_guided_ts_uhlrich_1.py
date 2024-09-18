@@ -30,8 +30,8 @@ def format_ticks(ax_kam, ax_angles):
     ax_kam.set_yticks(range(-1, 4))
     ax_kam.set_yticklabels(range(-1, 4), fontdict=FONT_DICT_SMALL)
     ax_angles.set_ylim(-23, 35)
-    ax_angles.set_yticks(range(-20, 31, 10))
-    ax_angles.set_yticklabels(range(-20, 31, 10), fontdict=FONT_DICT_SMALL)
+    ax_angles.set_yticks(range(-20, 41, 10))
+    ax_angles.set_yticklabels(range(-20, 41, 10), fontdict=FONT_DICT_SMALL)
 
 
 def draw_fig():
@@ -40,6 +40,7 @@ def draw_fig():
     ts_true, ts_pred, _, _, columns, _, _, _, = \
         pickle.load(open(f"results/da_guided_trunk_sway.pkl", "rb"))
     condition_list = list(bl_true.keys())
+    condition_list = [condition for condition in condition_list if condition != '_1']
 
     params_of_interest = ['knee_moment_l_x', 'lumbar_bending']
     params_of_interest_col_loc = [columns.index(col) for col in params_of_interest]

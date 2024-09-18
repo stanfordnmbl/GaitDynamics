@@ -7,7 +7,7 @@ from consts import *
 def parse_opt():
     machine_specific_config = json.load(open(os.path.dirname(os.path.realpath(__file__)) + '/machine_specific_config.json', 'r'))
     parser = argparse.ArgumentParser()
-    parser.add_argument("--exp_name", default="GroundLinkArchitecture", help="save to project/name")
+    parser.add_argument("--exp_name", default="SugaiNetArchitecture", help="save to project/name")
     parser.add_argument("--with_arm", type=bool, default=False, help="whether osim model has arm DoFs")
     parser.add_argument("--with_kinematics_vel", type=bool, default=True, help="whether to include 1st derivative of kinematics")
     parser.add_argument("--log_with_wandb", type=bool, default=machine_specific_config['log_with_wandb'], help="log with wandb")
@@ -73,10 +73,14 @@ def set_with_arm_opt(opt, with_arm):
         opt.data_path_osim_model = opt.data_path_parent + 'osim_model/unscaled_generic_no_arm.osim'
         opt.model_states_column_names = copy.deepcopy(MODEL_STATES_COLUMN_NAMES_NO_ARM)
 
+    for joint_name, joints_with_3_dof in opt.joints_3d.items():
+        opt.model_states_column_names = opt.model_states_column_names + [
+            joint_name + '_' + axis + '_angular_vel' for axis in ['x', 'y', 'z']]
+
     if opt.with_kinematics_vel:
         opt.model_states_column_names = opt.model_states_column_names + [
             f'{col}_vel' for i_col, col in enumerate(opt.model_states_column_names)
-            if col not in KINETICS_ALL and 'pelvis_t' not in col]
+            if not sum([term in col for term in ['force', 'pelvis_', '_vel', '_0', '_1', '_2', '_3', '_4', '_5']])]
 
     opt.data_path_train = data_path + 'train_cleaned/'
     opt.data_path_test = data_path + 'test_cleaned/'

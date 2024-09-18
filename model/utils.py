@@ -8,7 +8,7 @@ from scipy.interpolate import interp1d
 import scipy.interpolate as interpo
 import random
 from scipy.signal import filtfilt, butter
-from data.quaternion import euler_from_6v, euler_to_6v
+from data.quaternion import euler_from_6v, euler_to_6v, euler_to_angular_velocity, angular_velocity_to_euler
 from consts import JOINTS_3D_ALL, FROZEN_DOFS
 from data.rotation_conversions import euler_angles_to_matrix, matrix_to_euler_angles
 import matplotlib.pyplot as plt
@@ -180,15 +180,19 @@ def convert_addb_state_to_model_input(pose_df, joints_3d, sampling_fre):
     # convert euler to 6v
     for joint_name, joints_with_3_dof in joints_3d.items():
         joint_6v = euler_to_6v(torch.tensor(pose_df[joints_with_3_dof].values), "ZXY").numpy()
-        for joints_euler_name in joints_with_3_dof:
-            pose_df = pose_df.drop(joints_euler_name, axis=1)
         for i in range(6):
             pose_df[joint_name + '_' + str(i)] = joint_6v[:, i]
 
-    # !!! TODO: _0_vel to angular velocity. Also, remove pelvis angles.
+    for joint_name, joints_with_3_dof in joints_3d.items():
+        joint_angular_v = euler_to_angular_velocity(torch.tensor(pose_df[joints_with_3_dof].values), sampling_fre, "ZXY").numpy()
+        joint_angular_v = data_filter(joint_angular_v, 15, sampling_fre, 4)
+        for joints_euler_name in joints_with_3_dof:
+            pose_df = pose_df.drop(joints_euler_name, axis=1)
+        for i, axis in enumerate(['x', 'y', 'z']):
+            pose_df[joint_name + '_' + axis + '_angular' + '_vel'] = joint_angular_v[:, i]
 
-    vel_col_loc = [i for i, col in enumerate(pose_df.columns) if 'force' not in col and 'pelvis_t' not in col]
-    vel_col_names = [f'{col}_vel' for i, col in enumerate(pose_df.columns) if 'force' not in col and 'pelvis_t' not in col]
+    vel_col_loc = [i for i, col in enumerate(pose_df.columns) if not np.sum([term in col for term in ['force', 'pelvis_', '_vel', '_0', '_1', '_2', '_3', '_4', '_5']])]
+    vel_col_names = [f'{col}_vel' for i, col in enumerate(pose_df.columns) if not np.sum([term in col for term in ['force', 'pelvis_', '_vel', '_0', '_1', '_2', '_3', '_4', '_5']])]
     kinematics_np = pose_df.iloc[:, vel_col_loc].to_numpy().copy()
     kinematics_np_filtered = data_filter(kinematics_np, 15, sampling_fre, 4)
     kinematics_vel = np.stack([spline_fitting_1d(kinematics_np_filtered[:, i_col], range(kinematics_np_filtered.shape[0]), 1).ravel()

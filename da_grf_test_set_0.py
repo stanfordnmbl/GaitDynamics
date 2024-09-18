@@ -40,9 +40,9 @@ def load_model(model_to_test):
 
 def load_diffusion_model(opt):
     if opt.use_server:
-        opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'remove_wrong_cop_diffusion'}/weights/train-{'7680'}.pt"
+        opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'replace_vel_by_angular_v_diffusion'}/weights/{'train-7680_diffusion.pt'}"
     else:
-        opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'7680_diffusion'}.pt"
+        opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'train-7680_diffusion.pt'}"
     set_with_arm_opt(opt, False)
     model = MotionModel(opt)
     model_key = 'diffusion'
@@ -53,21 +53,21 @@ def load_baseline_model(opt, model_to_test):
     if model_to_test == 1:
         model_architecture_class = TransformerEncoderArchitecture
         if opt.use_server:
-            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'remove_wrong_cop_tf'}/weights/train-{'7680'}.pt"
+            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'replace_vel_by_angular_v_tf'}/weights/{'train-7680_tf.pt'}"
         else:
-            opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'7680_tf'}.pt"
+            opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'train-7680_tf.pt'}"
         model_key = 'tf'
     elif model_to_test == 2:
         model_architecture_class = GroundLinkArchitecture
         if opt.use_server:
-            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'remove_wrong_cop_groundlink'}/weights/train-{'7680'}.pt"
+            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'GroundLinkArchitecture2'}/weights/train-{'7680'}.pt"
         else:
             opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'7680_groundlink'}.pt"
         model_key = 'groundlink'
     elif model_to_test == 3:
         model_architecture_class = SugaiNetArchitecture
         if opt.use_server:
-            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'remove_wrong_cop_sugainet'}/weights/train-{'999'}.pt"
+            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'SugaiNetArchitecture2'}/weights/train-{'999'}.pt"
         else:
             opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'1998_sugainet'}.pt"
         model_key = 'sugainet'
@@ -341,7 +341,7 @@ class MedianFilling(FillingBase):
         return windows
 
     def __str__(self):
-        return 'zero_filling'       # change to median_filling
+        return 'median_filling'       # change to median_filling
 
 
 class InterpoFilling(FillingBase):
@@ -431,8 +431,8 @@ if __name__ == "__main__":
     folder = 'full' if max_trial_num is None else 'fast'
     model, model_key = load_model(model_to_test)
     test_dataset_dict = load_test_dataset_dict()
-    loop_mask_segment_conditions(model, model_key, test_dataset_dict)
-    # loop_drop_temporal_conditions(model, model_key, test_dataset_dict)
+    # loop_mask_segment_conditions(model, model_key, test_dataset_dict)
+    loop_drop_temporal_conditions(model, model_key, test_dataset_dict)
 
 
 
