@@ -8,6 +8,7 @@ from da_grf_test_set_0 import cols_to_unmask, dset_to_skip, drop_frame_num_range
 from data.addb_dataset import MotionDataset
 from matplotlib import rc, lines
 from fig_utils import FONT_DICT_SMALL, FONT_SIZE_SMALL, format_axis, LINE_WIDTH, format_errorbar_cap
+from scipy.stats import friedmanchisquare, wilcoxon
 
 
 def print_table_1(model_key):
@@ -101,7 +102,7 @@ def print_table_2():
                   'Wang2023', 'Fregly2012', 'Falisse2017', 'Han2023', 'Li2021', 'Tiziana2019', 'Uhlrich2023']
     params_of_interest = ['calcn_l_force_vy', 'calcn_l_force_vx', 'calcn_l_force_vz']
 
-    metric_all_dsets = get_all_the_metrics(model_key='full/tf_none_diffusion_filling')
+    metric_all_dsets = get_all_the_metrics(model_key='full_kee/tf_velocity_trunk_pelvis_ankle_noabduction_diffusion_filling')
 
     results_array = [[] for _ in range(len(dset_order))]
     for i_dset, dset_short in enumerate(dset_order):
@@ -174,8 +175,12 @@ def dset_data_profile_to_peak(true_, pred_, columns, dset_short):
     for i_trial in range(len(true_)):
         if len(true_[i_trial]) == 0:
             continue
+        if dset_short == 'Li2021':
+            stance_len_thds, cycle_len_thds = [10, 300], [20, 400]
+        else:
+            stance_len_thds, cycle_len_thds = None, None
         trial_gait_phase_label, stance_start_valid, stance_end_valid = MotionDataset.grf_to_trial_gait_phase_label(
-            true_[i_trial][:, columns.index('calcn_l_force_vy')], opt.window_len, opt.target_sampling_rate)
+            true_[i_trial][:, columns.index('calcn_l_force_vy')], opt.window_len, opt.target_sampling_rate, stance_len_thds, cycle_len_thds)
 
         if len(stance_start_valid) == 0:        # for one gait cycle trials, use the whole trial
             gait_phase_label.append(np.linspace(0, 1000, true_[i_trial].shape[0]))
@@ -205,11 +210,12 @@ def dset_data_profile_to_peak(true_, pred_, columns, dset_short):
             #     plt.plot(pred_[i_trial][:, columns.index('calcn_l_force_vy')])
             #     plt.title(dset_short)
             #     plt.show()
-
-        # plt.figure()
-        # plt.plot(true_[i_trial][:, columns.index('calcn_l_force_normed_cop_x')])
-        # plt.plot(pred_[i_trial][:, columns.index('calcn_l_force_normed_cop_x')])
-        # plt.show()
+    #     if 'vanderZee2022' in dset_short:
+    #         plt.figure()
+    #         plt.plot(true_[i_trial][:, columns.index('calcn_l_force_vy')])
+    #         plt.plot(pred_[i_trial][:, columns.index('calcn_l_force_vy')])
+    #         plt.title(i_trial)
+    # plt.show()
     return param_true_dict, param_pred_dict, gait_phase_label
 
 
@@ -270,14 +276,15 @@ def get_all_the_metrics(model_key):
             else:
                 metric_all_dsets[param_col].append(metric_mean)
 
-    #     plt.figure()
-    #     param = 'calcn_l_force_vz'
-    #     param_col_loc = columns.index(param)
-    #     within_gait_cycle = (gait_phase_label_concat != NOT_IN_GAIT_PHASE)
-    #     plt.plot(true_concat[within_gait_cycle, param_col_loc])
-    #     plt.plot(pred_concat[within_gait_cycle, param_col_loc])
-    #     plt.title(dset_short + ' ' + str(metric_dset[param]))
-    # plt.show()
+        # if 'Li' in dset_short:
+        #     plt.figure()
+        #     param = 'calcn_l_force_vy'
+        #     param_col_loc = columns.index(param)
+        #     within_gait_cycle = (gait_phase_label_concat != NOT_IN_GAIT_PHASE)
+        #     plt.plot(true_concat[within_gait_cycle, param_col_loc])
+        #     plt.plot(pred_concat[within_gait_cycle, param_col_loc])
+        #     plt.title(dset_short + ' ' + str(metric_dset[param]))
+        #     plt.show()
 
     # for param_col, metric_list in metric_all_dsets.items():
     #     if param_col == 'dset_short':
@@ -307,6 +314,7 @@ def draw_fig_2(fast_run=False):
 
     rc('font', family='Arial')
     fig = plt.figure(figsize=(5, 3.5))
+    print('Parameter\t\tAll\t\t1-2\t\t1-3\t\t2-3')
     for i_axis, param in enumerate(params_of_interest):
         bar_locs = [i_axis, i_axis + 0.25, i_axis + 0.5]
         mean_ = [np.mean(ele) for ele in [metric_tf[param], metric_groundlink[param], metric_sugainet[param]]]
@@ -315,18 +323,28 @@ def draw_fig_2(fast_run=False):
         ebar, caplines, barlinecols = plt.errorbar(bar_locs, mean_, std_, capsize=0, ecolor='black', fmt='none', lolims=True, elinewidth=LINE_WIDTH)
         format_errorbar_cap(caplines, 8)
 
+        p_friedmanchisquare = friedmanchisquare(metric_tf[param], metric_groundlink[param], metric_sugainet[param]).pvalue
+        print('{0: <15}'.format(param[8:]), end='\t')
+        print(round(p_friedmanchisquare, 3), end='\t')
+        p_wilcoxon_tf_groundlink = wilcoxon(metric_tf[param], metric_groundlink[param]).pvalue
+        p_wilcoxon_tf_sugainet = wilcoxon(metric_tf[param], metric_sugainet[param]).pvalue
+        p_wilcoxon_groundlink_sugainet = wilcoxon(metric_groundlink[param], metric_sugainet[param]).pvalue
+        [print(round(p_val, 3), end='\t') for p_val in [p_wilcoxon_tf_groundlink, p_wilcoxon_tf_sugainet, p_wilcoxon_groundlink_sugainet]]
+        print()
+
     # From "Comparison of different machine learning models to enhance sacral acceleration-based estimations of running stride temporal variables and peak vertical ground reaction force"
-    area0 = plt.fill_between([-0.2, 0.8], [12.8, 12.8], [13.2, 13.2], linewidth=0, color=[0.3, 0.3, 0.], alpha=0.4)
-    # From "Intra-rater repeatability of gait parameters in healthy adults during self-paced treadmill-based virtual reality walking"
+    line0, = plt.plot([-0.2, 0.7], [13, 13], linewidth=3, color=[0.4, 0.4, 0.], alpha=0.4)
     # and "Minimal detectable change for gait variables collected during treadmill walking in individuals post-stroke"
-    area1 = plt.fill_between([-0.2, 0.8], [10.18, 10.18], [4.65, 4.65], linewidth=0, color=[00., 0., 0.1], alpha=0.2)
+    line1, = plt.plot([-0.2, 0.7], [4.65, 4.65], linewidth=3, color=[0., 0., 0.2], alpha=0.3)
+    # From "Intra-rater repeatability of gait parameters in healthy adults during self-paced treadmill-based virtual reality walking"
+    line2, = plt.plot([-0.2, 0.7], [10.18, 10.18], linewidth=3, color=[0., 0., 0.2], alpha=0.3)
 
     format_axis(plt.gca())
     format_ticks(plt.gca())
     plt.tight_layout(rect=[0., -0.01, 1, 1.01])
-    plt.legend(list(bars) + [area0, area1], [
-        'GeneralForce', 'GroundLink [33]', 'SugaiNet [34]', 'MDC - Running [36]', 'MDC - Walking [37, 38]'],
-               frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0.52, 1.))       # fontsize=font_size,
+    plt.legend(list(bars) + [line0, line1], [
+        'GaitForce', 'GroundLink [33]', 'SugaiNet [34]', 'MDC - Running [36]', 'MDCs - Walking [37, 38]'],
+               frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0.48, 1.))       # fontsize=font_size,
     plt.savefig(f'exports/da_grf.png', dpi=300, bbox_inches='tight')
     plt.show()
 
@@ -334,9 +352,9 @@ def draw_fig_2(fast_run=False):
 def draw_fig_3(fast_run=False):
     def format_ticks(ax_plt):
         ax_plt.set_ylabel('MAE of Peak vGRF (% Body Weight)', fontdict=FONT_DICT_SMALL)
-        ax_plt.set_yticks([0, 20, 40, 60, 80, 100])
-        ax_plt.set_yticklabels([0, 20, 40, 60, 80, 100], fontdict=FONT_DICT_SMALL)
-        ax_plt.set_ylim([0, 100])
+        ax_plt.set_yticks([0, 20, 40, 60, 80])
+        ax_plt.set_yticklabels([0, 20, 40, 60, 80], fontdict=FONT_DICT_SMALL)
+        ax_plt.set_ylim([0, 80])
         ax_plt.set_xlim([-0.5, 7.8])
         ax_plt.set_xticks([])
 
@@ -365,10 +383,10 @@ def draw_fig_3(fast_run=False):
 
     for i_test, test_name in enumerate(list(cols_to_unmask.keys())[1:]):
         metric_tf_inpainting = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')[param_of_interest]
-        metric_tf_zerofilling = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_zero_filling')[param_of_interest]
+        metric_tf_medianfilling = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_median_filling')[param_of_interest]
         bar_locs = [i_test, i_test + 0.3]
-        mean_ = [np.mean(ele) for ele in [metric_tf_inpainting, metric_tf_zerofilling]]
-        std_ = [np.std(ele) for ele in [metric_tf_inpainting, metric_tf_zerofilling]]
+        mean_ = [np.mean(ele) for ele in [metric_tf_inpainting, metric_tf_medianfilling]]
+        std_ = [np.std(ele) for ele in [metric_tf_inpainting, metric_tf_medianfilling]]
         bars = plt.bar(bar_locs, mean_, color=colors[:2], width=0.3)
         ebar, caplines, barlinecols = plt.errorbar(bar_locs, mean_, std_, capsize=0, ecolor='black', fmt='none', lolims=True, elinewidth=LINE_WIDTH)
         format_errorbar_cap(caplines, 8)
@@ -378,8 +396,8 @@ def draw_fig_3(fast_run=False):
     format_axis(plt.gca())
     format_ticks(ax_plt)
     ax_plt.legend(list(bars) + [line_1], [
-        'GeneralForce', 'End2End GRF Model with Median Filling', 'Full-Body Kinematics as Input'],
-                  frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0.9, 1.05))
+        'GaitForce', 'End2End GRF Model with Median Filling', 'Full-Body Kinematics as Input'],
+                  frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0.77, 1.))
     plt.savefig(f'exports/da_segment_filling.png', dpi=300, bbox_inches='tight')
     plt.show()
 
@@ -393,12 +411,13 @@ def draw_fig_4(fast_run=False):
         ax_plt.set_xlim([0, 550])
         ax_plt.set_xlabel('Duration of Package Drop (ms)', fontdict=FONT_DICT_SMALL)
 
+    colors = [np.array(x) / 255 for x in [[20, 145, 145], [191, 166, 203], [174, 118, 173]]]        #  [207, 154, 130], [100, 155, 227]
     folder = 'fast' if fast_run else 'full'
     param_of_interest = 'calcn_l_force_vy_max'
     fig = plt.figure(figsize=(5, 4))
     ax_plt = fig.add_axes([0.13, 0.15, 0.82, 0.6])
     lines = []
-    for i_method, filling_method in enumerate(['diffusion', 'interpo', 'zero']):       # 'diffusion', 'interpo', 'zero'
+    for i_method, filling_method in enumerate(['diffusion', 'interpo', 'median']):       # 'diffusion', 'interpo', 'median'
         results_mean = []
         for drop_frame_num in drop_frame_num_range:
             results_current_drop_num = get_all_the_metrics(model_key=f'/{folder}/tf_{drop_frame_num}_{filling_method}_filling')[param_of_interest]
@@ -412,7 +431,7 @@ def draw_fig_4(fast_run=False):
     format_axis(plt.gca())
     format_ticks(ax_plt)
     ax_plt.legend(lines + [line_1], [
-        'GeneralForce - Diffusion Filling', 'GeneralForce - Interpolation', 'GeneralForce - Median Filling', 'GeneralForce - No Package Drop'],
+        'GaitForce - Diffusion Filling', 'GaitForce - Interpolation', 'GaitForce - Median Filling', 'GaitForce - No Package Drop'],
                   frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(1, 1.4))
     plt.savefig(f'exports/da_temporal_filling.png', dpi=300, bbox_inches='tight')
     plt.show()

@@ -196,7 +196,6 @@ class MotionModel:
                         "model_state_dict": self.accelerator.unwrap_model(
                             self.model
                         ).state_dict(),
-                        "optimizer_state_dict": self.optim.state_dict(),
                         "normalizer": self.normalizer,
                     }
                     if opt.log_with_wandb:
@@ -221,6 +220,7 @@ class MotionModel:
                         wandb.log(log_dict)
 
             if (epoch % 768) == 0 or epoch == opt.epochs:
+                ckpt.pop("model_state_dict")
                 torch.save(ckpt, os.path.join(wdir, f"train-{epoch}_{self.model}.pt"))
                 print(f"[MODEL SAVED at Epoch {epoch}]")
         if self.accelerator.is_main_process and opt.log_with_wandb:
@@ -1195,7 +1195,6 @@ class PositionWiseFeedForward(nn.Module):
 class EncoderLayer(nn.Module):
     def __init__(self, d_model, num_heads=8, d_ff=512, dropout=0.1):
         super(EncoderLayer, self).__init__()
-        self.rotary = None
         self.rotary = RotaryEmbedding(dim=d_model)
         self.use_rotary = self.rotary is not None
 

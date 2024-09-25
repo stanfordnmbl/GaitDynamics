@@ -77,8 +77,8 @@ def loop_all(opt):
             value_diff_thd = torch.zeros([len(opt.model_states_column_names)])
 
             for i_dof in range(state_manipulated.shape[2]):
-                # thd = (state_manipulated[:, :, i_dof].max() - state_manipulated[:, :, i_dof].min()) * 0.02
-                thd = state_manipulated[:, :, i_dof].std() * 0.1
+                thd = (state_manipulated[:, :, i_dof].max() - state_manipulated[:, :, i_dof].min()) * 0.02
+                # thd = state_manipulated[:, :, i_dof].std() * 0.1
                 value_diff_thd[i_dof] = thd
 
             # value_diff_thd[:] = 3         # large value for no constraint

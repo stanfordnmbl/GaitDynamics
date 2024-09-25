@@ -332,10 +332,12 @@ class MotionDataset(Dataset):
         return cycles_
 
     @staticmethod
-    def grf_to_trial_gait_phase_label(v_grf, window_len, target_sampling_rate):
+    def grf_to_trial_gait_phase_label(v_grf, window_len, target_sampling_rate, stance_len_thds=None, cycle_len_thds=None):
         stance_vgrf_thd = 1    # 100% of body mass. Needs to be large because some datasets are noisy.
-        stance_len_thds = [int(target_sampling_rate * 0.1), int(target_sampling_rate * 1.5)]      # 0.1 s to 1.5 s
-        cycle_len_thds = [int(target_sampling_rate * 0.2), int(target_sampling_rate * 2)]      # 0.2 s to 2 s
+        if stance_len_thds is None:
+            stance_len_thds = [int(target_sampling_rate * 0.1), int(target_sampling_rate * 1.5)]      # 0.1 s to 1.5 s
+        if cycle_len_thds is None:
+            cycle_len_thds = [int(target_sampling_rate * 0.2), int(target_sampling_rate * 2)]      # 0.2 s to 2 s
 
         trial_gait_phase_label = np.full([v_grf.shape[0]], NOT_IN_GAIT_PHASE)       # shape x
         stance_start_valid, stance_end_valid = [], []

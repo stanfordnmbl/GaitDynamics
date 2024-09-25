@@ -42,7 +42,7 @@ def load_diffusion_model(opt):
     if opt.use_server:
         opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'replace_vel_by_angular_v_diffusion'}/weights/{'train-7680_diffusion.pt'}"
     else:
-        opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'train-7680_diffusion.pt'}"
+        opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/{'train-7680_diffusion.pt'}"
     set_with_arm_opt(opt, False)
     model = MotionModel(opt)
     model_key = 'diffusion'
@@ -55,19 +55,19 @@ def load_baseline_model(opt, model_to_test):
         if opt.use_server:
             opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'replace_vel_by_angular_v_tf'}/weights/{'train-7680_tf.pt'}"
         else:
-            opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'train-7680_tf.pt'}"
+            opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/{'train-7680_tf.pt'}"
         model_key = 'tf'
     elif model_to_test == 2:
         model_architecture_class = GroundLinkArchitecture
         if opt.use_server:
-            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'GroundLinkArchitecture2'}/weights/train-{'7680'}.pt"
+            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'GroundLinkArchitecture2'}/weights/train-{'7680_groundlink'}.pt"
         else:
             opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'7680_groundlink'}.pt"
         model_key = 'groundlink'
     elif model_to_test == 3:
         model_architecture_class = SugaiNetArchitecture
         if opt.use_server:
-            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'SugaiNetArchitecture2'}/weights/train-{'999'}.pt"
+            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'SugaiNetArchitecture2'}/weights/train-{'1998_sugainet'}.pt"
         else:
             opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'1998_sugainet'}.pt"
         model_key = 'sugainet'
@@ -397,18 +397,9 @@ cols_to_unmask = {
     'knee': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('force' not in col and 'knee' not in col)],
     'ankle': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('force' not in col and 'ankle' not in col and 'subtalar' not in col)],
 }
-# cols_to_unmask.update({
-#     'trunk_pelvis': list(set(cols_to_unmask['trunk']).intersection(cols_to_unmask['pelvis'])),
-#     'trunk_hip': list(set(cols_to_unmask['trunk']).intersection(cols_to_unmask['hip'])),
-#     'pelvis_hip': list(set(cols_to_unmask['pelvis']).intersection(cols_to_unmask['hip'])),
-# })
-# cols_to_unmask.update({
-#     'trunk_pelvis_knee_ankle': list(list(set(cols_to_unmask['trunk_pelvis']).intersection(cols_to_unmask['knee']).intersection(cols_to_unmask['ankle']))),
-#     'trunk_pelvis_hip_knee_ankle': list(list(set(cols_to_unmask['trunk_pelvis']).intersection(cols_to_unmask['knee']).intersection(cols_to_unmask['ankle']))),
-# })
 cols_to_unmask.update({
-    'velocity_hip': list(set(cols_to_unmask['velocity']).intersection(cols_to_unmask['hip'])),
-    'trunk_pelvis_knee_ankle': list(list(set(cols_to_unmask['trunk']).intersection(cols_to_unmask['pelvis']).intersection(cols_to_unmask['knee']).intersection(cols_to_unmask['ankle']))),
+    'velocity_trunk_pelvis_knee_ankle': [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'hip' in col],
+    'velocity_trunk_pelvis_ankle': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('hip' in col or 'knee' in col)],
 })
 # cols_to_unmask = {key: cols_to_unmask[key] for key in ['none']}  # !!!
 
