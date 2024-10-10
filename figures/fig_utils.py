@@ -185,8 +185,8 @@ def hide_axis_add_grid():
     ax.spines['right'].set_visible(False)
     ax.spines['left'].set_visible(False)
     ax.spines['bottom'].set_visible(False)
-    ax.grid(color='lightgray', linewidth=1.5)
-    ax.tick_params(color='lightgray', width=1.5)
+    ax.grid(color=[0.9, 0.9, 0.9], linewidth=1)
+    ax.tick_params(color=[0.9, 0.9, 0.9], width=1)
 
 
 

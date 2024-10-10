@@ -128,7 +128,7 @@ Gradient-based, which computes gradient of vel w.r.t. angles.
 if __name__ == "__main__":
     skel_num = 2
     opt = parse_opt()
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'6993'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'7680_diffusion'}.pt"
     loop_all(opt)
 
 

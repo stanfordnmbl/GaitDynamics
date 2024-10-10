@@ -11,9 +11,8 @@ from fig_utils import FONT_DICT_SMALL, FONT_SIZE_SMALL, format_axis, LINE_WIDTH,
 from scipy.stats import friedmanchisquare, wilcoxon
 
 
-def print_table_1(model_key):
+def print_table_1(fast_run=False):
     """ Iterate through mask conditions """
-    # print(model_key)
     segment_to_param = {
         'velocity': ['pelvis_tx', 'pelvis_ty', 'pelvis_tz'],
         'trunk': ['lumbar_extension', 'lumbar_bending', 'lumbar_rotation'],
@@ -23,44 +22,14 @@ def print_table_1(model_key):
         'ankle': ['ankle_angle_r', 'subtalar_angle_r', 'ankle_angle_l', 'subtalar_angle_l'],
     }
     params_of_interest = ['calcn_l_force_vy', 'calcn_l_force_vx', 'calcn_l_force_vz']
-    segment_list = ['velocity', 'trunk', 'pelvis', 'hip', 'knee', 'ankle']
     metric_dict, masked_segment_col_loc = {}, {}
-    # f_name = f'addb_marker_based_{model_key}'
-    # results_dict = pickle.load(open(f"results/{f_name}.pkl", "rb"))
-    # results_dict = combine_splits(results_dict)
 
-    for test_name in results_dict.keys():
-        true_, pred_, _, columns = results_dict[test_name]
-        true_ = {k: np.concatenate(v, axis=0) for k, v in true_.items()}
-        pred_ = {k: np.concatenate(v, axis=0) for k, v in pred_.items()}
-        masked_segment_col_loc[test_name] = [segment_list.index(segment) for segment in test_name.split('_')] if test_name != 'none' else []
+    folder = 'fast' if fast_run else 'full'
+    for i_test, test_name in enumerate(list(cols_to_unmask.keys())):
+        metric_tf_inpainting = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')
+        metric_dict[test_name] = metric_tf_inpainting
 
-        metric_dict[test_name] = {param: [] for param in columns}
-        for i_dset, dset in enumerate(true_.keys()):
-            for i_param, param in enumerate(columns):
-                param_col_loc = columns.index(param)
-                # metric_dict[test_name][columns[i_param]].append(np.sqrt(np.mean((true_[dset][:, param_col_loc] - pred_[dset][:, param_col_loc])**2)))
-                metric_dict[test_name][columns[i_param]].append(np.mean(np.abs(true_[dset][:, param_col_loc] - pred_[dset][:, param_col_loc])))
-                if 'force_v' in param:
-                    metric_dict[test_name][columns[i_param]][-1] = metric_dict[test_name][columns[i_param]][-1] * 100 / 9.81
-
-            print('{}, {:.1f}'.format(dset, metric_dict[test_name]['calcn_l_force_vy'][i_dset]))
-
-        #     plt.figure()
-        #     plt.plot(true_[dset][:, columns.index('calcn_l_force_vy')], label='True')
-        #     plt.plot(pred_[dset][:, columns.index('calcn_l_force_vy')], label='Pred')
-        #     plt.title('{}, {:.2f}'.format(dset, metric_dict[test_name]['calcn_l_force_vy'][i_dset]))
-        # plt.show()
-
-        #     dof = 'knee_angle_l'
-        #     if dof in columns:
-        #         plt.figure()
-        #         plt.plot(true_all[dset][:, columns.index(dof)], label='True')
-        #         plt.plot(pred_all[dset][:, columns.index(dof)], label='Pred')
-        #         plt.title('{}, {}, {:.1f}'.format(test_name, dset, metric_dict[test_name][dof][i_dset]))
-        # plt.show()
-
-    for test_name in results_dict.keys():
+    for test_name in list(cols_to_unmask.keys()):
         string_ = ''
         for i_segment, (segment, params) in enumerate(segment_to_param.items()):
             if segment not in test_name:
@@ -79,7 +48,7 @@ def print_table_1(model_key):
         for i_param, param in enumerate(params_of_interest):
             print(f'& {np.mean(metric_dict[test_name][param]):.1f} $\pm$ {np.std(metric_dict[test_name][param]):.1f}', end='\t')
         print('\\\\')
-    return results_dict
+    return metric_dict
 
 
 def combine_splits(results_):
@@ -102,7 +71,7 @@ def print_table_2():
                   'Wang2023', 'Fregly2012', 'Falisse2017', 'Han2023', 'Li2021', 'Tiziana2019', 'Uhlrich2023']
     params_of_interest = ['calcn_l_force_vy', 'calcn_l_force_vx', 'calcn_l_force_vz']
 
-    metric_all_dsets = get_all_the_metrics(model_key='full_kee/tf_velocity_trunk_pelvis_ankle_noabduction_diffusion_filling')
+    metric_all_dsets = get_all_the_metrics(model_key='full/tf_none_diffusion_filling')
 
     results_array = [[] for _ in range(len(dset_order))]
     for i_dset, dset_short in enumerate(dset_order):
@@ -225,12 +194,6 @@ def get_all_the_metrics(model_key):
     true_, pred_, _, columns = results_
     dset_list = list(true_.keys())
     param_pattern_and_ratio = {'calcn_l_force_v': 100 / 9.81, 'calcn_l_force_normed_cop': 100, 'moment': 1}
-    params_of_interest_profile = [
-        'calcn_l_force_vx', 'calcn_l_force_vy', 'calcn_l_force_vz',
-    ]
-    [params_of_interest_profile.extend([param]) for param in
-     ['calcn_l_force_normed_cop_x', 'calcn_l_force_normed_cop_z', 'knee_moment_l_x', 'knee_moment_l_z'] if
-     param in columns]
 
     metric_all_dsets = {'dset_short': []}
     for i_dset, dset_short in enumerate(dset_list):
@@ -253,10 +216,13 @@ def get_all_the_metrics(model_key):
         true_concat = np.concatenate(true_[dset_short], axis=0)
         pred_concat = np.concatenate(pred_[dset_short], axis=0)
         gait_phase_label_concat = np.concatenate(gait_phase_label, axis=0)
-        for i_param, param_col in enumerate(params_of_interest_profile):
-            param_col_loc = columns.index(param_col)
+        for i_param, param_col in enumerate(columns):
+            param_col_loc = i_param
             ratio = [v for k, v in param_pattern_and_ratio.items() if k in param_col]
-            assert len(ratio) == 1
+            if len(ratio) == 0:
+                ratio = [1]
+            elif len(ratio) > 1:
+                raise ValueError('2 matching ratios')
             within_gait_cycle = (gait_phase_label_concat != NOT_IN_GAIT_PHASE)
             # metric_mean = np.sqrt(np.mean((true_concat[within_gait_cycle, param_col_loc] - pred_concat[within_gait_cycle, param_col_loc])**2)) * ratio[0]
             metric_mean = np.mean(np.abs(true_concat[within_gait_cycle, param_col_loc] - pred_concat[within_gait_cycle, param_col_loc])) * ratio[0]
@@ -343,7 +309,7 @@ def draw_fig_2(fast_run=False):
     format_ticks(plt.gca())
     plt.tight_layout(rect=[0., -0.01, 1, 1.01])
     plt.legend(list(bars) + [line0, line1], [
-        'GaitForce', 'GroundLink [33]', 'SugaiNet [34]', 'MDC - Running [36]', 'MDCs - Walking [37, 38]'],
+        'GaitDynamics', 'GroundLink [33]', 'SugaiNet [34]', 'MDC - Running [36]', 'MDCs - Walking [37, 38]'],
                frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0.48, 1.))       # fontsize=font_size,
     plt.savefig(f'exports/da_grf.png', dpi=300, bbox_inches='tight')
     plt.show()
@@ -396,7 +362,7 @@ def draw_fig_3(fast_run=False):
     format_axis(plt.gca())
     format_ticks(ax_plt)
     ax_plt.legend(list(bars) + [line_1], [
-        'GaitForce', 'End2End GRF Model with Median Filling', 'Full-Body Kinematics as Input'],
+        'GaitDynamics', 'End2End GRF Model with Median Filling', 'Full-Body Kinematics as Input'],
                   frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0.77, 1.))
     plt.savefig(f'exports/da_segment_filling.png', dpi=300, bbox_inches='tight')
     plt.show()
@@ -431,7 +397,7 @@ def draw_fig_4(fast_run=False):
     format_axis(plt.gca())
     format_ticks(ax_plt)
     ax_plt.legend(lines + [line_1], [
-        'GaitForce - Diffusion Filling', 'GaitForce - Interpolation', 'GaitForce - Median Filling', 'GaitForce - No Package Drop'],
+        'GaitDynamics - Diffusion Filling', 'GaitForce - Interpolation', 'GaitForce - Median Filling', 'GaitForce - No Package Drop'],
                   frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(1, 1.4))
     plt.savefig(f'exports/da_temporal_filling.png', dpi=300, bbox_inches='tight')
     plt.show()
@@ -440,11 +406,11 @@ def draw_fig_4(fast_run=False):
 opt = parse_opt()
 if __name__ == "__main__":
     # get_all_the_metrics(model_key=f'/full/tf_none_diffusion_filling')
-    # print_table_1(model_key='tf')        # 'diffusion', 'tf', 'groundlink', 'sugainet'
+    print_table_1()
     # print_table_2()
     # print_table_3()
     # draw_fig_2()
-    draw_fig_3()
+    # draw_fig_3()
     # draw_fig_4()
 
 

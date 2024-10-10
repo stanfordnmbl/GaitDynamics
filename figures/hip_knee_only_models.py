@@ -405,7 +405,7 @@ class DatasetOnlyKnee(MotionDataset):
                     #       f' flipped {len(grf_flag_counts)} times, thus setting all to True.', end='')
                     probably_missing = [False] * len(probably_missing)
 
-                states = norm_cops(skel, states, opt, weight_kg, height_m, sampling_rate)
+                states = norm_cops(skel, states, opt, weight_kg, height_m)
                 if states is False:
                     print(f'{sub_and_trial_name} has CoP far away from foot, skipping')
                     continue

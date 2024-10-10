@@ -100,7 +100,7 @@ if __name__ == "__main__":
     opt.n_guided_steps = 0
     opt.guidance_lr = 0
     gui = set_up_gui()
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'6993'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'7680_diffusion'}.pt"
     loop_all(opt)
 
 
