@@ -40,6 +40,7 @@ class MotionDataset(Dataset):
             include_trials_shorter_than_window_len=False,
             restrict_contact_bodies=True,
             use_camargo_lumbar_reconstructed=False,
+            check_cop_to_calcn_distance=True,
     ):
         self.data_path = data_path
         self.trial_start_num = trial_start_num
@@ -53,6 +54,7 @@ class MotionDataset(Dataset):
         self.dset_keyworks_to_exclude = dset_keyworks_to_exclude
         self.restrict_contact_bodies = restrict_contact_bodies
         self.use_camargo_lumbar_reconstructed = use_camargo_lumbar_reconstructed
+        self.check_cop_to_calcn_distance = check_cop_to_calcn_distance
         self.skels = {}
 
         self.train = train
@@ -356,8 +358,6 @@ class MotionDataset(Dataset):
                 continue
             if not cycle_len_thds[0] < (stance_start[i_start + 1] - stance_start[i_start]) < cycle_len_thds[1]:
                 continue
-            if stance_start[i_start+1] - window_len < 0:
-                continue
             trial_gait_phase_label[stance_start[i_start]:stance_start[i_start+1]] = np.linspace(0, 1000, stance_start[i_start+1]-stance_start[i_start])
             stance_start_valid.append(stance_start[i_start])
             stance_end_valid.append(end_[0])
@@ -485,7 +485,7 @@ class MotionDataset(Dataset):
                     #       f' flipped {len(grf_flag_counts)} times, thus setting all to True.', end='')
                     probably_missing = [False] * len(probably_missing)
 
-                states = norm_cops(skel, states, opt, weight_kg, height_m, sampling_rate)
+                states = norm_cops(skel, states, opt, weight_kg, height_m, self.check_cop_to_calcn_distance)
                 if states is False:
                     print(f'{sub_and_trial_name} has CoP far away from foot, skipping')
                     continue

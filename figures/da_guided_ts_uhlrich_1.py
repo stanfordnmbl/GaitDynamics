@@ -26,9 +26,9 @@ def format_ticks(ax_kam, ax_angles):
         ax.set_xlim(0, 100)
         ax.set_xticks(range(0, 101, 20))
         ax.set_xticklabels(range(0, 101, 20), fontdict=FONT_DICT_SMALL)
-    ax_kam.set_ylim(-1, 3.5)
-    ax_kam.set_yticks(range(-1, 4))
-    ax_kam.set_yticklabels(range(-1, 4), fontdict=FONT_DICT_SMALL)
+    ax_kam.set_ylim(-1, 4)
+    ax_kam.set_yticks(range(-1, 5))
+    ax_kam.set_yticklabels(range(-1, 5), fontdict=FONT_DICT_SMALL)
     ax_angles.set_ylim(-23, 35)
     ax_angles.set_yticks(range(-20, 41, 10))
     ax_angles.set_yticklabels(range(-20, 41, 10), fontdict=FONT_DICT_SMALL)
@@ -58,12 +58,12 @@ def draw_fig():
             true_averaged, pred_averaged, ts_averaged, true_std, pred_std, ts_std = [scale * ele for ele in get_average_and_std(
                 bl_true, bl_pred, ts_true, condition, params_of_interest_col_loc)]
 
-            ax.plot(pred_averaged[:, i], color=colors[i_condition], linewidth=LINE_WIDTH_THICK, label=f'{condition_val} x Normal Trunk Sway - Synthetic         ')
+            ax.plot(pred_averaged[:, i], '--', color=colors[i_condition], linewidth=LINE_WIDTH_THICK, label=f'{condition_val} x Normal Trunk Sway - Synthetic         ')
             ax.grid(True, linewidth=1, alpha=0.5)
             if i_condition == len(condition_list) - 1:
-                ax.plot(true_averaged[:, i], '--', color=[0.4, 0.4, 0.4], label='Normal Walking - Experimental')
+                ax.plot(true_averaged[:, i], '-', color=[0.4, 0.4, 0.4], label='Normal Walking - Experimental')
                 ax.fill_between(range(len(true_averaged)), true_averaged[:, i] - true_std[:, i], true_averaged[:, i] + true_std[:, i], color='gray', alpha=0.3)
-                ax.plot(ts_averaged[:, i], '--', color='C3', label='Large Trunk Sway - Experimental')
+                ax.plot(ts_averaged[:, i], '-', color='C3', label='Large Trunk Sway - Experimental')
                 ax.fill_between(range(len(ts_averaged)), ts_averaged[:, i] - ts_std[:, i], ts_averaged[:, i] + ts_std[:, i], color='C3', alpha=0.3)
             format_axis(ax)
     plt.legend(frameon=False, bbox_to_anchor=(0.4, 1.4), ncol=2)       # fontsize=font_size,

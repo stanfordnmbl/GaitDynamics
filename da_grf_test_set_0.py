@@ -398,8 +398,10 @@ cols_to_unmask = {
     'ankle': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('force' not in col and 'ankle' not in col and 'subtalar' not in col)],
 }
 cols_to_unmask.update({
-    'velocity_trunk_pelvis_knee_ankle': [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'hip' in col],
-    'velocity_trunk_pelvis_ankle': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('hip' in col or 'knee' in col)],
+    'velocity_hip': list(set(cols_to_unmask['velocity']).intersection(cols_to_unmask['hip'])),
+    'trunk_pelvis_knee_ankle': list(list(set(cols_to_unmask['trunk']).intersection(cols_to_unmask['pelvis']).intersection(cols_to_unmask['knee']).intersection(cols_to_unmask['ankle']))),
+    # 'velocity_trunk_pelvis_knee_ankle': [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'hip' in col],
+    # 'velocity_trunk_pelvis_ankle': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('hip' in col or 'knee' in col)],
 })
 # cols_to_unmask = {key: cols_to_unmask[key] for key in ['none']}  # !!!
 

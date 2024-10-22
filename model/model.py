@@ -219,7 +219,7 @@ class MotionModel:
 
                         wandb.log(log_dict)
 
-            if (epoch % 768) == 0 or epoch == opt.epochs:
+            if (epoch % 7) == 0 or epoch == opt.epochs:
                 ckpt.pop("model_state_dict")
                 torch.save(ckpt, os.path.join(wdir, f"train-{epoch}_{self.model}.pt"))
                 print(f"[MODEL SAVED at Epoch {epoch}]")
@@ -559,12 +559,8 @@ class GaussianDiffusion(nn.Module):
     #     return x
 
     @torch.no_grad()
-    def inpaint_ddim_loop_guide_xmean_uhlrich_ts(self, shape, noise=None, constraint=None, return_diffusion=False, start_point=None):
+    def inpaint_ddim_guided(self, shape, noise=None, constraint=None, return_diffusion=False, start_point=None):
         batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
-
-        guide_x_start_the_beginning_step = 1000
-        n_guided_steps = 10
-        guidance_lr = 0.02
 
         times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
         times = list(reversed(times.int().tolist()))
@@ -581,15 +577,15 @@ class GaussianDiffusion(nn.Module):
         for time, time_next in tqdm(time_pairs, desc='sampling loop time step'):
             time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
 
-            if time <= guide_x_start_the_beginning_step:
+            if time <= self.opt.guide_x_start_the_beginning_step:
                 x.requires_grad_()
                 with torch.enable_grad():
-                    for step_ in range(n_guided_steps):
+                    for step_ in range(self.opt.n_guided_steps):
                         pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
                         value_diff = torch.subtract(x_start, value)
                         loss = torch.relu(value_diff.abs() - value_diff_thd) * value_diff_weight
                         grad = torch.autograd.grad([loss.sum()], [x])[0]
-                        x = x - guidance_lr * grad
+                        x = x - self.opt.guidance_lr * grad
 
             pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
             if time_next < 0:
@@ -1124,8 +1120,8 @@ class GaussianDiffusion(nn.Module):
         if isinstance(shape, tuple):
             if mode == "inpaint":
                 func_class = self.inpaint_ddim_loop
-            elif mode == "guided_uhlrich_ts":
-                func_class = self.inpaint_ddim_loop_guide_xmean_uhlrich_ts
+            elif mode == "inpaint_ddim_guided":
+                func_class = self.inpaint_ddim_guided
             elif mode == "guided_run_faster":
                 func_class = self.inpaint_ddim_loop_guided_run_faster
             elif mode == "run_faster":

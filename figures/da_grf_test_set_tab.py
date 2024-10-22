@@ -267,7 +267,7 @@ def draw_fig_2(fast_run=False):
         ax.set_xticks([0.3, 1.3, 2.3, 3.3])
         ax.set_xticklabels(list(params_name_formal_name_pairs.values()), fontdict=FONT_DICT_SMALL)
 
-    colors = [np.array(x) / 255 for x in [[20, 145, 145], [191, 166, 203], [174, 118, 173]]]        #  [207, 154, 130], [100, 155, 227]
+    colors = [np.array(x) / 255 for x in [[20, 145, 145], [221, 132, 82], [76, 114, 176]]]        #  [207, 154, 130], [100, 155, 227]
     folder = 'fast' if fast_run else 'full'
     metric_tf = get_all_the_metrics(model_key=f'/{folder}/tf_none_diffusion_filling')
     metric_groundlink = get_all_the_metrics(model_key=f'/{folder}/groundlink_none_diffusion_filling')
@@ -285,7 +285,7 @@ def draw_fig_2(fast_run=False):
         bar_locs = [i_axis, i_axis + 0.25, i_axis + 0.5]
         mean_ = [np.mean(ele) for ele in [metric_tf[param], metric_groundlink[param], metric_sugainet[param]]]
         std_ = [np.std(ele) for ele in [metric_tf[param], metric_groundlink[param], metric_sugainet[param]]]
-        bars = plt.bar(bar_locs, mean_, color=colors, width=0.25)
+        bars = plt.bar(bar_locs, mean_, color=colors, width=0.23)
         ebar, caplines, barlinecols = plt.errorbar(bar_locs, mean_, std_, capsize=0, ecolor='black', fmt='none', lolims=True, elinewidth=LINE_WIDTH)
         format_errorbar_cap(caplines, 8)
 
@@ -299,18 +299,18 @@ def draw_fig_2(fast_run=False):
         print()
 
     # From "Comparison of different machine learning models to enhance sacral acceleration-based estimations of running stride temporal variables and peak vertical ground reaction force"
-    line0, = plt.plot([-0.2, 0.7], [13, 13], linewidth=3, color=[0.4, 0.4, 0.], alpha=0.4)
-    # and "Minimal detectable change for gait variables collected during treadmill walking in individuals post-stroke"
-    line1, = plt.plot([-0.2, 0.7], [4.65, 4.65], linewidth=3, color=[0., 0., 0.2], alpha=0.3)
+    line0, = plt.plot([-0.2, 0.7], [13, 13], ':', linewidth=2, color=[0.0, 0.0, 0.0], alpha=0.5)
     # From "Intra-rater repeatability of gait parameters in healthy adults during self-paced treadmill-based virtual reality walking"
-    line2, = plt.plot([-0.2, 0.7], [10.18, 10.18], linewidth=3, color=[0., 0., 0.2], alpha=0.3)
+    line1, = plt.plot([-0.2, 0.7], [10.18, 10.18], '--', linewidth=2, color=[0.0, 0.0, 0.0], alpha=0.5)
+    # and "Minimal detectable change for gait variables collected during treadmill walking in individuals post-stroke"
+    line2, = plt.plot([-0.2, 0.7], [4.65, 4.65], '-', linewidth=2, color=[0.0, 0.0, 0.0], alpha=0.5)
 
     format_axis(plt.gca())
     format_ticks(plt.gca())
     plt.tight_layout(rect=[0., -0.01, 1, 1.01])
-    plt.legend(list(bars) + [line0, line1], [
-        'GaitDynamics', 'GroundLink [33]', 'SugaiNet [34]', 'MDC - Running [36]', 'MDCs - Walking [37, 38]'],
-               frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0.48, 1.))       # fontsize=font_size,
+    plt.legend(list(bars) + [line0, line1, line2], [
+        'GaitDynamics', 'GroundLink [XX]', 'SugaiNet [XX]', 'Running MDC - Healthy [XX]', 'Walking MDC - Healthy [XX]', 'Walking MDC - Stroke [XX]'],
+               frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0.4, 1.05))       # fontsize=font_size,
     plt.savefig(f'exports/da_grf.png', dpi=300, bbox_inches='tight')
     plt.show()
 
@@ -318,52 +318,52 @@ def draw_fig_2(fast_run=False):
 def draw_fig_3(fast_run=False):
     def format_ticks(ax_plt):
         ax_plt.set_ylabel('MAE of Peak vGRF (% Body Weight)', fontdict=FONT_DICT_SMALL)
-        ax_plt.set_yticks([0, 20, 40, 60, 80])
-        ax_plt.set_yticklabels([0, 20, 40, 60, 80], fontdict=FONT_DICT_SMALL)
-        ax_plt.set_ylim([0, 80])
-        ax_plt.set_xlim([-0.5, 7.8])
+        ax_plt.set_yticks([0, 10, 20, 30, 40])
+        ax_plt.set_yticklabels([0, 10, 20, 30, 40], fontdict=FONT_DICT_SMALL)
+        ax_plt.set_ylim([0, 40])
+        ax_plt.set_xlim([-0.3, 4.6])
         ax_plt.set_xticks([])
 
-        ax_text = fig.add_axes([0.1, 0., 0.85, 0.3])
+        ax_text = fig.add_axes([0.1, 0., 0.87, 0.3])
         plt.axis('off')
         ax_text.set_xlim(ax_plt.get_xlim())
         ax_text.set_ylim([3, 10])
-        segment_list = ['velocity', 'trunk', 'pelvis', 'hips', 'knees', 'ankles']
-        for i_test, test_name in enumerate(list(cols_to_unmask.keys())[1:]):
+        segment_list = ['lumbar', 'pelvis', 'hips', 'knees', 'ankles']
+        for i_test, test_name in enumerate(list(cols_to_unmask.keys())[2:-2]):
+            test_name = test_name.replace('trunk', 'lumbar')
             masked_segments = test_name.split('_')
             for i_segment, segment in enumerate(segment_list):
                 if segment in masked_segments or segment[:-1] in masked_segments:
-                    ax_text.text(i_test+0.14, 9 - i_segment, segment, fontdict=FONT_DICT_SMALL, color=[0.8, 0.8, 0.8], ha='center')
-                    # ax_text.plot([i_test-0.3, i_test + 0.5], [9.25 - i_segment, 9.25 - i_segment], color='black', linewidth=LINE_WIDTH)
+                    ax_text.text(i_test+0.14, 8.3 - i_segment*1.2, segment, fontdict=FONT_DICT_SMALL, color=[0.8, 0.8, 0.8], ha='center')
                 else:
-                    ax_text.text(i_test+0.14, 9 - i_segment, segment, fontdict=FONT_DICT_SMALL, ha='center')
+                    ax_text.text(i_test+0.14, 8.3 - i_segment*1.2, segment, fontdict=FONT_DICT_SMALL, ha='center')
 
     colors = [np.array(x) / 255 for x in [[20, 145, 145], [207, 154, 130]]]        #  [207, 154, 130], [100, 155, 227]
     folder = 'fast' if fast_run else 'full'
     param_of_interest = 'calcn_l_force_vy_max'
-    fig = plt.figure(figsize=(7, 5.5))
-    ax_plt = fig.add_axes([0.1, 0.3, 0.85, 0.65])
+    fig = plt.figure(figsize=(5.5, 4.5))
+    ax_plt = fig.add_axes([0.1, 0.28, 0.87, 0.62])
 
     full_input = get_all_the_metrics(model_key=f'/{folder}/tf_none_diffusion_filling')[param_of_interest]
-    line_1, = plt.plot([-0.3, 7.6], [np.mean(full_input), np.mean(full_input)], color=[0., 0., 0.1], alpha=0.3, linewidth=LINE_WIDTH, linestyle='--')
+    line_1, = plt.plot([-0.3, 7.6], [np.mean(full_input), np.mean(full_input)], color=[0., 0., 0.1], alpha=0.5, linewidth=LINE_WIDTH, linestyle='--')
 
-    for i_test, test_name in enumerate(list(cols_to_unmask.keys())[1:]):
+    for i_test, test_name in enumerate(list(cols_to_unmask.keys())[2:-2]):
         metric_tf_inpainting = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')[param_of_interest]
         metric_tf_medianfilling = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_median_filling')[param_of_interest]
         bar_locs = [i_test, i_test + 0.3]
         mean_ = [np.mean(ele) for ele in [metric_tf_inpainting, metric_tf_medianfilling]]
         std_ = [np.std(ele) for ele in [metric_tf_inpainting, metric_tf_medianfilling]]
-        bars = plt.bar(bar_locs, mean_, color=colors[:2], width=0.3)
+        bars = plt.bar(bar_locs, mean_, color=colors[:2], width=0.27)
         ebar, caplines, barlinecols = plt.errorbar(bar_locs, mean_, std_, capsize=0, ecolor='black', fmt='none', lolims=True, elinewidth=LINE_WIDTH)
         format_errorbar_cap(caplines, 8)
 
-        print(test_name, mean_[0] - np.mean(full_input))
+        print(test_name, mean_ - np.mean(full_input))
 
     format_axis(plt.gca())
     format_ticks(ax_plt)
     ax_plt.legend(list(bars) + [line_1], [
-        'GaitDynamics', 'End2End GRF Model with Median Filling', 'Full-Body Kinematics as Input'],
-                  frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0.77, 1.))
+        'Incomplete Kinematics with Inpainting Filling', 'Incomplete Kinematics with Median Filling', 'Full-Body Kinematics'],
+                  frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0.05, 0.88), loc='lower left')
     plt.savefig(f'exports/da_segment_filling.png', dpi=300, bbox_inches='tight')
     plt.show()
 

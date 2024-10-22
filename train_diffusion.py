@@ -7,10 +7,10 @@ import wandb
 
 
 def train(opt):
-    # model = MotionModel(opt)
-    # model = BaselineModel(opt, TransformerEncoderArchitecture)
+    model = MotionModel(opt)
+    model = BaselineModel(opt, TransformerEncoderArchitecture)
     # model = BaselineModel(opt, GroundLinkArchitecture)
-    model = BaselineModel(opt, SugaiNetArchitecture)
+    # model = BaselineModel(opt, SugaiNetArchitecture)
 
     if opt.log_with_wandb:
         wandb.init(project=opt.wandb_pj_name, name=opt.exp_name, dir="wandb_logs")
@@ -20,7 +20,7 @@ def train(opt):
         train=True,
         # trial_start_num=-1,
         # max_trial_num=1,            # !!!
-        dset_keyworks_to_exclude=['Fregly2012', 'Uhlrich2023', 'Han2023'],
+        dset_keyworks_to_exclude=['Fregly2012', 'Uhlrich2023', 'Hamner2013', 'Han2023'],
         # dset_keyworks_to_exclude=['Carter2023', 'Fregly2012', 'Falisse2017', 'Hamner2013', 'Han2023', 'Li2021', 'Santos2017', 'Tan2021', 'Uhlrich2023', 'Wang2023'],
         opt=opt,
     )
