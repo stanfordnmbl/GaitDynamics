@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from model.utils import inverse_convert_addb_state_to_model_input, fix_seed
 from model.utils import inverse_norm_cops
 from fig_utils import show_skeletons, set_up_gui
+import time
 
 
 class MotionDatasetManipulated(MotionDataset):
@@ -24,7 +25,7 @@ def profile_to_peak(states, columns, model_offsets):
     param_dict = {
         'hip_flexion_l_max': [], 'knee_angle_l_max': [], 'ankle_angle_l_max': [],
         'hip_flexion_l_min': [], 'knee_angle_l_min': [], 'ankle_angle_l_min': [],
-        'peak_vgrf': [], 'strike_index': [], 'vilr': [], 'stride_length': []
+        'peak_apgrf': [], 'peak_vgrf': [], 'strike_index': [], 'vilr': [], 'stride_length': []
     }
     gait_phase_label = []
 
@@ -44,7 +45,8 @@ def profile_to_peak(states, columns, model_offsets):
         end_ = stance_starts_conservative[i_start + 1]
 
         vilr = np.diff(states[start_:end_, columns.index('calcn_l_force_vy')]).max() * 9.81 / 100
-        peak_grf = states[start_:end_, columns.index('calcn_l_force_vy')].max() * 9.81 / 100
+        peak_apgrf = states[start_:end_, columns.index('calcn_l_force_vx')].max() * 9.81 / 100
+        peak_vgrf = states[start_:end_, columns.index('calcn_l_force_vy')].max() * 9.81 / 100
 
         foot_locations, joint_locations, joint_names, _ = forward_kinematics(states[start_:end_, :23], model_offsets)
 
@@ -62,7 +64,8 @@ def profile_to_peak(states, columns, model_offsets):
         param_dict['hip_flexion_l_min'].append(np.rad2deg(np.min(states[start_:end_, columns.index('hip_flexion_l')])))
         param_dict['knee_angle_l_min'].append(np.rad2deg(np.min(states[start_:end_, columns.index('knee_angle_l')])))
         param_dict['ankle_angle_l_min'].append(np.rad2deg(np.min(states[start_:end_, columns.index('ankle_angle_l')])))
-        param_dict['peak_vgrf'].append(peak_grf)
+        param_dict['peak_apgrf'].append(peak_apgrf)
+        param_dict['peak_vgrf'].append(peak_vgrf)
         param_dict['vilr'].append(vilr)
         param_dict['strike_index'].append(strike_index_pseudo)
         param_dict['stride_length'].append(stride_length)
@@ -81,7 +84,7 @@ def loop_one_sub(opt):
         opt=opt,
         divide_jittery=False,
         check_cop_to_calcn_distance=False,
-        align_moving_direction_flag=False,
+        # align_moving_direction_flag=False,
         specific_trial='300'
     )
     skel = list(test_dataset_30.skels.values())[0]
@@ -95,7 +98,7 @@ def loop_one_sub(opt):
         opt=opt,
         divide_jittery=False,
         check_cop_to_calcn_distance=False,
-        align_moving_direction_flag=False,
+        # align_moving_direction_flag=False,
         specific_trial='400'
     )
     windows_exp_40 = test_dataset_40.get_all_wins([0], False)
@@ -118,13 +121,14 @@ def loop_one_sub(opt):
         opt=opt,
         divide_jittery=False,
         check_cop_to_calcn_distance=False,
-        align_moving_direction_flag=False,
+        # align_moving_direction_flag=False,
         specific_trial='500'
     )
     windows_exp_50 = test_dataset_50.get_all_wins([0], False)
 
     state_pred_dict = {}
     for syn_speed, windows_ in windows_syn_dict.items():
+        print(f'Speed: {syn_speed}')
         state_syn = torch.stack([win.pose for win in windows_])
         masks = torch.stack([win.mask for win in windows_])
         cond = torch.stack([win.cond for win in windows_])
@@ -135,14 +139,17 @@ def loop_one_sub(opt):
 
         value_diff_thd = torch.zeros([len(opt.model_states_column_names)])
         for i_dof in range(state_syn.shape[2]):
-            thd = (state_syn[:, :, i_dof].max() - state_syn[:, :, i_dof].min()) * 0.3
+            thd = (state_syn[:, :, i_dof].max() - state_syn[:, :, i_dof].min()) * 0.2
             value_diff_thd[i_dof] = thd
-        value_diff_thd[test_dataset_40.manipulated_col_loc] = 999
+        value_diff_thd[test_dataset_40.manipulated_col_loc] = thd
         value_diff_thd[test_dataset_40.do_not_follow_col_loc] = 999
 
         fix_seed()
+        start_time = time.time()
         state_pred = model.eval_loop(opt, state_syn, masks, value_diff_thd, value_diff_weight, cond=cond,
                                      num_of_generation_per_window=num_of_generation_per_window, mode='inpaint_ddim_guided')
+        end_time = time.time()
+        print('Took {:.2f} seconds'.format(end_time - start_time))
         state_pred = inverse_convert_addb_state_to_model_input(
             state_pred, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], height_m_tensor)
         state_pred_dict[syn_speed] = state_pred
@@ -245,7 +252,7 @@ opt = parse_opt()
 opt.n_guided_steps = 5
 opt.guidance_lr = 0.02
 opt.guide_x_start_the_beginning_step = 1000
-opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/{'train-7680_diffusion_no_hamner.pt'}"
+opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/{'train-7680_diffusion.pt'}"
 num_of_generation_per_window = 1
 """
 This one is similar to da_run_faster.py, but calibrated by a same-speed-simulation.

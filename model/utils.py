@@ -64,28 +64,6 @@ def get_multi_body_loc_using_nimble_by_body_nodes(body_nodes, skel, poses):
     return body_loc
 
 
-def body_loc_to_cond(body_loc):
-    femur_r = body_loc[:, 3:6] - body_loc[:, 0:3]
-    tibia_r = body_loc[:, 6:9] - body_loc[:, 3:6]
-    talus_r = body_loc[:, 9:12] - body_loc[:, 6:9]
-    calcn_r = body_loc[:, 12:15] - body_loc[:, 9:12]
-    toes_r = body_loc[:, 15:18] - body_loc[:, 12:15]
-    femur_l = body_loc[:, 18:21] - body_loc[:, 0:3]
-    tibia_l = body_loc[:, 21:24] - body_loc[:, 18:21]
-    talus_l = body_loc[:, 24:27] - body_loc[:, 21:24]
-    calcn_l = body_loc[:, 27:30] - body_loc[:, 24:27]
-    toes_l = body_loc[:, 30:33] - body_loc[:, 27:30]
-    torso = body_loc[:, 33:36] - body_loc[:, 0:3]
-    femur_average = (femur_r + femur_l) / 2
-    tibia_average = (tibia_r + tibia_l) / 2
-    talus_average = (talus_r + talus_l) / 2
-    calcn_average = (calcn_r + calcn_l) / 2
-    toes_average = (toes_r + toes_l) / 2
-    cond = np.concatenate([femur_average, tibia_average, talus_average, torso], axis=-1)[:, 1::3]
-    cond = cond * 10
-    return cond
-
-
 def get_multi_joint_loc_using_tom_fk(joint_names, skel, poses):
     model_offsets = get_model_offsets(skel)
     _, joint_locations_pred, joint_names_full, _ = forward_kinematics(poses, model_offsets)
@@ -339,7 +317,10 @@ def align_moving_direction(poses, column_names):
     r_cop = pose_clone[:, r_cop_col_loc]
     l_cop = pose_clone[:, l_cop_col_loc]
 
-    angle = math.atan2(- pelvis_orientation[0][0, 2], pelvis_orientation[0][2, 2])
+    angles = np.arctan2(- pelvis_orientation[:, 0, 2], pelvis_orientation[:, 2, 2])
+    if np.rad2deg(angles.max() - angles.min()) > 45:
+        return False, None
+    angle = angles.median()
     rot_mat = torch.tensor([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]]).float()
 
     pelvis_orientation_rotated = torch.matmul(rot_mat, pelvis_orientation)

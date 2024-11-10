@@ -45,11 +45,11 @@ def draw_fig():
     params_of_interest = ['knee_moment_l_x', 'lumbar_bending']
     params_of_interest_col_loc = [columns.index(col) for col in params_of_interest]
 
-    colors = [np.array(x) / 255 for x in [[123, 204, 196], [67, 162, 202], [8, 104, 172]]]
+    colors = [np.array(x) / 255 for x in [[110, 170, 220], [70, 130, 180], [30, 90, 140], [177, 124, 90]]]
 
     rc('font', family='Arial')
     fig = plt.figure(figsize=(9, 3))
-    gs = gridspec.GridSpec(nrows=1, ncols=2, wspace=0.2, width_ratios=[4, 4])        # , width_ratios=[8, 1, 8]
+    gs = gridspec.GridSpec(nrows=1, ncols=2, wspace=0.3, width_ratios=[4, 4])        # , width_ratios=[8, 1, 8]
     ax_kam = fig.add_subplot(gs[0])
     ax_angles = fig.add_subplot(gs[1])
     for i, (ax, scale) in enumerate(zip([ax_kam, ax_angles], [1, - 180/np.pi])):
@@ -63,8 +63,8 @@ def draw_fig():
             if i_condition == len(condition_list) - 1:
                 ax.plot(true_averaged[:, i], '-', color=[0.4, 0.4, 0.4], label='Normal Walking - Experimental')
                 ax.fill_between(range(len(true_averaged)), true_averaged[:, i] - true_std[:, i], true_averaged[:, i] + true_std[:, i], color='gray', alpha=0.3)
-                ax.plot(ts_averaged[:, i], '-', color='C3', label='Large Trunk Sway - Experimental')
-                ax.fill_between(range(len(ts_averaged)), ts_averaged[:, i] - ts_std[:, i], ts_averaged[:, i] + ts_std[:, i], color='C3', alpha=0.3)
+                ax.plot(ts_averaged[:, i], '-', color=colors[3], label='Large Trunk Sway - Experimental')
+                ax.fill_between(range(len(ts_averaged)), ts_averaged[:, i] - ts_std[:, i], ts_averaged[:, i] + ts_std[:, i], color=colors[3], alpha=0.3)
             format_axis(ax)
     plt.legend(frameon=False, bbox_to_anchor=(0.4, 1.4), ncol=2)       # fontsize=font_size,
     format_ticks(ax_kam, ax_angles)

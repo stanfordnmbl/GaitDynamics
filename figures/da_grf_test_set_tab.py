@@ -67,8 +67,8 @@ def combine_splits(results_):
 
 def print_table_2():
     """ Accuracies of each dataset """
-    dset_order = ['Camargo2021', 'Carter2023', 'Hamner2013', 'Tan2021', 'Moore2015', 'Tan2022', 'vanderZee2022',
-                  'Wang2023', 'Fregly2012', 'Falisse2017', 'Han2023', 'Li2021', 'Tiziana2019', 'Uhlrich2023']
+    dset_order = ['Camargo2021', 'Moore2015', 'Tan2022', 'vanderZee2022', 'Wang2023', 'Carter2023', 'Tan2021',
+                  'Falisse2017', 'Han2023', 'Tiziana2019', 'Uhlrich2023', 'Hamner2013', 'Fregly2012', 'Li2021']
     params_of_interest = ['calcn_l_force_vy', 'calcn_l_force_vx', 'calcn_l_force_vz']
 
     metric_all_dsets = get_all_the_metrics(model_key='full/tf_none_diffusion_filling')
@@ -261,24 +261,28 @@ def get_all_the_metrics(model_key):
 
 def draw_fig_2(fast_run=False):
     def format_ticks(ax):
-        ax.set_ylabel('MAE (% Body Weight)', fontdict=FONT_DICT_SMALL)
+        ax.set_ylabel('Mean Absolute Error (\% Body Weight)', fontdict=FONT_DICT_SMALL)
         ax.set_yticks(range(0, 15, 2))
         ax.set_yticklabels(range(0, 15, 2), fontdict=FONT_DICT_SMALL)
-        ax.set_xticks([0.3, 1.3, 2.3, 3.3])
-        ax.set_xticklabels(list(params_name_formal_name_pairs.values()), fontdict=FONT_DICT_SMALL)
+        # ax.set_xticks([0.25, 1.25, 2.25, 3.25])
+        ax.set_xticks([])
+        for i in range(4):
+            ax.text(i+0.25, -1.1, list(params_name_formal_name_pairs.values())[i], fontdict=FONT_DICT_SMALL, ha='center')
 
-    colors = [np.array(x) / 255 for x in [[20, 145, 145], [221, 132, 82], [76, 114, 176]]]        #  [207, 154, 130], [100, 155, 227]
+    colors = [np.array(x) / 255 for x in [[70, 130, 180], [207, 154, 130], [177, 124, 90]]]        #  [207, 154, 130], [100, 155, 227]
     folder = 'fast' if fast_run else 'full'
     metric_tf = get_all_the_metrics(model_key=f'/{folder}/tf_none_diffusion_filling')
     metric_groundlink = get_all_the_metrics(model_key=f'/{folder}/groundlink_none_diffusion_filling')
     metric_sugainet = get_all_the_metrics(model_key=f'/{folder}/sugainet_none_diffusion_filling')
 
     params_name_formal_name_pairs = {
-        'calcn_l_force_vy_max': 'vGRF\nPeak', 'calcn_l_force_vy': 'vGRF\nProfile',
-        'calcn_l_force_vx': 'apGRF\nProfile', 'calcn_l_force_vz': 'mlGRF\nProfile'}
+        'calcn_l_force_vy_max': r'$f_v$ - Peak', 'calcn_l_force_vy': r'$f_v$ - Profile',
+        'calcn_l_force_vx': r'$f_{ap}$ - Profile', 'calcn_l_force_vz': r'$f_{ml}$ - Profile'}
     params_of_interest = list(params_name_formal_name_pairs.keys())
 
-    rc('font', family='Arial')
+    rc('text', usetex=True)
+    plt.rc('font', family='Helvetica')
+
     fig = plt.figure(figsize=(5, 3.5))
     print('Parameter\t\tAll\t\t1-2\t\t1-3\t\t2-3')
     for i_axis, param in enumerate(params_of_interest):
@@ -317,10 +321,10 @@ def draw_fig_2(fast_run=False):
 
 def draw_fig_3(fast_run=False):
     def format_ticks(ax_plt):
-        ax_plt.set_ylabel('MAE of Peak vGRF (% Body Weight)', fontdict=FONT_DICT_SMALL)
-        ax_plt.set_yticks([0, 10, 20, 30, 40])
-        ax_plt.set_yticklabels([0, 10, 20, 30, 40], fontdict=FONT_DICT_SMALL)
-        ax_plt.set_ylim([0, 40])
+        ax_plt.set_ylabel('Mean Absolute Error of Peak $f_v$ (\% Body Weight)', fontdict=FONT_DICT_SMALL)
+        ax_plt.set_yticks([0, 10, 20, 30, 40, 50, 60])
+        ax_plt.set_yticklabels([0, 10, 20, 30, 40, 50, 60], fontdict=FONT_DICT_SMALL)
+        ax_plt.set_ylim([0, 60])
         ax_plt.set_xlim([-0.3, 4.6])
         ax_plt.set_xticks([])
 
@@ -328,24 +332,26 @@ def draw_fig_3(fast_run=False):
         plt.axis('off')
         ax_text.set_xlim(ax_plt.get_xlim())
         ax_text.set_ylim([3, 10])
-        segment_list = ['lumbar', 'pelvis', 'hips', 'knees', 'ankles']
+        segment_list = ['trunk', 'pelvis', 'hips', 'knees', 'ankles']
         for i_test, test_name in enumerate(list(cols_to_unmask.keys())[2:-2]):
-            test_name = test_name.replace('trunk', 'lumbar')
+            # test_name = test_name.replace('trunk', 'lumbar')
             masked_segments = test_name.split('_')
             for i_segment, segment in enumerate(segment_list):
                 if segment in masked_segments or segment[:-1] in masked_segments:
-                    ax_text.text(i_test+0.14, 8.3 - i_segment*1.2, segment, fontdict=FONT_DICT_SMALL, color=[0.8, 0.8, 0.8], ha='center')
+                    ax_text.text(i_test+0.14, 7.9 - i_segment*1.1, segment, fontdict=FONT_DICT_SMALL, color=[0.8, 0.8, 0.8], ha='center')
                 else:
-                    ax_text.text(i_test+0.14, 8.3 - i_segment*1.2, segment, fontdict=FONT_DICT_SMALL, ha='center')
+                    ax_text.text(i_test+0.14, 7.9 - i_segment*1.1, segment, fontdict=FONT_DICT_SMALL, ha='center')
 
-    colors = [np.array(x) / 255 for x in [[20, 145, 145], [207, 154, 130]]]        #  [207, 154, 130], [100, 155, 227]
+    colors = [np.array(x) / 255 for x in [[70, 130, 180], [207, 154, 130]]]        #  [207, 154, 130], [100, 155, 227]
     folder = 'fast' if fast_run else 'full'
     param_of_interest = 'calcn_l_force_vy_max'
-    fig = plt.figure(figsize=(5.5, 4.5))
-    ax_plt = fig.add_axes([0.1, 0.28, 0.87, 0.62])
+    fig = plt.figure(figsize=(5.5, 4.2))
+    rc('text', usetex=True)
+    plt.rc('font', family='Helvetica')
+    ax_plt = fig.add_axes([0.1, 0.25, 0.87, 0.62])
 
     full_input = get_all_the_metrics(model_key=f'/{folder}/tf_none_diffusion_filling')[param_of_interest]
-    line_1, = plt.plot([-0.3, 7.6], [np.mean(full_input), np.mean(full_input)], color=[0., 0., 0.1], alpha=0.5, linewidth=LINE_WIDTH, linestyle='--')
+    line_1, = plt.plot([-0.3, 7.6], [np.mean(full_input), np.mean(full_input)], color=np.array([70, 130, 180])/255, linewidth=LINE_WIDTH, linestyle='--')
 
     for i_test, test_name in enumerate(list(cols_to_unmask.keys())[2:-2]):
         metric_tf_inpainting = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')[param_of_interest]
@@ -362,7 +368,7 @@ def draw_fig_3(fast_run=False):
     format_axis(plt.gca())
     format_ticks(ax_plt)
     ax_plt.legend(list(bars) + [line_1], [
-        'Incomplete Kinematics with Inpainting Filling', 'Incomplete Kinematics with Median Filling', 'Full-Body Kinematics'],
+        'Partial-Body Kinematics with Inpainting Filling', 'Partial-Body Kinematics with Median Filling', 'Full-Body Kinematics'],
                   frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0.05, 0.88), loc='lower left')
     plt.savefig(f'exports/da_segment_filling.png', dpi=300, bbox_inches='tight')
     plt.show()
@@ -370,7 +376,7 @@ def draw_fig_3(fast_run=False):
 
 def draw_fig_4(fast_run=False):
     def format_ticks(ax_plt):
-        ax_plt.set_ylabel('MAE of Peak vGRF (% Body Weight)', fontdict=FONT_DICT_SMALL)
+        ax_plt.set_ylabel(r'MAE of $f_v$ Peak (% Body Weight)', fontdict=FONT_DICT_SMALL)
         ax_plt.set_yticks([0, 2, 4, 6, 8, 10])
         ax_plt.set_yticklabels([0, 2, 4, 6, 8, 10], fontdict=FONT_DICT_SMALL)
         ax_plt.set_ylim([0, 10])

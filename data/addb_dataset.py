@@ -9,8 +9,7 @@ import os
 import torch
 import random
 from model.utils import linear_resample_data, update_d_dd, fix_seed, nan_helper, from_foot_loc_to_foot_vel, \
-    convert_addb_state_to_model_input, align_moving_direction, data_filter, norm_cops, \
-    get_multi_body_loc_using_nimble_by_body_nodes, body_loc_to_cond, inverse_norm_cops
+    convert_addb_state_to_model_input, align_moving_direction, data_filter, norm_cops
 from typing import Any, List
 import nimblephysics as nimble
 from consts import *
@@ -56,6 +55,8 @@ class MotionDataset(Dataset):
         self.use_camargo_lumbar_reconstructed = use_camargo_lumbar_reconstructed
         self.check_cop_to_calcn_distance = check_cop_to_calcn_distance
         self.skels = {}
+        self.num_of_excluded_trials = {'contact_body_num': 0, 'trial_length': 0, 'lumbar_rotation': 0, 'wrong_cop': 0,
+                                       'large_moving_direction_change': 0, 'jittery_sample': 0}
 
         self.train = train
         self.name = "Train" if self.train else "Test"
@@ -87,6 +88,7 @@ class MotionDataset(Dataset):
         total_hour = sum([trial.length for trial in self.trials]) / self.target_sampling_rate / 60 / 60
         total_clip_num = sum([trial.length for trial in self.trials]) / self.target_sampling_rate / 3
         print(f"In total, {self.trial_num} trials, {total_hour} hours, {total_clip_num} clips not considering overlapping")
+        print(f"Removed trials: {self.num_of_excluded_trials}")
 
         if train:
             data_concat = torch.cat([trial_.converted_pose for trial_ in self.trials], dim=0)
@@ -450,6 +452,7 @@ class MotionDataset(Dataset):
                 forces = np.array([frame.groundContactForce for frame in first_passes])
                 cops = np.array([frame.groundContactCenterOfPressure for frame in first_passes])
                 if self.restrict_contact_bodies and len(forces[0]) != 6:
+                    self.num_of_excluded_trials['contact_body_num'] += 1
                     continue        # only include data with 2 contact bodies.
                 else:
                     r_foot_idx, l_foot_idx = contact_bodies.index('calcn_r'), contact_bodies.index('calcn_l')
@@ -458,9 +461,10 @@ class MotionDataset(Dataset):
                     forces = forces[:, foot_idx]
                     cops = cops[:, foot_idx]
 
-                # This is to compensate an AddBiomechanics bug that first GRF is always 0.
                 if len(poses) < 10:
+                    self.num_of_excluded_trials['trial_length'] += 1
                     continue
+                    # This is to compensate an AddBiomechanics bug that first GRF is always 0.
                 if (forces[0] == 0).all() or (cops[0] == 0).all():
                     poses = poses[1:]
                     forces = forces[1:]
@@ -476,6 +480,7 @@ class MotionDataset(Dataset):
                 force_v0, force_v1 = forces[:, :3] / weight_kg, forces[:, 3:] / weight_kg
                 states = np.concatenate([np.array(poses), force_v0, cops[:, :3], force_v1, cops[:, 3:]], axis=1)
                 if not self.is_lumbar_rotation_reasonable(np.array(states), opt.osim_dof_columns):
+                    self.num_of_excluded_trials['lumbar_rotation'] += 1
                     continue
 
                 grf_flag_counts = list(mit.run_length.encode(probably_missing))
@@ -488,18 +493,26 @@ class MotionDataset(Dataset):
                 states = norm_cops(skel, states, opt, weight_kg, height_m, self.check_cop_to_calcn_distance)
                 if states is False:
                     print(f'{sub_and_trial_name} has CoP far away from foot, skipping')
+                    self.num_of_excluded_trials['wrong_cop'] += 1
                     continue
 
                 if self.align_moving_direction_flag:
                     states, rot_mat = align_moving_direction(states, opt.osim_dof_columns)
                 else:
                     rot_mat = torch.eye(3).float()
+                if states is False:
+                    print(f'{sub_and_trial_name} moving direction changed by more than 45 deg, skipping')
+                    self.num_of_excluded_trials['large_moving_direction_change'] += 1
+                    continue
 
                 if (not self.include_trials_shorter_than_window_len) and (states.shape[0] / sampling_rate * self.target_sampling_rate) < self.window_len + 2:
+                    self.num_of_excluded_trials['trial_length'] += 1
                     continue
                 if states.shape[0] < 20:        # need to be longer than 20 frames for filtering
+                    self.num_of_excluded_trials['trial_length'] += 1
                     continue
                 if sampling_rate != self.target_sampling_rate:
+                    print(f'{dset_name} is collected at {sampling_rate} Hz, resampling to {self.target_sampling_rate} Hz')
                     states = linear_resample_data(states, sampling_rate, self.target_sampling_rate)
                     probably_missing = linear_resample_data(np.array(probably_missing).astype(float), sampling_rate, self.target_sampling_rate).astype(bool)
                 probably_missing = np.array(probably_missing).astype(np.float64)
@@ -579,6 +592,7 @@ class MotionDataset(Dataset):
             break_point_list.sort()
 
             if len(break_point_list) > 0:
+                self.num_of_excluded_trials['jittery_sample'] += len(break_point_list)
                 break_point_list = [0] + break_point_list + [current_trial.length]
                 for i_clip in range(len(break_point_list) - 1):
                     start_, end_ = break_point_list[i_clip] + 2, break_point_list[i_clip+1] - 2

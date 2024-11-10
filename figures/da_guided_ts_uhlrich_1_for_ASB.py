@@ -59,7 +59,7 @@ def draw_fig():
     color_bl = [.4, .4, .4]
     color_exp = [.8, .6, .3]
     color_pred = [.2, .6, .7]
-    rc('font', family='Arial')
+    rc('font', family='Helvetica')
     fig = plt.figure(figsize=(3.5, 2.8))
     ax = fig.gca()
     i_param = 0
@@ -97,7 +97,7 @@ def draw_fig():
     ax.plot(range(s, e), curve_fun(range(s, e), pred_averaged[s, i_param], -0.1), '--', linewidth=LINE_WIDTH, color=color_pred)
     ax.text(e+1, curve_fun(range(s, e), pred_averaged[s, i_param], -0.1)[-1]-0.1, 'Model Prediction', color=color_pred, fontdict=FONT_DICT_SMALL)
 
-    plt.savefig(f'exports/da_guided_ts.png', dpi=300)
+    plt.savefig(f'exports/da_guided_ts.jpg', dpi=3000)
     plt.show()
 
 

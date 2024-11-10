@@ -22,3 +22,5 @@ data/AMASS_agreggated_sliced
 runs/
 *.pt
 .idea/*
+model/hip_knee_only_models.py
+example_usage/*

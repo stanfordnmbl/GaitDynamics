@@ -45,7 +45,7 @@ def draw_fig():
 
     colors = [np.array(x) / 255 for x in [[155, 155, 155], [0, 155, 155], [0, 111, 111]]]
 
-    rc('font', family='Arial')
+    rc('font', family='Helvetica')
     fig = plt.figure(figsize=(5, 3.5))
     for i_axis, axis in enumerate(['Vertical', 'Anterior-Posterior', 'Medial-Lateral']):
         bars = plt.bar([i_axis, i_axis + 0.3, i_axis + 0.6], [ele * 100 / 9.81 for ele in

@@ -10,6 +10,7 @@ from model.utils import inverse_convert_addb_state_to_model_input, linear_resamp
     osim_states_to_moments_in_percent_BW_BH_via_cross_product
 from model.utils import inverse_norm_cops
 import pickle
+import time
 
 
 def get_start_end_of_gait_cycle(grf_v):
@@ -32,8 +33,6 @@ class MotionDatasetManipulated(MotionDataset):
 def loop_all(opt):
     set_with_arm_opt(opt, False)
     model = MotionModel(opt)
-    trial_start_num = 0
-
     test_dataset = MotionDataset(
         data_path=b3d_path,
         train=False,
@@ -41,8 +40,7 @@ def loop_all(opt):
         opt=opt,
         divide_jittery=False,
         include_trials_shorter_than_window_len=True,
-        trial_start_num=trial_start_num,
-        align_moving_direction_flag=False,
+        # align_moving_direction_flag=False,
         specific_trial='walking'
     )
     windows_original = test_dataset.get_one_win_from_the_end_of_each_trial([0])
@@ -62,8 +60,7 @@ def loop_all(opt):
             opt=opt,
             divide_jittery=False,
             include_trials_shorter_than_window_len=True,
-            trial_start_num=trial_start_num,
-            align_moving_direction_flag=False,
+            # align_moving_direction_flag=False,
             specific_trial='walking'
         )
         windows_manipulated = test_dataset_mani.get_one_win_from_the_end_of_each_trial(test_dataset_mani.manipulated_col_loc)
@@ -82,11 +79,14 @@ def loop_all(opt):
                 thd = (state_manipulated[:, :, i_dof].max() - state_manipulated[:, :, i_dof].min()) * 0.02
                 value_diff_thd[i_dof] = thd
 
-            value_diff_thd[test_dataset_mani.manipulated_col_loc] = 999
+            value_diff_thd[test_dataset_mani.manipulated_col_loc] = thd
             value_diff_thd[test_dataset_mani.do_not_follow_col_loc] = 999
 
+            start_time = time.time()
             state_pred_list_batch = model.eval_loop(opt, state_manipulated, masks, value_diff_thd, value_diff_weight, cond=cond,
                                                     num_of_generation_per_window=1, mode='inpaint_ddim_guided')
+            end_time = time.time()
+            print('Took {:.2f} seconds'.format(end_time - start_time))
             state_pred_list_batch = inverse_convert_addb_state_to_model_input(
                 state_pred_list_batch, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], height_m_tensor)
 

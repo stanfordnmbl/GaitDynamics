@@ -7,9 +7,9 @@ import wandb
 
 
 def train(opt):
-    model = MotionModel(opt)
-    model = BaselineModel(opt, TransformerEncoderArchitecture)
-    # model = BaselineModel(opt, GroundLinkArchitecture)
+    # model = MotionModel(opt)
+    # model = BaselineModel(opt, TransformerEncoderArchitecture)
+    model = BaselineModel(opt, GroundLinkArchitecture)
     # model = BaselineModel(opt, SugaiNetArchitecture)
 
     if opt.log_with_wandb:
