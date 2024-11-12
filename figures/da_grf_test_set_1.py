@@ -171,20 +171,6 @@ def dset_data_profile_to_peak(true_, pred_, columns, dset_short):
                 if 'knee_moment_l_x' in columns:
                     param_dict['knee_moment_l_x_max'].append(np.max(data_dict[i_trial][start_:end_, columns.index('knee_moment_l_x')]))
                     param_dict['knee_moment_l_z_max'].append(np.max(data_dict[i_trial][start_:end_, columns.index('knee_moment_l_z')]))
-
-            # if np.max(true_[i_trial][start_:end_, columns.index('calcn_l_force_vy')]) - np.max(pred_[i_trial][start_:end_, columns.index('calcn_l_force_vy')]) > 2:
-            #     plt.plot(true_[i_trial][start_:end_, columns.index('calcn_l_force_vy')])
-            #     plt.plot(pred_[i_trial][start_:end_, columns.index('calcn_l_force_vy')])
-            #     plt.plot(true_[i_trial][:, columns.index('calcn_l_force_vy')])
-            #     plt.plot(pred_[i_trial][:, columns.index('calcn_l_force_vy')])
-            #     plt.title(dset_short)
-            #     plt.show()
-    #     if 'vanderZee2022' in dset_short:
-    #         plt.figure()
-    #         plt.plot(true_[i_trial][:, columns.index('calcn_l_force_vy')])
-    #         plt.plot(pred_[i_trial][:, columns.index('calcn_l_force_vy')])
-    #         plt.title(i_trial)
-    # plt.show()
     return param_true_dict, param_pred_dict, gait_phase_label
 
 
