@@ -252,6 +252,7 @@ opt = parse_opt()
 opt.n_guided_steps = 5
 opt.guidance_lr = 0.02
 opt.guide_x_start_the_beginning_step = 1000
+opt.guide_x_start_the_end_step = 0
 opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/{'train-7680_diffusion.pt'}"
 num_of_generation_per_window = 1
 """

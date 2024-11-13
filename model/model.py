@@ -577,7 +577,7 @@ class GaussianDiffusion(nn.Module):
         for time, time_next in tqdm(time_pairs, desc='sampling loop time step'):
             time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
 
-            if time <= self.opt.guide_x_start_the_beginning_step:
+            if self.opt.guide_x_start_the_end_step <= time <= self.opt.guide_x_start_the_beginning_step:
                 x.requires_grad_()
                 with torch.enable_grad():
                     for step_ in range(self.opt.n_guided_steps):

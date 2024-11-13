@@ -22,33 +22,39 @@ def print_table_1(fast_run=False):
         'ankle': ['ankle_angle_r', 'subtalar_angle_r', 'ankle_angle_l', 'subtalar_angle_l'],
     }
     params_of_interest = ['calcn_l_force_vy', 'calcn_l_force_vx', 'calcn_l_force_vz']
-    metric_dict, masked_segment_col_loc = {}, {}
+    metric_tf_dict, metric_diffusion_dict, masked_segment_col_loc = {}, {}, {}
 
     folder = 'fast' if fast_run else 'full'
-    for i_test, test_name in enumerate(list(cols_to_unmask.keys())):
+    for i_test, test_name in enumerate(list(cols_to_unmask.keys())[2:-2]):
         metric_tf_inpainting = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')
-        metric_dict[test_name] = metric_tf_inpainting
+        metric_diffusion_inpainting = get_all_the_metrics(model_key=f'/{folder}/diffusion_{test_name}_diffusion_filling')
+        metric_tf_dict[test_name] = metric_tf_inpainting
+        metric_diffusion_dict[test_name] = metric_diffusion_inpainting
 
-    for test_name in list(cols_to_unmask.keys()):
+    for test_name in list(cols_to_unmask.keys())[2:-2]:
         string_ = ''
-        for i_segment, (segment, params) in enumerate(segment_to_param.items()):
+        for i_segment, (segment, params) in enumerate(list(segment_to_param.items())[1:]):
             if segment not in test_name:
-                string_ += '\ding{51}\t&'
+                string_ += '✓\t'
             else:
-                if segment == 'velocity':
-                    unit, scale = ' m/s', 1
-                else:
-                    unit, scale = ' deg', 180 / np.pi
-                param_metric = []
-                for param in params:
-                    param_metric.extend(metric_dict[test_name][param])
-                string_ += f'{np.mean(param_metric)*scale:.1f} $\pm$ {np.std(param_metric)*scale:.1f}{unit}\t&'
+                # if segment == 'velocity':
+                #     unit, scale = ' m/s', 1
+                # else:
+                #     unit, scale = ' deg', 180 / np.pi
+                # param_metric = []
+                # for param in params:
+                #     param_metric.extend(metric_tf_dict[test_name][param])
+                # string_ += f'{np.mean(param_metric)*scale:.1f} ± {np.std(param_metric)*scale:.1f}{unit}\t'
+                string_ += '✕\t'
 
-        print(string_, end=' ')
+        print(string_, end='\t')
         for i_param, param in enumerate(params_of_interest):
-            print(f'& {np.mean(metric_dict[test_name][param]):.1f} $\pm$ {np.std(metric_dict[test_name][param]):.1f}', end='\t')
-        print('\\\\')
-    return metric_dict
+            print(f'{np.mean(metric_diffusion_dict[test_name][param]):.1f} ± {np.std(metric_diffusion_dict[test_name][param]):.1f}', end='\t')
+        print('\t', end='')
+        for i_param, param in enumerate(params_of_interest):
+            print(f'{np.mean(metric_tf_dict[test_name][param]):.1f} ± {np.std(metric_tf_dict[test_name][param]):.1f}', end='\t')
+        print('')
+    return metric_tf_dict
 
 
 def combine_splits(results_):
@@ -82,7 +88,8 @@ def print_table_2():
             results_array[i_dset].append(metric_all_dsets[param_col][dset_index])
         print()
     results_average = np.mean(np.array(results_array), axis=0)
-    [print(round(element, 1), end='\t') for element in results_average]
+    results_std = np.std(np.array(results_array), axis=0)
+    [print(f'{mean_:.1f} ± {std_:.1f}', end='\t') for mean_, std_ in zip(results_average, results_std)]
 
 
 def print_table_3():

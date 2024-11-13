@@ -486,13 +486,6 @@ class DatasetOnlyKnee(MotionDataset):
         return windows
 
 
-def inverse_convert_addb_state_to_model_input(model_states, model_states_column_names, joints_3d, osim_dof_columns, pos_vec, height_m, sampling_fre=100):
-    model_states_dict = {col: model_states[..., i] for i, col in enumerate(model_states_column_names) if
-                         col in osim_dof_columns}
-    osim_states = torch.stack([model_states_dict[col] for col in osim_dof_columns], dim=len(model_states.shape)-1).float()
-    return osim_states
-
-
 def train_model(columns_to_keep):
     # for key_, columns_to_keep in columns_to_keep_dict.items():
     model = BaselineModel(opt, TransformerEncoderArchitecture)
@@ -523,14 +516,6 @@ def loop_all(model, opt, skels, trials, windows):
         state_pred_list_batch = model.eval_loop(opt, state_true, masks, cond=cond, num_of_generation_per_window=1)
         state_pred_list += state_pred_list_batch[0]
 
-    # state_pred_list_averaged, state_pred_list_std = [], []
-    # for i_win in range(len(state_pred_list[0])):
-    #     win_skels = [state_pred_list[i_skel][i_win] for i_skel in range(skel_num-1)]
-    #     averaged = torch.mean(torch.stack(win_skels), dim=0)
-    #     std = torch.std(torch.stack(win_skels), dim=0)
-    #     state_pred_list_averaged.append(averaged)
-    #     state_pred_list_std.append(std)
-
     results_true, results_pred, results_pred_std = {}, {}, {}
     heights_weights = {}
     for i_win, (win, state_pred) in enumerate(zip(windows, state_pred_list)):
@@ -543,7 +528,6 @@ def loop_all(model, opt, skels, trials, windows):
         if trial.sub_and_trial_name not in results_true.keys():
             results_true.update({trial.sub_and_trial_name: []})
             results_pred.update({trial.sub_and_trial_name: []})
-            # results_pred_std.update({trial.sub_and_trial_name: []})
             heights_weights[trial.sub_and_trial_name] = win.height_m, win.weight_kg
             results_true[trial.sub_and_trial_name].append(true_val)
             results_pred[trial.sub_and_trial_name].append(state_pred.numpy())
@@ -553,41 +537,25 @@ def loop_all(model, opt, skels, trials, windows):
 
     true_all, pred_all = [], []
     for sub_and_trial in results_true.keys():
-        # trial_len = [trial.converted_pose.shape[0] for trial in trials if trial.sub_and_trial_name == sub_and_trial][0]
-        # results_true[sub_and_trial], _ = convert_overlapped_list_to_array(
-        #     trial_len, results_true[sub_and_trial], results_s[sub_and_trial], results_e[sub_and_trial])
-        # results_pred[sub_and_trial], results_pred_std[sub_and_trial] = convert_overlapped_list_to_array(
-        #     trial_len, results_pred[sub_and_trial], results_s[sub_and_trial], results_e[sub_and_trial])
         results_true[sub_and_trial] = np.concatenate(results_true[sub_and_trial], axis=0)
         results_pred[sub_and_trial] = np.concatenate(results_pred[sub_and_trial], axis=0)
-        # results_pred_std[sub_and_trial] = np.concatenate(results_pred_std[sub_and_trial], axis=0)
 
         sub_name = sub_and_trial.split('__')[0]
         skel_list = [skel for dset_sub_name, skel in skels.items() if sub_name == dset_sub_name[-len(sub_name):]]
         assert len(skel_list) == 1
         skel = skel_list[0]
 
-        # height_m_tensor = torch.tensor([heights_weights[sub_and_trial][0]])
         for results_ in [results_true, results_pred]:
-            # results_[sub_and_trial] = inverse_convert_addb_state_to_model_input(
-            #     torch.from_numpy(results_[sub_and_trial]).unsqueeze(0), opt.model_states_column_names,
-            #     opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], height_m_tensor)[0].numpy()
-            # pelvis_col_loc = [opt.osim_dof_columns.index(col) for col in ['pelvis_tx', 'pelvis_ty', 'pelvis_tz']]
-            # results_[sub_and_trial][:, pelvis_col_loc] = np.diff(results_[sub_and_trial][:, pelvis_col_loc], prepend=0, axis=0) * opt.target_sampling_rate
-
             osim_state_list = []
             for _, dof in enumerate(opt.osim_dof_columns):
                 if dof in opt.model_states_column_names:
                     data_ = results_[sub_and_trial][:, opt.model_states_column_names.index(dof)]
                     osim_state_list.append(data_)
                 else:
-                    # osim_states = np.zeros([results_[sub_and_trial].shape[0], 1])
                     osim_state_list.append(np.zeros([results_[sub_and_trial].shape[0]]))
             results_[sub_and_trial] = np.stack(osim_state_list, axis=-1)
 
             results_[sub_and_trial] = inverse_norm_cops(skel, results_[sub_and_trial], opt, heights_weights[sub_and_trial][1], heights_weights[sub_and_trial][0])
-            # params, param_columns = osim_states_to_moments_in_percent_BW_BH_via_cross_product(results_[sub_and_trial], skel, opt, heights_weights[sub_and_trial][0])
-            # results_[sub_and_trial] = np.concatenate([results_[sub_and_trial], params], axis=-1)
 
         for trial in trials:
             if trial.sub_and_trial_name == sub_and_trial:
@@ -595,7 +563,6 @@ def loop_all(model, opt, skels, trials, windows):
                 break
         true_all.append(results_true[sub_and_trial][np.where(probably_missing==0)[0]])
         pred_all.append(results_pred[sub_and_trial][np.where(probably_missing==0)[0]])
-    # column_names = opt.osim_dof_columns
     return true_all, pred_all, opt.osim_dof_columns
 
 
@@ -752,9 +719,9 @@ if __name__ == '__main__':
 
         # train_model(columns_to_keep)
 
-        # evaluate(key_)
+        evaluate(key_)
 
-        print_table(key_)
+        # print_table(key_)
 
 
 

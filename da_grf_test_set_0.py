@@ -60,14 +60,14 @@ def load_baseline_model(opt, model_to_test):
     elif model_to_test == 2:
         model_architecture_class = GroundLinkArchitecture
         if opt.use_server:
-            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'GroundLinkArchitecture2'}/weights/train-{'7680_groundlink'}.pt"
+            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'GroundLinkArchitecture'}/weights/train-{'7680_groundlink'}.pt"
         else:
             opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'7680_groundlink'}.pt"
         model_key = 'groundlink'
     elif model_to_test == 3:
         model_architecture_class = SugaiNetArchitecture
         if opt.use_server:
-            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'SugaiNetArchitecture2'}/weights/train-{'1998_sugainet'}.pt"
+            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'SugaiNetArchitecture'}/weights/train-{'1400_sugainet'}.pt"
         else:
             opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'1998_sugainet'}.pt"
         model_key = 'sugainet'
@@ -163,7 +163,7 @@ def loop_mask_segment_conditions(model, model_key, test_dataset_dict):
         print(mask_key)
         masked_state_names = [opt.model_states_column_names[i] for i in opt.kinematic_diffusion_col_loc if i not in unmask_col_loc]
         masked_osim_dofs = model_states_osim_dof_conversion(masked_state_names, opt)
-        for filling_method in [MedianFilling(), DiffusionFilling()]:
+        for filling_method in [DiffusionFilling(), MedianFilling()]:
             true_sub_dict, pred_sub_dict, pred_std_sub_dict = {}, {}, {}
             for dset in test_dataset_dict.keys():
                 if dset in dset_to_split:
@@ -193,7 +193,7 @@ def loop_mask_segment_conditions(model, model_key, test_dataset_dict):
                     e_list_splits = [e_list]
 
                 for trials, windows, dset_name, s_list, e_list in zip(trials_splits, windows_splits, dset_names, s_list_splits, e_list_splits):
-                    if mask_key == 'none':
+                    if mask_key == 'none' or model_key == 'diffusion':
                         windows_reconstructed = windows
                     else:
                         windows_reconstructed = filling_method.fill_param(windows, diffusion_model_for_filling)
@@ -418,7 +418,7 @@ skel_num = 2
 
 if __name__ == "__main__":
     # 0: diffusion, 1: tf, 2: groundlink, 3: Sugai LSTM
-    model_to_test = 1
+    model_to_test = 3
     max_trial_num = None     # None for all trials
 
     folder = 'full' if max_trial_num is None else 'fast'

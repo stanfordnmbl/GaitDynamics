@@ -1,5 +1,6 @@
 import torch
 import os
+from example_usage.real_time_model import TransformerHipKnee, update_opt
 from model.model import TransformerEncoderArchitecture
 # from data.preprocess import Normalizer
 # from data.scaler import MinMaxScaler
@@ -105,9 +106,9 @@ class Normalizer:
 
 """ ============================ End scaler.py ============================ """
 
-def compress_model(checkpoint_path):
+def compress_model(checkpoint_path, model_class, new_model_name):
     checkpoint = torch.load(checkpoint_path)
-    new_model_object = TransformerEncoderArchitecture(len(opt.model_states_column_names), opt)
+    new_model_object = model_class(len(opt.model_states_column_names), opt)
     new_model_object.load_state_dict(checkpoint["ema_state_dict"])
 
     normalizer = checkpoint["normalizer"]
@@ -121,11 +122,19 @@ def compress_model(checkpoint_path):
     new_noramlizer = Normalizer(min_max_scaler, normalizer.cols_to_normalize)
 
     new_check_point = {'ema_state_dict': new_model_object.state_dict(), 'normalizer': new_noramlizer}
-    torch.save(new_check_point, 'GaitDynamicsRefinement.pt')
+    torch.save(new_check_point, new_model_name + '.pt')
 
 
 if __name__ == '__main__':
-    checkpoint_path = os.getcwd() + '/../trained_models/train-7680_tf.pt'
     opt = parse_opt()
     set_with_arm_opt(opt, False)
-    compress_model(checkpoint_path)
+
+    # full-body tf
+    checkpoint_path = os.getcwd() + '/../trained_models/train-7680_tf.pt'
+    compress_model(checkpoint_path, TransformerEncoderArchitecture, 'GaitDynamicsRefinement')
+
+    # # hip-knee tf
+    # opt = update_opt(opt, '', osim_model_path='', height_m=0., weight_kg=0.)
+    # checkpoint_path = os.getcwd() + '/../trained_models/GaitDynamicsRefinementHipKnee.pt'
+    # compress_model(checkpoint_path, TransformerHipKnee, 'GaitDynamicsRefinementHipKnee')
+

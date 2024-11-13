@@ -92,15 +92,10 @@ def draw_speed_only_fig():
         # # Mean and std of exp
         # param_exp_mean, param_exp_std = [], []
         # for speed in speed_param_exp.keys():
-        #     param_exp_mean.append(np.mean(speed_param_exp[speed][param_]))
-        #     param_exp_std.append(np.std(speed_param_exp[speed][param_]))
+        #     param_exp_mean.append(np.mean(speed_param_exp[speed][param_]) * ratio)
+        #     param_exp_std.append(np.std(speed_param_exp[speed][param_]) * ratio)
         # ax.errorbar(list(speed_param_exp.keys()), param_exp_mean, param_exp_std, capsize=5, linestyle='--',
         #             fmt='o', color=colors[1], elinewidth=LINE_WIDTH)
-
-        # # lines for each single subject
-        # speeds = list(speed_param_syn.keys())
-        # for i_sub in range(len(speed_param_syn[speeds[0]][param_])):
-        #     ax.plot(speeds, [speed_param_syn[speed][param_][i_sub] for speed in speeds], 'o-', color=colors[0], linewidth=LINE_WIDTH)
 
         format_axis(ax)
         ax.set_xlabel('Synthetic Running Speed (m/s)', fontdict=FONT_DICT_SMALL)
