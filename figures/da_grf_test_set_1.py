@@ -7,8 +7,15 @@ from consts import NOT_IN_GAIT_PHASE, RUNNING_DSET_SHORT_NAMES, OVERGROUND_DSETS
 from da_grf_test_set_0 import cols_to_unmask, dset_to_skip, drop_frame_num_range
 from data.addb_dataset import MotionDataset
 from matplotlib import rc, lines
-from fig_utils import FONT_DICT_SMALL, FONT_SIZE_SMALL, format_axis, LINE_WIDTH, format_errorbar_cap
+from fig_utils import FONT_DICT_SMALL, FONT_SIZE_SMALL, format_axis, LINE_WIDTH
 from scipy.stats import friedmanchisquare, wilcoxon
+
+
+def format_errorbar_cap(caplines, size=15):
+    for i_cap in range(1):
+        caplines[i_cap].set_marker('_')
+        caplines[i_cap].set_markersize(size)
+        caplines[i_cap].set_markeredgewidth(LINE_WIDTH)
 
 
 def print_table_1(fast_run=False):

@@ -145,13 +145,6 @@ vancriek_bad_sub_and_trial_names = ['TVC23__BWA5_segment_0'] + \
                                    []
 
 
-def format_errorbar_cap(caplines, size=15):
-    for i_cap in range(1):
-        caplines[i_cap].set_marker('_')
-        caplines[i_cap].set_markersize(size)
-        caplines[i_cap].set_markeredgewidth(LINE_WIDTH)
-
-
 def find_peak_max(data_clip, height, width=None, prominence=None):
     """
     find the maximum peak

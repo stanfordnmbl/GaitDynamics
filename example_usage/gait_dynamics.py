@@ -20,6 +20,9 @@ from einops import rearrange, repeat
 import math
 import copy
 import matplotlib.pyplot as plt
+from tqdm import tqdm
+from functools import partial
+from accelerate.state import AcceleratorState
 
 
 torch.manual_seed(0)
@@ -167,10 +170,417 @@ for name_ in ['elbow_flex_r', 'pro_sup_r', 'elbow_flex_l', 'pro_sup_l', 'arm_r_0
 FROZEN_DOFS = ['mtp_angle_r', 'mtp_angle_l',
                'wrist_flex_r', 'wrist_dev_r', 'wrist_flex_l', 'wrist_dev_l']
 
+FULL_OSIM_DOF = ['pelvis_tilt', 'pelvis_list', 'pelvis_rotation', 'pelvis_tx', 'pelvis_ty', 'pelvis_tz',
+                 'hip_flexion_r', 'hip_adduction_r', 'hip_rotation_r', 'knee_angle_r', 'ankle_angle_r',
+                 'subtalar_angle_r', 'mtp_angle_r', 'hip_flexion_l', 'hip_adduction_l', 'hip_rotation_l',
+                 'knee_angle_l', 'ankle_angle_l', 'subtalar_angle_l', 'mtp_angle_l', 'lumbar_extension',
+                 'lumbar_bending', 'lumbar_rotation']
+
+
 """ ============================ End consts.py ============================ """
 
 
 """ ============================ Start model.py ============================ """
+
+
+class GaussianDiffusion(nn.Module):
+    def __init__(
+            self,
+            model,
+            horizon,
+            repr_dim,
+            opt,
+            n_timestep=1000,
+            schedule="linear",
+            loss_type="l1",
+            clip_denoised=False,
+            predict_epsilon=True,
+            guidance_weight=1,
+            use_p2=False,
+            cond_drop_prob=0.,
+    ):
+        super().__init__()
+        self.horizon = horizon
+        self.transition_dim = repr_dim
+        self.model = model
+        self.ema = EMA(0.99)
+        self.master_model = copy.deepcopy(self.model)
+        self.opt = opt
+
+        self.cond_drop_prob = cond_drop_prob
+
+        # make a SMPL instance for FK module
+
+        betas = torch.Tensor(
+            make_beta_schedule(schedule=schedule, n_timestep=n_timestep)
+        )
+        alphas = 1.0 - betas
+        alphas_cumprod = torch.cumprod(alphas, axis=0)
+        alphas_cumprod_prev = torch.cat([torch.ones(1), alphas_cumprod[:-1]])
+
+        self.n_timestep = int(n_timestep)
+        self.clip_denoised = clip_denoised
+        self.predict_epsilon = predict_epsilon
+
+        self.register_buffer("betas", betas)
+        self.register_buffer("alphas_cumprod", alphas_cumprod)
+        self.register_buffer("alphas_cumprod_prev", alphas_cumprod_prev)
+
+        self.guidance_weight = guidance_weight
+
+        # calculations for diffusion q(x_t | x_{t-1}) and others
+        self.register_buffer("sqrt_alphas_cumprod", torch.sqrt(alphas_cumprod))
+        self.register_buffer(
+            "sqrt_one_minus_alphas_cumprod", torch.sqrt(1.0 - alphas_cumprod)
+        )
+        self.register_buffer(
+            "log_one_minus_alphas_cumprod", torch.log(1.0 - alphas_cumprod)
+        )
+        self.register_buffer(
+            "sqrt_recip_alphas_cumprod", torch.sqrt(1.0 / alphas_cumprod)
+        )
+        self.register_buffer(
+            "sqrt_recipm1_alphas_cumprod", torch.sqrt(1.0 / alphas_cumprod - 1)
+        )
+
+        # calculations for posterior q(x_{t-1} | x_t, x_0)
+        posterior_variance = (
+                betas * (1.0 - alphas_cumprod_prev) / (1.0 - alphas_cumprod)
+        )
+        self.register_buffer("posterior_variance", posterior_variance)
+
+        ## log calculation clipped because the posterior variance
+        ## is 0 at the beginning of the diffusion chain
+        self.register_buffer(
+            "posterior_log_variance_clipped",
+            torch.log(torch.clamp(posterior_variance, min=1e-20)),
+        )
+        self.register_buffer(
+            "posterior_mean_coef1",
+            betas * np.sqrt(alphas_cumprod_prev) / (1.0 - alphas_cumprod),
+            )
+        self.register_buffer(
+            "posterior_mean_coef2",
+            (1.0 - alphas_cumprod_prev) * np.sqrt(alphas) / (1.0 - alphas_cumprod),
+            )
+
+        # p2 weighting
+        self.p2_loss_weight_k = 1
+        self.p2_loss_weight_gamma = 0.5 if use_p2 else 0
+        self.register_buffer(
+            "p2_loss_weight",
+            (self.p2_loss_weight_k + alphas_cumprod / (1 - alphas_cumprod))
+            ** -self.p2_loss_weight_gamma,
+            )
+
+        ## get loss coefficients and initialize objective
+        self.loss_fn = F.mse_loss if loss_type == "l2" else F.l1_loss
+
+    def set_normalizer(self, normalizer):
+        self.normalizer = normalizer
+
+    # ------------------------------------------ sampling ------------------------------------------#
+
+    def predict_start_from_noise(self, x_t, t, noise):
+        """
+            if self.predict_epsilon, model output is (scaled) noise;
+            otherwise, model predicts x0 directly
+        """
+        if self.predict_epsilon:
+            return (
+                    extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t
+                    - extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * noise
+            )
+        else:
+            return noise
+
+    def predict_noise_from_start(self, x_t, t, x0):
+        return (
+                (extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - x0) / \
+                extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape)
+        )
+
+    def model_predictions(self, x, cond, time_cond, weight=None, clip_x_start=False):
+        weight = weight if weight is not None else self.guidance_weight
+        model_output = self.model.guided_forward(x, cond, time_cond, weight)
+        maybe_clip = partial(torch.clamp, min=-1., max=1.) if clip_x_start else identity
+
+        x_start = model_output
+        x_start = maybe_clip(x_start)
+        pred_noise = self.predict_noise_from_start(x, time_cond, x_start)
+
+        return pred_noise, x_start
+
+    def q_posterior(self, x_start, x_t, t):
+        posterior_mean = (
+                extract(self.posterior_mean_coef1, t, x_t.shape) * x_start
+                + extract(self.posterior_mean_coef2, t, x_t.shape) * x_t
+        )
+        posterior_variance = extract(self.posterior_variance, t, x_t.shape)
+        posterior_log_variance_clipped = extract(
+            self.posterior_log_variance_clipped, t, x_t.shape
+        )
+        return posterior_mean, posterior_variance, posterior_log_variance_clipped
+
+    def p_mean_variance(self, x, cond, t):
+        # guidance clipping
+        if t[0] > 1.0 * self.n_timestep:
+            weight = min(self.guidance_weight, 0)
+        elif t[0] < 0.1 * self.n_timestep:
+            weight = min(self.guidance_weight, 1)
+        else:
+            weight = self.guidance_weight
+
+        x_recon = self.predict_start_from_noise(
+            x, t=t, noise=self.model.guided_forward(x, cond, t, weight)
+        )
+
+        if self.clip_denoised:
+            x_recon.clamp_(-1.0, 1.0)
+        else:
+            assert RuntimeError()
+
+        model_mean, posterior_variance, posterior_log_variance = self.q_posterior(
+            x_start=x_recon, x_t=x, t=t
+        )
+        return model_mean, posterior_variance, posterior_log_variance, x_recon
+
+    @torch.no_grad()
+    def p_sample(self, x, cond, t):
+        b, *_, device = *x.shape, x.device
+        model_mean, _, model_log_variance, x_start = self.p_mean_variance(
+            x=x, cond=cond, t=t
+        )
+        noise = torch.randn_like(model_mean)
+        # no noise when t == 0
+        nonzero_mask = (1 - (t == 0).float()).reshape(
+            b, *((1,) * (len(noise.shape) - 1))
+        )
+        x_out = model_mean + nonzero_mask * (0.5 * model_log_variance).exp() * noise
+        return x_out, x_start
+
+    @torch.no_grad()
+    def p_sample_loop(          # Only used during inference
+            self,
+            shape,
+            cond,
+            noise=None,
+            constraint=None,
+            return_diffusion=False,
+            start_point=None,
+    ):
+        device = self.betas.device
+
+        # default to diffusion over whole timescale
+        start_point = self.n_timestep if start_point is None else start_point
+        batch_size = shape[0]
+        x = torch.randn(shape, device=device) if noise is None else noise.to(device)
+        cond = cond.to(device)
+
+        if return_diffusion:
+            diffusion = [x]
+
+        for i in tqdm(reversed(range(0, start_point))):
+            # fill with i
+            timesteps = torch.full((batch_size,), i, device=device, dtype=torch.long)
+            x, _ = self.p_sample(x, cond, timesteps)
+
+            if return_diffusion:
+                diffusion.append(x)
+
+        if return_diffusion:
+            return x, diffusion
+        else:
+            return x
+
+    @torch.no_grad()
+    def inpaint_ddim_guided(self, shape, noise=None, constraint=None, return_diffusion=False, start_point=None):
+        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
+
+        times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
+        times = list(reversed(times.int().tolist()))
+        time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
+
+        x = torch.randn(shape, device=device)
+        cond = constraint["cond"].to(device)
+
+        mask = constraint["mask"].to(device)  # batch x horizon x channels
+        value = constraint["value"].to(device)  # batch x horizon x channels
+        value_diff_thd = constraint["value_diff_thd"].to(device)  # channels
+        value_diff_weight = constraint["value_diff_weight"].to(device)  # channels
+
+        for time, time_next in time_pairs:
+            time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
+
+            if self.opt.guide_x_start_the_end_step <= time <= self.opt.guide_x_start_the_beginning_step:
+                x.requires_grad_()
+                with torch.enable_grad():
+                    for step_ in range(self.opt.n_guided_steps):
+                        pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
+                        value_diff = torch.subtract(x_start, value)
+                        loss = torch.relu(value_diff.abs() - value_diff_thd) * value_diff_weight
+                        grad = torch.autograd.grad([loss.sum()], [x])[0]
+                        x = x - self.opt.guidance_lr * grad
+
+            pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
+            if time_next < 0:
+                x = x_start
+                x = value * mask + (1.0 - mask) * x
+                return x
+
+            alpha = self.alphas_cumprod[time]
+            alpha_next = self.alphas_cumprod[time_next]
+
+            sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
+            c = (1 - alpha_next - sigma ** 2).sqrt()
+
+            noise = torch.randn_like(x)
+
+            x = x_start * alpha_next.sqrt() + \
+                c * pred_noise + \
+                sigma * noise
+
+            timesteps = torch.full((batch,), time_next, device=device, dtype=torch.long)
+            value_ = self.q_sample(value, timesteps) if (time > 0) else x
+            x = value_ * mask + (1.0 - mask) * x
+        return x
+
+    @torch.no_grad()
+    def inpaint_ddim_loop(self, shape, noise=None, constraint=None, return_diffusion=False, start_point=None):
+        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
+
+        times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)
+        times = list(reversed(times.int().tolist()))
+        time_pairs = list(zip(times[:-1], times[1:]))
+
+        x = torch.randn(shape, device=device)
+        cond = constraint["cond"].to(device)
+
+        mask = constraint["mask"].to(device)  # batch x horizon x channels
+        value = constraint["value"].to(device)  # batch x horizon x channels
+
+        for time, time_next in time_pairs:
+            time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
+
+            pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
+            if time_next < 0:
+                x = x_start
+                return x
+
+            alpha = self.alphas_cumprod[time]
+            alpha_next = self.alphas_cumprod[time_next]
+
+            sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
+            c = (1 - alpha_next - sigma ** 2).sqrt()
+
+            noise = torch.randn_like(x)
+
+            x = x_start * alpha_next.sqrt() + \
+                c * pred_noise + \
+                sigma * noise
+
+            timesteps = torch.full((batch,), time_next, device=device, dtype=torch.long)
+            value_ = self.q_sample(value, timesteps) if (time > 0) else x
+            x = value_ * mask + (1.0 - mask) * x
+        return x
+
+    def q_sample(self, x_start, t, noise=None):     # blend noise into state variables
+        if noise is None:
+            noise = torch.randn_like(x_start)
+
+        sample = (
+                extract(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
+                + extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
+        )
+        return sample
+
+    def forward(self, x, cond, t_override=None):
+        return self.loss(x, cond, t_override)
+
+    def generate_samples(
+            self,
+            shape,
+            normalizer,
+            opt,
+            mode,
+            noise=None,
+            constraint=None,
+            start_point=None,
+    ):
+        torch.manual_seed(torch.randint(0, 2 ** 32, (1,)).item())
+        if isinstance(shape, tuple):
+            if mode == "inpaint":
+                func_class = self.inpaint_ddim_loop
+            elif mode == "inpaint_ddim_guided":
+                func_class = self.inpaint_ddim_guided
+            else:
+                assert False, "Unrecognized inference mode"
+            samples = (
+                func_class(
+                    shape,
+                    noise=noise,
+                    constraint=constraint,
+                    start_point=start_point,
+                )
+            )
+        else:
+            samples = shape
+
+        samples = normalizer.unnormalize(samples.detach().cpu())
+        samples = samples.detach().cpu()
+        return samples
+
+
+class FillingBase:
+    def fill_param(self, windows, diffusion_model_for_filling):
+        return self.filling(windows, diffusion_model_for_filling, self.update_kinematics_and_masks_for_masking_column)
+
+    def fill_temporal(self, windows, diffusion_model_for_filling, mask_original):
+        self.mask_original = mask_original
+        return self.filling(windows, diffusion_model_for_filling, self.update_kinematics_and_masks_for_masking_temporal)
+
+    @staticmethod
+    def update_kinematics_and_masks_for_masking_column(windows, samples, i_win, masks):
+        unmasked_samples_in_temporal_dim = (masks.sum(axis=2)).bool()
+        for j_win in range(len(samples)):
+            windows[j_win+i_win].pose = samples[j_win]
+            updated_mask = windows[j_win+i_win].mask
+            updated_mask[unmasked_samples_in_temporal_dim[j_win], :] = 1
+            updated_mask[:, opt.kinetic_diffusion_col_loc] = 0
+            windows[j_win+i_win].mask = updated_mask
+        return windows
+
+    def update_kinematics_and_masks_for_masking_temporal(self, windows, samples, i_win, masks):
+        for j_win in range(len(samples)):
+            windows[j_win+i_win].pose = samples[j_win]
+            windows[j_win+i_win].mask = self.mask_original[j_win+i_win]
+        return windows
+
+    @staticmethod
+    def filling(windows, diffusion_model_for_filling, windows_update_func):
+        raise NotImplementedError
+
+
+class DiffusionFilling(FillingBase):
+    @staticmethod
+    def filling(windows, diffusion_model_for_filling, windows_update_func):
+        windows = copy.deepcopy(windows)
+        for i_win in range(0, len(windows), opt.batch_size_inference):
+            state_true = torch.stack([win.pose for win in windows[i_win:i_win+opt.batch_size_inference]])
+            masks = torch.stack([win.mask for win in windows[i_win:i_win+opt.batch_size_inference]])
+            cond = torch.ones([6])
+
+            constraint = {'mask': masks, 'value': state_true.clone(), 'cond': cond}
+            shape = (state_true.shape[0], state_true.shape[1], state_true.shape[2])
+            samples = (diffusion_model_for_filling.diffusion.inpaint_ddim_loop(shape, constraint=constraint))
+            samples = state_true * masks + (1.0 - masks) * samples.to(state_true.device)
+            # samples[:, :, opt.kinetic_diffusion_col_loc] = state_true[:, :, opt.kinetic_diffusion_col_loc]
+
+            windows = windows_update_func(windows, samples, i_win, masks)
+        return windows
+
+    def __str__(self):
+        return 'diffusion_filling'
 
 
 def wrap(x):
@@ -384,12 +794,6 @@ class TransformerEncoderArchitecture(nn.Module):
         output_pred = self.embedding_to_output(sequence)
         return output_pred
 
-    def predict_samples(self, x, constraint):
-        x[0] = x[0] * constraint['mask']
-        output_pred = self.end_to_end_prediction(x)
-        x[0][:, :, self.output_col_loc] = output_pred
-        return x[0]
-
     def __str__(self):
         return 'tf'
 
@@ -426,6 +830,313 @@ class DiffusionShellForAdaptingTheOriginalFramework(nn.Module):
         return sum(losses), losses + [loss_simple]
 
 
+def featurewise_affine(x, scale_shift):
+    scale, shift = scale_shift
+    return (scale + 1) * x + shift
+
+
+class DenseFiLM(nn.Module):
+    """Feature-wise linear modulation (FiLM) generator."""
+
+    def __init__(self, embed_channels):
+        super().__init__()
+        self.embed_channels = embed_channels
+        self.block = nn.Sequential(
+            nn.Mish(), nn.Linear(embed_channels, embed_channels * 2)
+        )
+
+    def forward(self, position):
+        pos_encoding = self.block(position)
+        pos_encoding = rearrange(pos_encoding, "b c -> b 1 c")
+        scale_shift = pos_encoding.chunk(2, dim=-1)
+        return scale_shift
+
+
+class FiLMTransformerDecoderLayer(nn.Module):
+    def __init__(
+            self,
+            d_model: int,
+            nhead: int,
+            dim_feedforward=2048,
+            dropout=0.1,
+            activation=F.relu,
+            layer_norm_eps=1e-5,
+            batch_first=False,
+            norm_first=True,
+            device=None,
+            dtype=None,
+            rotary=None,
+    ):
+        super().__init__()
+        self.self_attn = nn.MultiheadAttention(
+            d_model, nhead, dropout=dropout, batch_first=batch_first
+        )
+        self.multihead_attn = nn.MultiheadAttention(
+            d_model, nhead, dropout=dropout, batch_first=batch_first
+        )
+        # Feedforward
+        self.linear1 = nn.Linear(d_model, dim_feedforward)
+        self.dropout = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(dim_feedforward, d_model)
+
+        self.norm_first = norm_first
+        self.norm1 = nn.LayerNorm(d_model, eps=layer_norm_eps)
+        self.norm3 = nn.LayerNorm(d_model, eps=layer_norm_eps)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout3 = nn.Dropout(dropout)
+        self.activation = activation
+
+        self.film1 = DenseFiLM(d_model)
+        self.film3 = DenseFiLM(d_model)
+
+        self.rotary = rotary
+        self.use_rotary = rotary is not None
+
+    # x, cond, t
+    def forward(
+            self,
+            tgt,
+            memory,
+            t,
+            tgt_mask=None,
+            memory_mask=None,
+            tgt_key_padding_mask=None,
+            memory_key_padding_mask=None,
+    ):
+        x = tgt
+        if self.norm_first:
+            x_1 = self._sa_block(self.norm1(x), tgt_mask, tgt_key_padding_mask)
+            x = x + featurewise_affine(x_1, self.film1(t))
+            x_3 = self._ff_block(self.norm3(x))
+            x = x + featurewise_affine(x_3, self.film3(t))
+        else:
+            x = self.norm1(
+                x
+                + featurewise_affine(
+                    self._sa_block(x, tgt_mask, tgt_key_padding_mask), self.film1(t)
+                )
+            )
+            x = self.norm3(x + featurewise_affine(self._ff_block(x), self.film3(t)))
+        return x
+
+    # self-attention block
+    # qkv
+    def _sa_block(self, x, attn_mask, key_padding_mask):
+        qk = self.rotary.rotate_queries_or_keys(x) if self.use_rotary else x
+        x = self.self_attn(
+            qk,
+            qk,
+            x,
+            attn_mask=attn_mask,
+            key_padding_mask=key_padding_mask,
+            need_weights=False,
+        )[0]
+        return self.dropout1(x)
+
+    # multihead attention block
+    # qkv
+    def _mha_block(self, x, mem, attn_mask, key_padding_mask):
+        q = self.rotary.rotate_queries_or_keys(x) if self.use_rotary else x
+        k = self.rotary.rotate_queries_or_keys(mem) if self.use_rotary else mem
+        x = self.multihead_attn(
+            q,
+            k,
+            mem,
+            attn_mask=attn_mask,
+            key_padding_mask=key_padding_mask,
+            need_weights=False,
+        )[0]
+        return self.dropout2(x)
+
+    # feed forward block
+    def _ff_block(self, x):
+        x = self.linear2(self.dropout(self.activation(self.linear1(x))))
+        return self.dropout3(x)
+
+
+class DecoderLayerStack(nn.Module):
+    def __init__(self, stack):
+        super().__init__()
+        self.stack = stack
+
+    def forward(self, x, cond, t):
+        for layer in self.stack:
+            x = layer(x, cond, t)
+        return x
+
+
+class DanceDecoder(nn.Module):
+    def __init__(
+            self,
+            nfeats: int,
+            seq_len: int = 150,  # 5 seconds, 30 fps
+            latent_dim: int = 256,
+            ff_size: int = 1024,
+            num_layers: int = 4,
+            num_heads: int = 4,
+            dropout: float = 0.1,
+            # cond_feature_dim: int = 6,
+            activation=F.gelu,
+            use_rotary=True,
+            **kwargs
+    ) -> None:
+
+        super().__init__()
+
+        output_feats = nfeats
+
+        # positional embeddings
+        self.rotary = None
+        self.abs_pos_encoding = nn.Identity()
+        # if rotary, replace absolute embedding with a rotary embedding instance (absolute becomes an identity)
+        if use_rotary:
+            self.rotary = RotaryEmbedding(dim=latent_dim)
+        else:
+            self.abs_pos_encoding = PositionalEncoding(
+                latent_dim, dropout, batch_first=True
+            )
+
+        # time embedding processing
+        self.time_mlp = nn.Sequential(
+            SinusoidalPosEmb(latent_dim),
+            nn.Linear(latent_dim, latent_dim * 4),
+            nn.Mish(),
+        )
+        # input projection
+        self.input_projection = nn.Linear(nfeats, latent_dim)
+
+        self.to_time_cond = nn.Sequential(nn.Linear(latent_dim * 4, latent_dim),)
+
+        decoderstack = nn.ModuleList([])
+        for _ in range(num_layers):
+            decoderstack.append(
+                FiLMTransformerDecoderLayer(        # decoder layers
+                    latent_dim,
+                    num_heads,
+                    dim_feedforward=ff_size,
+                    dropout=dropout,
+                    activation=activation,
+                    batch_first=True,
+                    rotary=self.rotary,
+                )
+            )
+
+        self.seqTransDecoder = DecoderLayerStack(decoderstack)
+
+        self.final_layer = nn.Linear(latent_dim, output_feats)
+
+    def guided_forward(self, x, cond_embed, time_cond, guidance_weight):
+        return self.forward(x, cond_embed, time_cond)
+
+    def __str__(self):
+        return 'diffusion'
+
+    # No conditioning version
+    def forward(self, x: Tensor, cond_embed: Tensor, time_cond: Tensor, cond_drop_prob: float = 0.0):
+        x = self.input_projection(x)
+        x = self.abs_pos_encoding(x)
+        t_hidden = self.time_mlp(time_cond)
+        t = self.to_time_cond(t_hidden)
+        output = self.seqTransDecoder(x, None, t)
+        output = self.final_layer(output)
+        return output
+
+
+class MotionModel:
+    def __init__(
+            self,
+            opt,
+            normalizer=None,
+            EMA=True,
+            learning_rate=4e-4,
+            weight_decay=0.02,
+    ):
+        self.opt = opt
+        ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+        self.accelerator = Accelerator(kwargs_handlers=[ddp_kwargs])
+        state = AcceleratorState()
+        num_processes = state.num_processes
+
+        self.repr_dim = len(opt.model_states_column_names)
+
+        self.horizon = horizon = opt.window_len
+
+        self.accelerator.wait_for_everyone()
+
+        checkpoint = None
+        if opt.checkpoint != "":
+            checkpoint = torch.load(
+                opt.checkpoint, map_location=self.accelerator.device,
+                weights_only=False
+            )
+            self.normalizer = checkpoint["normalizer"]
+
+        model = DanceDecoder(
+            nfeats=self.repr_dim,
+            seq_len=horizon,
+            latent_dim=256,
+            ff_size=1024,
+            num_layers=4,
+            num_heads=4,
+            dropout=0.1,
+            activation=F.gelu,
+        )
+
+        diffusion = GaussianDiffusion(
+            model,
+            horizon,
+            self.repr_dim,
+            opt,
+            # schedule="cosine",
+            n_timestep=1000,
+            predict_epsilon=False,
+            loss_type="l2",
+            use_p2=False,
+            cond_drop_prob=0.,
+            guidance_weight=2,
+        )
+
+        self.model = self.accelerator.prepare(model)
+        self.diffusion = diffusion.to(self.accelerator.device)
+
+        if opt.checkpoint != "":
+            self.model.load_state_dict(
+                maybe_wrap(
+                    checkpoint["ema_state_dict" if EMA else "model_state_dict"],
+                    num_processes,
+                )
+            )
+
+    def eval(self):
+        self.diffusion.eval()
+
+    def prepare(self, objects):
+        return self.accelerator.prepare(*objects)
+
+    def eval_loop(self, opt, state_true, masks, value_diff_thd=None, value_diff_weight=None, cond=None,
+                  num_of_generation_per_window=1, mode="inpaint"):
+        self.eval()
+        if value_diff_thd is None:
+            value_diff_thd = torch.zeros([state_true.shape[2]])
+        if value_diff_weight is None:
+            value_diff_weight = torch.ones([state_true.shape[2]])
+        if cond is None:
+            cond = torch.ones([6])
+
+        constraint = {'mask': masks, 'value': state_true.clone(), 'value_diff_thd': value_diff_thd,
+                      'value_diff_weight': value_diff_weight, 'cond': cond}
+
+        shape = (state_true.shape[0], self.horizon, self.repr_dim)
+        state_pred_list = [self.diffusion.generate_samples(
+            shape,
+            self.normalizer,
+            opt,
+            mode=mode,
+            constraint=constraint)
+            for _ in range(num_of_generation_per_window)]
+        return torch.stack(state_pred_list)
+
+
 class BaselineModel:
     def __init__(
             self,
@@ -444,12 +1155,11 @@ class BaselineModel:
         self.diffusion = DiffusionShellForAdaptingTheOriginalFramework(self.model)
         self.diffusion = self.accelerator.prepare(self.diffusion)
 
-        print("Model has {} parameters".format(sum(y.numel() for y in self.model.parameters())))
-
         checkpoint = None
         if opt.checkpoint_bl != "":
             checkpoint = torch.load(
-                opt.checkpoint_bl, map_location=self.accelerator.device
+                opt.checkpoint_bl, map_location=self.accelerator.device,
+                weights_only=False
             )
             self.normalizer = checkpoint["normalizer"]
 
@@ -485,6 +1195,28 @@ class BaselineModel:
 
 
 """ ============================ Start util.py ============================ """
+
+
+def load_diffusion_model(opt):
+    opt.checkpoint = opt.subject_data_path + '/GaitDynamicsDiffusion.pt'
+    model = MotionModel(opt)
+    model_key = 'diffusion'
+    return model, model_key
+
+
+class SinusoidalPosEmb(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, x):
+        device = x.device
+        half_dim = self.dim // 2
+        emb = math.log(10000) / (half_dim - 1)
+        emb = torch.exp(torch.arange(half_dim, device=device) * -emb)
+        emb = x[:, None] * emb[None, :]
+        emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
+        return emb
 
 
 def convertDfToGRFMot(df, out_folder, dt, max_time=None):
@@ -530,7 +1262,6 @@ def convertDfToGRFMot(df, out_folder, dt, max_time=None):
             out_file.write('\t' + str(0))
         out_file.write('\n')
     out_file.close()
-
 
 
 def rotation_6d_to_matrix(d6: torch.Tensor) -> torch.Tensor:
@@ -1498,6 +2229,51 @@ def convert_overlapped_list_to_array(trial_len, win_list, s_, e_, fun=np.nanmedi
     return array_val, std_val
 
 
+def identity(t, *args, **kwargs):
+    return t
+
+
+def extract(a, t, x_shape):
+    b, *_ = t.shape
+    out = a.gather(-1, t)
+    return out.reshape(b, *((1,) * (len(x_shape) - 1)))
+
+
+def make_beta_schedule(
+        schedule, n_timestep, linear_start=1e-4, linear_end=2e-2, cosine_s=8e-3
+):
+    if schedule == "linear":
+        betas = (
+                torch.linspace(
+                    linear_start ** 0.5, linear_end ** 0.5, n_timestep, dtype=torch.float64
+                )
+                ** 2
+        )
+
+    elif schedule == "cosine":
+        timesteps = (
+                torch.arange(n_timestep + 1, dtype=torch.float64) / n_timestep + cosine_s
+        )
+        alphas = timesteps / (1 + cosine_s) * np.pi / 2
+        alphas = torch.cos(alphas).pow(2)
+        alphas = alphas / alphas[0]
+        betas = 1 - alphas[1:] / alphas[:-1]
+        betas = np.clip(betas, a_min=0, a_max=0.999)
+
+    elif schedule == "sqrt_linear":
+        betas = torch.linspace(
+            linear_start, linear_end, n_timestep, dtype=torch.float64
+        )
+    elif schedule == "sqrt":
+        betas = (
+                torch.linspace(linear_start, linear_end, n_timestep, dtype=torch.float64)
+                ** 0.5
+        )
+    else:
+        raise ValueError(f"schedule '{schedule}' unknown.")
+    return betas.numpy()
+
+
 """ ============================ End util.py ============================ """
 
 
@@ -1523,33 +2299,20 @@ def parse_opt():
     )
 
     parser.add_argument("--feature_type", type=str, default="jukebox")
-    parser.add_argument(
-        "--wandb_pj_name", type=str, default="MotionModel", help="project name"
-    )
     parser.add_argument("--batch_size", type=int, default=256, help="batch size")
-    parser.add_argument("--batch_size_inference", type=int, default=128, help="batch size during inference")
-    # parser.add_argument("--pseudo_dataset_len", type=int, default=machine_specific_config['pseudo_dataset_len'], help="pseudo dataset length")
-    parser.add_argument(
-        "--force_reload", action="store_true", help="force reloads the datasets"
-    )
-    parser.add_argument(
-        "--no_cache", action="store_true", help="don't reuse / cache loaded dataset"
-    )
-    parser.add_argument(
-        "--save_interval",
-        type=int,
-        default=50,
-        help='Log model after every "save_period" epoch',
-    )
-    parser.add_argument("--ema_interval", type=int, default=1, help="ema every x steps")
+    parser.add_argument("--batch_size_inference", type=int, default=32, help="batch size during inference")
     parser.add_argument(
         "--checkpoint", type=str, default="", help="trained checkpoint path (optional)"
     )
     parser.add_argument(
         "--checkpoint_bl", type=str, default="", help="trained checkpoint path (optional)"
     )
-    opt = parser.parse_args()
+    opt = parser.parse_args(args=[])
     set_no_arm_opt(opt)
+    current_folder = os.getcwd()
+    opt.subject_data_path = current_folder
+    opt.geometry_folder = current_folder + '/Geometry/'
+    opt.checkpoint_bl = current_folder + '/GaitDynamicsRefinement.pt'
     return opt
 
 
@@ -1582,6 +2345,7 @@ def set_no_arm_opt(opt):
 
 """ ============================ Start dataset.py ============================ """
 
+
 class MotionDataset(Dataset):
     def __init__(
             self,
@@ -1593,6 +2357,8 @@ class MotionDataset(Dataset):
     ):
         self.data_path = opt.subject_data_path
         self.subject_osim_model = opt.subject_osim_model
+        if opt.target_sampling_rate != 100:
+            raise ValueError('100 Hz sampling rate is not confirmed. Confirm by setting opt.target_sampling_rate = 100')
         self.target_sampling_rate = opt.target_sampling_rate
         self.window_len = opt.window_len
         self.align_moving_direction_flag = align_moving_direction_flag
@@ -1624,8 +2390,8 @@ class MotionDataset(Dataset):
             body_center = data_filter(body_center, 10, self.target_sampling_rate).astype(np.float32)
             vel_from_t = np.diff(body_center, axis=0) * self.target_sampling_rate
             vel_from_t = np.concatenate([vel_from_t, vel_from_t[-1][None, :]], axis=0)
-            if not self.opt.treadmill_speed:
-                self.opt.treadmill_speed = 0
+            if self.opt.treadmill_speed is None:
+                raise ValueError('Treadmill speed is not set. For overground walking, set opt.treadmill_speed = 0')
             vel_from_t[:, 0] = vel_from_t[:, 0] + self.opt.treadmill_speed
             walking_vel = vel_from_t
 
@@ -1655,25 +2421,25 @@ class MotionDataset(Dataset):
                 mask[e-s:, :] = 0
                 data_ = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
                 data_[:e-s] = trial_.converted_pose[s:e, ...]
-                windows.append(WindowData(data_, trial_.model_offsets, i_trial,
-                                          None, mask, trial_.height_m, trial_.weight_kg))
+                windows.append(WindowData(data_, trial_.model_offsets, i_trial, None, mask,
+                                          trial_.height_m, trial_.weight_kg, trial_.missing_col))
         return windows, s_list, e_list
 
     def load_addb(self, opt):
-        subject_paths = []
+        file_paths = []
         if os.path.isdir(self.data_path):
             for root, dirs, files in os.walk(self.data_path):
                 for file in files:
                     file_path = os.path.join(root, file)
-                    if file.endswith(".mot") and 'pred' not in file:
-                        subject_paths.append(file_path)
+                    if file.endswith(".mot") and '_pred___' not in file:
+                        file_paths.append(file_path)
 
         customOsim: nimble.biomechanics.OpenSimFile = nimble.biomechanics.OpenSimParser.parseOsim(self.subject_osim_model, self.opt.geometry_folder)
         skel = customOsim.skeleton
         self.skel = skel
 
-        self.trials, self.trial_paths = [], []
-        for i_sub, file_path in enumerate(subject_paths):
+        self.trials, self.file_names = [], []
+        for i_file, file_path in enumerate(file_paths):
             model_offsets = get_model_offsets(skel).float()
             poses_df = pd.read_csv(file_path, sep='\t', skiprows=10)
             with open(file_path) as f:
@@ -1694,6 +2460,13 @@ class MotionDataset(Dataset):
                 raise ValueError(f'{file_path} does not have time column. Necessary for compuing sampling rate')
             sampling_rate = round((poses_df.shape[0] - 1) / (poses_df['time'].iloc[-1] - poses_df['time'].iloc[0]))
 
+            missing_col = []
+            for col in FULL_OSIM_DOF:
+                if col not in poses_df.columns:
+                    poses_df[col] = 0.
+                    missing_col.append(col)
+
+            poses_df = poses_df.astype(float)
             col_list = list(poses_df.columns)
             col_loc = [col_list.index(col) for col in OSIM_DOF_ALL[:23]]
             angle_col_loc = [col_list.index(col) for col in OSIM_DOF_ALL[:23] if col not in ['pelvis_tx', 'pelvis_ty', 'pelvis_tz']]
@@ -1715,8 +2488,9 @@ class MotionDataset(Dataset):
             else:
                 rot_mat = torch.eye(3).float()
 
+            file_name = file_path.split('/')[-1]
             if states.shape[0] / sampling_rate * self.target_sampling_rate < self.window_len + 2:
-                print(f'Warning: {file_path} is shorter than 1.5s, skipping.')
+                print(f'Warning: {file_name} is shorter than 1.5s, skipping.')
                 continue
             if sampling_rate != self.target_sampling_rate:
                 states = linear_resample_data(states, sampling_rate, self.target_sampling_rate)
@@ -1729,9 +2503,9 @@ class MotionDataset(Dataset):
             converted_states = torch.tensor(states_df.values).float()
 
             trial_data = TrialData(converted_states, model_offsets, opt.height_m, opt.weight_kg, rot_mat, pos_vec,
-                                   self.window_len)
+                                   self.window_len, missing_col)
             self.trials.append(trial_data)
-            self.trial_paths.append(file_path)
+            self.file_names.append(file_name)
 
     @staticmethod
     def is_lumbar_rotation_reasonable(states, column_names):
@@ -1743,7 +2517,7 @@ class MotionDataset(Dataset):
 
 
 class WindowData:
-    def __init__(self, pose, model_offsets, trial_id, gait_phase_label, mask, height_m, weight_kg):
+    def __init__(self, pose, model_offsets, trial_id, gait_phase_label, mask, height_m, weight_kg, missing_col):
         self.pose = pose
         self.model_offsets = model_offsets
         self.trial_id = trial_id
@@ -1751,11 +2525,12 @@ class WindowData:
         self.mask = mask
         self.height_m = height_m
         self.weight_kg = weight_kg
+        self.missing_col = missing_col
 
 
 class TrialData:
-    def __init__(self, converted_states, model_offsets, height_m, weight_kg,
-                 rot_mat_for_moving_direction_alignment, pos_vec_for_pos_alignment, window_len):
+    def __init__(self, converted_states, model_offsets, height_m, weight_kg, rot_mat_for_moving_direction_alignment,
+                 pos_vec_for_pos_alignment, window_len, missing_col):
         self.converted_pose = converted_states
         self.model_offsets = model_offsets
         self.height_m = height_m
@@ -1764,65 +2539,134 @@ class TrialData:
         self.rot_mat_for_moving_direction_alignment = rot_mat_for_moving_direction_alignment
         self.pos_vec_for_pos_alignment = pos_vec_for_pos_alignment
         self.window_len = window_len
+        self.missing_col = missing_col
 
 
 """ ============================ End args.py ============================ """
 
 
+def usr_inputs():
+    opt = parse_opt()
+
+    # # [DEBUG]
+    # opt.height_m = 1.84
+    # opt.weight_kg = 92.9      # there should be a better way to store and load height and weight
+    # opt.treadmill_speed = 1.15         # None in Colab
+    # opt.subject_osim_model = opt.subject_data_path + '/Scaled_generic_no_arm.osim'
+
+    while True:
+        confirm_num = input("Upload .mot files and a .osim file to Colab via \n \
+      1) clicking the folder button on the left side of the window \n \
+      1) drag .mot files into the 'Files'. \n \
+      2) drag one .osim file into the same directory. \nConfirm completion of file uploading by entering 1: ")
+        try:
+            if float(confirm_num) == 1:
+                print()
+                break
+            else:
+                raise ValueError()
+        except ValueError:
+            print('Upload not confirmed.')
+
+    while True:
+        try:
+            opt.height_m = float(input("Enter the subject's height in meter: "))
+            if opt.height_m > 2.5 or opt.height_m < 1:
+                raise ValueError()
+            print()
+            break
+        except ValueError:
+            print("Invalid input. Please enter a floating-point number between 1.0 and 2.5.")
+    while True:
+        try:
+            opt.weight_kg = float(input("Enter the subject's weight in Kg: "))
+            if opt.weight_kg > 200 or opt.weight_kg < 30:
+                raise ValueError()
+            print()
+            break
+        except ValueError:
+            print("Invalid input. Please enter a floating-point number between 30 and 200.")
+    while True:
+        try:
+            opt.treadmill_speed = float(input("Enter treadmill speed in m/s (enter 0 for overground gait): "))
+            if opt.treadmill_speed > 10 or opt.treadmill_speed < 0:
+                raise ValueError()
+            print()
+            break
+        except ValueError:
+            print("Invalid input. Please enter a floating-point number between 0 and 10.")
+
+    osim_paths = []
+    for root, dirs, files in os.walk(opt.subject_data_path):
+        for file in files:
+            file_path = os.path.join(root, file)
+            if file.endswith(".osim"):
+                osim_paths.append(file_path)
+    if len(osim_paths) > 1:
+        print(f'Multiple .osim files found.')
+        [print(f'{i}: {file_path}') for i, file_path in enumerate(osim_paths)]
+        i_file = int(input(f'Choose the .osim file entering its index (between 0 and {len(osim_paths)-1}): '))
+        opt.subject_osim_model = osim_paths[i_file]
+    elif len(osim_paths) == 0:
+        raise RuntimeError(f'No .osim file found. Upload the .osim file to Colab')
+    else:
+        opt.subject_osim_model = osim_paths[0]
+    print()
+    return opt
+
+
 def predict_grf(opt):
     model = BaselineModel(opt, TransformerEncoderArchitecture)
     dataset = MotionDataset(opt, normalizer=model.normalizer)
-    windows, s_list, e_list = dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, opt.window_len)
-    if len(windows) == 0:
-        print('No data to predict')
-        return
+    diffusion_model_for_filling = None
+    filling_method = DiffusionFilling()
+    for i_trial in range(len(dataset.trials)):
+        windows, s_list, e_list = dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, 20, i_trial, i_trial+1)
+        if len(windows) == 0:
+            continue
 
-    for i_win in range(0, len(windows), opt.batch_size_inference):
-        state_true = torch.stack([win.pose for win in windows[i_win:i_win+opt.batch_size_inference]])
-        masks = torch.stack([win.mask for win in windows[i_win:i_win+opt.batch_size_inference]])
+        if len(windows[0].missing_col) > 0:
+            print(f'File {dataset.file_names[i_trial]} do not have {windows[0].missing_col}. '
+                  f'\nGenerating missing kinematics for {dataset.file_names[i_trial]}')
+            if diffusion_model_for_filling is None:
+                diffusion_model_for_filling, _ = load_diffusion_model(opt)
+            windows_reconstructed = filling_method.fill_param(windows, diffusion_model_for_filling)
+        else:
+            windows_reconstructed = windows
 
-        state_pred_list_batch = model.eval_loop(opt, state_true, masks, num_of_generation_per_window=1)
-        state_pred_list_averaged = state_pred_list_batch[0]
+        state_pred_list = []
+        print(f'Running GaitDynamics on file {dataset.file_names[i_trial]} for external force prediction.')
+        for i_win in range(0, len(windows), opt.batch_size_inference):
+            state_true = torch.stack([win.pose for win in windows_reconstructed[i_win:i_win+opt.batch_size_inference]])
+            masks = torch.stack([win.mask for win in windows_reconstructed[i_win:i_win+opt.batch_size_inference]])
 
-    results_pred, results_s, results_e = {}, {}, {}
-    heights_weights = {}
-    for i_win, (win, state_pred_mean) in enumerate(zip(windows, state_pred_list_averaged)):
-        if win.trial_id not in results_pred.keys():
-            results_pred.update({win.trial_id: []})
-            results_s.update({win.trial_id: []})
-            results_e.update({win.trial_id: []})
-            heights_weights[win.trial_id] = win.height_m, win.weight_kg
-        results_pred[win.trial_id].append(state_pred_mean.numpy())
-        results_s[win.trial_id].append(s_list[i_win])
-        results_e[win.trial_id].append(e_list[i_win])
+            state_pred_list_batch = model.eval_loop(opt, state_true, masks, num_of_generation_per_window=1)[0]
+            state_pred_list.append(state_pred_list_batch)
 
-    for i_trial in results_pred.keys():
+        state_pred = torch.cat(state_pred_list, dim=0)
         trial_len = dataset.trials[i_trial].converted_pose.shape[0]
-        results_pred[i_trial], _ = convert_overlapped_list_to_array(
-            trial_len, results_pred[i_trial], results_s[i_trial], results_e[i_trial])
 
-        height_m_tensor = torch.tensor([heights_weights[i_trial][0]])
-        results_pred[i_trial] = inverse_convert_addb_state_to_model_input(
-            torch.from_numpy(results_pred[i_trial]).unsqueeze(0), opt.model_states_column_names,
+        results_pred, _ = convert_overlapped_list_to_array(
+            trial_len, state_pred, s_list, e_list)
+
+        height_m_tensor = torch.tensor([windows[0].height_m])
+        results_pred = inverse_convert_addb_state_to_model_input(
+            torch.from_numpy(results_pred).unsqueeze(0), opt.model_states_column_names,
             opt.joints_3d, opt.osim_dof_columns, dataset.trials[i_trial].pos_vec_for_pos_alignment, height_m_tensor)[0].numpy()
-        results_pred[i_trial] = inverse_norm_cops(dataset.skel, results_pred[i_trial], opt, heights_weights[i_trial][1], heights_weights[i_trial][0])
+        results_pred = inverse_norm_cops(dataset.skel, results_pred, opt, windows[0].weight_kg, windows[0].height_m)
 
-        results_pred[i_trial][:, -12:-9] = results_pred[i_trial][:, -12:-9] * opt.weight_kg  # convert to N
-        results_pred[i_trial][:, -6:-3] = results_pred[i_trial][:, -6:-3] * opt.weight_kg  # convert to N
-        df = pd.DataFrame(results_pred[i_trial], columns=opt.osim_dof_columns)
+        results_pred[:, -12:-9] = results_pred[:, -12:-9] * opt.weight_kg  # convert to N
+        results_pred[:, -6:-3] = results_pred[:, -6:-3] * opt.weight_kg  # convert to N
+        df = pd.DataFrame(results_pred, columns=opt.osim_dof_columns)
 
-        trial_save_path = f'{dataset.trial_paths[i_trial][:-4]}_pred.mot'
+        # plt.figure()        # !!!
+        # plt.plot(df['calcn_r_force_vy'].values[:1000], label='calcn_r_force_vx')
+        # plt.show()
+
+        trial_save_path = f'{dataset.file_names[i_trial][:-4]}_pred___.mot'
         convertDfToGRFMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3))
 
 
 if __name__ == '__main__':
-    current_folder = os.getcwd()
-    opt = parse_opt()
-    opt.subject_data_path = current_folder
-    opt.subject_osim_model = current_folder + '/Scaled_generic_no_arm.osim'
-    opt.geometry_folder = current_folder + '/Geometry/'
-    opt.height_m = 1.84
-    opt.weight_kg = 92.9      # there should be a better way to store and load height and weight
-    opt.treadmill_speed = None
-    opt.checkpoint_bl = current_folder + '/GaitDynamicsRefinement.pt'
+    opt = usr_inputs()
     predict_grf(opt)

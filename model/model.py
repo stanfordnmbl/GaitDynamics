@@ -611,79 +611,6 @@ class GaussianDiffusion(nn.Module):
         return x
 
     @torch.no_grad()
-    def inpaint_ddim_run_faster(self, shape, noise=None, constraint=None, return_diffusion=False, start_point=None):
-        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
-
-        # guide_x_start_the_beginning_step = 1000
-        # n_guided_steps = 5
-        # guidance_lr = 0.02
-
-        times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
-        times = list(reversed(times.int().tolist()))
-        time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
-
-        x = torch.randn(shape, device=device)
-        cond = constraint["cond"].to(device)
-
-        mask = constraint["mask"].to(device)  # batch x horizon x channels
-        value = constraint["value"].to(device)  # batch x horizon x channels
-        # value_diff_thd = constraint["value_diff_thd"].to(device)  # channels
-        # value_diff_weight = constraint["value_diff_weight"].to(device)  # channels
-
-        value.requires_grad_()
-        # x.requires_grad_()
-        with torch.enable_grad():
-            for time, time_next in tqdm(time_pairs, desc='sampling loop time step'):
-                time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
-
-                # if time <= guide_x_start_the_beginning_step:
-                #     x.requires_grad_()
-                #     with torch.enable_grad():
-                #         for step_ in range(n_guided_steps):
-                #             pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
-                #             value_diff = torch.subtract(x_start, value)
-                #             loss = torch.relu(value_diff.abs() - value_diff_thd) * value_diff_weight
-                #             grad = torch.autograd.grad([loss.sum()], [x])[0]
-                #             x = x - guidance_lr * grad
-
-                pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
-                if time_next < 0:
-                    x = x_start
-                    break
-
-                alpha = self.alphas_cumprod[time]
-                alpha_next = self.alphas_cumprod[time_next]
-
-                sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
-                c = (1 - alpha_next - sigma ** 2).sqrt()
-
-                noise = torch.randn_like(x)
-
-                x = x_start * alpha_next.sqrt() + \
-                    c * pred_noise + \
-                    sigma * noise
-
-                timesteps = torch.full((batch,), time_next, device=device, dtype=torch.long)
-                value_ = self.q_sample(value, timesteps) if (time > 0) else x
-                x = value_ * mask + (1.0 - mask) * x
-
-            tx_col_loc = self.opt.model_states_column_names.index('pelvis_tx')
-            knee_r_col_loc = self.opt.model_states_column_names.index('knee_angle_r')
-            ankle_r_col_loc = self.opt.model_states_column_names.index('ankle_angle_r')
-            vel = x[0, :, tx_col_loc]
-            grad_to_x = torch.autograd.grad([vel.sum()], [value], retain_graph=True)[0]
-            x_times_grad = 2
-            plt.figure()
-            plt.plot(value[0, :, knee_r_col_loc].detach().cpu().numpy(), color='gray')
-            plt.plot((x[0, :, knee_r_col_loc] + x_times_grad * grad_to_x[0, :, knee_r_col_loc]).detach().cpu().numpy(), '--', color='C0')
-            plt.plot(value[0, :, ankle_r_col_loc].detach().cpu().numpy(), color='gray')
-            plt.plot((x[0, :, ankle_r_col_loc] + x_times_grad * grad_to_x[0, :, ankle_r_col_loc]).detach().cpu().numpy(), '--', color='C1')
-            plt.plot(value[0, :, tx_col_loc].detach().cpu().numpy(), color='gray')
-            plt.plot(x[0, :, tx_col_loc].detach().cpu().numpy(), '--', color='C2')
-            plt.show()
-        return x + x_times_grad * grad_to_x
-
-    @torch.no_grad()
     def inpaint_ddpm_loop_hip_6v(
             self,
             shape,
@@ -745,88 +672,6 @@ class GaussianDiffusion(nn.Module):
             plt.plot(joint_euler[0, :, 0, 1].detach().cpu().numpy() * 10, color='C2')
             plt.plot((joint_euler[0, :, 0, 1] * 10 + grad_to_joint_euler[0, :, 0, 1]).detach().cpu().numpy(), '--', color='C2')
             plt.show()
-
-    @torch.no_grad()
-    def inpaint_ddim_loop_guided_run_faster(self, shape, noise=None, constraint=None, return_diffusion=False, start_point=None):
-        def vertical_horizontal_loss(x, y, value_diff_thd, value_diff_weight):
-            m = x.size(1)
-            n = y.size(1)
-            d = x.size(2)
-            x = x.unsqueeze(2).expand(-1, m, n, d)
-            y = y.unsqueeze(1).expand(-1, m, n, d)
-            value_diff = (x - y).abs()
-            i_indices = torch.arange(m).view(-1, 1).to(x.device)
-            j_indices = torch.arange(n).view(1, -1).to(x.device)
-            pos_diff = ((i_indices - j_indices) * 0.4).abs().unsqueeze(-1).expand(value_diff.shape)
-            # pos_diff = (torch.relu(i_indices - j_indices - 5)).unsqueeze(-1).expand(value_diff.shape)
-
-            dist = torch.relu(value_diff+pos_diff - value_diff_thd) * value_diff_weight
-            loss = torch.min(dist, dim=1).values
-            return loss
-
-        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
-
-        guide_x_start_the_beginning_step = 1000
-        n_guided_steps = self.opt.n_guided_steps
-        guidance_lr = self.opt.guidance_lr
-
-        times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
-        times = list(reversed(times.int().tolist()))
-        time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
-
-        x = torch.randn(shape, device=device)
-        cond = constraint["cond"].to(device)
-
-        mask = constraint["mask"].to(device)  # batch x horizon x channels
-        value = constraint["value"].to(device)  # batch x horizon x channels
-        value_diff_thd = constraint["value_diff_thd"].to(device)  # channels
-        value_diff_weight = constraint["value_diff_weight"].to(device)  # channels
-
-        for time, time_next in tqdm(time_pairs, desc='sampling loop time step'):
-            time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
-
-            if time <= guide_x_start_the_beginning_step:
-                x.requires_grad_()
-
-                # if time < 50:
-                #     plt.figure()
-                #     dim_to_check = 3
-                #     plt.plot(value[0, :, dim_to_check].detach().cpu().numpy(), '-.')
-
-                with torch.enable_grad():
-                    for step_ in range(n_guided_steps):
-                        pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
-                        loss = vertical_horizontal_loss(x_start, value, value_diff_thd, value_diff_weight)
-                        grad = torch.autograd.grad([loss.sum()], [x])[0]
-                        x = x - guidance_lr * grad
-
-                # if time < 50:
-                #     plt.plot(x_start[0, :, dim_to_check].detach().cpu().numpy(), '--')
-                #     plt.plot(loss[0, :, dim_to_check].detach().cpu().numpy())
-                #     plt.grid()
-                #     plt.show()
-
-            pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
-            if time_next < 0:
-                x = x_start
-                return x
-
-            alpha = self.alphas_cumprod[time]
-            alpha_next = self.alphas_cumprod[time_next]
-
-            sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
-            c = (1 - alpha_next - sigma ** 2).sqrt()
-
-            noise = torch.randn_like(x)
-
-            x = x_start * alpha_next.sqrt() + \
-                c * pred_noise + \
-                sigma * noise
-
-            timesteps = torch.full((batch,), time_next, device=device, dtype=torch.long)
-            value_ = self.q_sample(value, timesteps) if (time > 0) else x
-            x = value_ * mask + (1.0 - mask) * x
-        return x
 
     @torch.no_grad()
     def inpaint_ddim_loop(self, shape, noise=None, constraint=None, return_diffusion=False, start_point=None):
@@ -1004,18 +849,6 @@ class GaussianDiffusion(nn.Module):
         else:
             return x
 
-    @torch.no_grad()
-    def conditional_sample(
-            self, shape, cond, constraint=None, *args, horizon=None, **kwargs
-    ):
-        """
-            conditions : [ (time, state), ... ]
-        """
-        device = self.betas.device
-        horizon = horizon or self.horizon
-
-        return self.p_sample_loop(shape, cond, *args, **kwargs)
-
     # ------------------------------------------ training ------------------------------------------#
 
     def q_sample(self, x_start, t, noise=None):     # blend noise into state variables
@@ -1097,15 +930,6 @@ class GaussianDiffusion(nn.Module):
     def forward(self, x, cond, t_override=None):
         return self.loss(x, cond, t_override)
 
-    def partial_denoise(self, x, cond, t):
-        x_noisy = self.noise_to_t(x, t)
-        return self.p_sample_loop(x.shape, cond, noise=x_noisy, start_point=t)
-
-    def noise_to_t(self, x, timestep):
-        batch_size = len(x)
-        t = torch.full((batch_size,), timestep, device=x.device).long()
-        return self.q_sample(x, t) if timestep > 0 else x
-
     def generate_samples(
             self,
             shape,
@@ -1122,18 +946,10 @@ class GaussianDiffusion(nn.Module):
                 func_class = self.inpaint_ddim_loop
             elif mode == "inpaint_ddim_guided":
                 func_class = self.inpaint_ddim_guided
-            elif mode == "guided_run_faster":
-                func_class = self.inpaint_ddim_loop_guided_run_faster
-            elif mode == "run_faster":
-                func_class = self.inpaint_ddim_run_faster
             elif mode == "extract_last_hidden_layer":
                 func_class = self.extract_last_hidden_layer_loop
             elif mode == "noise_denoise_at_each_t":
                 func_class = self.noise_denoise_at_each_t
-            # elif mode == "normal":
-            #     func_class = self.ddim_sample
-            # elif mode == "long":
-            #     func_class = self.long_ddim_sample
             else:
                 assert False, "Unrecognized inference mode"
             samples = (
