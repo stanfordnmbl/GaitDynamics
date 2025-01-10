@@ -201,8 +201,6 @@ def get_all_the_metrics(model_key):
         dset = dset_short + '_Formatted_No_Arm'
         if dset in dset_to_skip:
             continue
-        # if 'Tiziana2019' not in dset_short:     # !!!
-        #     continue
         metric_all_dsets['dset_short'].append(dset_short)
         param_true_dict, param_pred_dict, gait_phase_label = dset_data_profile_to_peak(true_[dset_short], pred_[dset_short], columns, dset_short)
 
@@ -322,9 +320,9 @@ def draw_fig_2(fast_run=False):
 def draw_fig_3(fast_run=False):
     def format_ticks(ax_plt):
         ax_plt.set_ylabel('Mean Absolute Error of Peak $f_v$ (\% Body Weight)', fontdict=FONT_DICT_SMALL)
-        ax_plt.set_yticks([0, 10, 20, 30, 40, 50, 60])
-        ax_plt.set_yticklabels([0, 10, 20, 30, 40, 50, 60], fontdict=FONT_DICT_SMALL)
-        ax_plt.set_ylim([0, 60])
+        ax_plt.set_yticks([0, 10, 20, 30, 40])
+        ax_plt.set_yticklabels([0, 10, 20, 30, 40], fontdict=FONT_DICT_SMALL)
+        ax_plt.set_ylim([0, 40])
         ax_plt.set_xlim([-0.3, 4.6])
         ax_plt.set_xticks([])
 

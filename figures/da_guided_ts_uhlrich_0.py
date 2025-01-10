@@ -24,8 +24,7 @@ def get_start_end_of_gait_cycle(grf_v):
 class MotionDatasetManipulated(MotionDataset):
     def customized_param_manipulation(self, trial_df, mtp_r_vel, mtp_l_vel):
         trial_df['lumbar_bending'] = trial_df['lumbar_bending'] * self.opt.x_times_lumbar_bending
-        self.manipulated_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('lumbar' in col)] + \
-                                   [opt.model_states_column_names.index(col) for col in ['pelvis_tx', 'pelvis_ty', 'pelvis_tz']]
+        self.manipulated_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('lumbar' in col)]
         self.do_not_follow_col_loc = [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('_vel' in col) or ('force' in col)]
         return trial_df, mtp_r_vel, mtp_l_vel
 
@@ -47,6 +46,7 @@ def loop_all(opt):
 
     sub_bl_true, sub_bl_pred, height_m_all, weight_kg_all = {}, {}, {}, {}
     sub_ts_true, sub_ts_pred = {}, {}
+    sub_bl_true_original_rate, sub_bl_pred_original_rate, sub_ts_true_original_rate, sub_ts_pred_original_rate = {}, {},  {}, {}
 
     gui = set_up_gui()
 
@@ -76,7 +76,7 @@ def loop_all(opt):
             value_diff_thd = torch.zeros([len(opt.model_states_column_names)])
 
             for i_dof in range(state_manipulated.shape[2]):
-                thd = (state_manipulated[:, :, i_dof].max() - state_manipulated[:, :, i_dof].min()) * 0.02
+                thd = (state_manipulated[:, :, i_dof].max() - state_manipulated[:, :, i_dof].min()) * 0.1
                 value_diff_thd[i_dof] = thd
 
             value_diff_thd[test_dataset_mani.manipulated_col_loc] = thd
@@ -113,22 +113,30 @@ def loop_all(opt):
             else:
                 continue
 
-            true_ = np.concatenate([true_val, true_moment], axis=-1)[start_:end_]
-            true_ = linear_resample_data_as_num_of_dp(true_, 101)
-            pred_ = np.concatenate([state_pred, pred_moments], axis=-1)[start_:end_]
-            pred_ = linear_resample_data_as_num_of_dp(pred_, 101)
+            true_original_rate = np.concatenate([true_val, true_moment], axis=-1)
+            true_ = linear_resample_data_as_num_of_dp(true_original_rate[start_:end_], 101)
+            pred_original_rate = np.concatenate([state_pred, pred_moments], axis=-1)
+            pred_ = linear_resample_data_as_num_of_dp(pred_original_rate[start_:end_], 101)
             if ('walking' in trial_of_this_win.sub_and_trial_name) and ('ts' not in trial_of_this_win.sub_and_trial_name.lower()):
                 if test_name not in sub_bl_true.keys():
                     sub_bl_true[test_name] = []
                     sub_bl_pred[test_name] = []
+                    sub_bl_true_original_rate[test_name] = []
+                    sub_bl_pred_original_rate[test_name] = []
                 sub_bl_true[test_name].append(true_)
                 sub_bl_pred[test_name].append(pred_)
+                sub_bl_true_original_rate[test_name].append(true_original_rate)
+                sub_bl_pred_original_rate[test_name].append(pred_original_rate)
             elif 'ts' in trial_of_this_win.sub_and_trial_name.lower():
                 if test_name not in sub_ts_true.keys():
                     sub_ts_true[test_name] = []
                     sub_ts_pred[test_name] = []
+                    sub_ts_true_original_rate[test_name] = []
+                    sub_ts_pred_original_rate[test_name] = []
                 sub_ts_true[test_name].append(true_)
                 sub_ts_pred[test_name].append(pred_)
+                sub_ts_true_original_rate[test_name].append(true_original_rate)
+                sub_ts_pred_original_rate[test_name].append(pred_original_rate)
 
             height_m_all[test_name] = trial_of_this_win.height_m
             weight_kg_all[test_name] = trial_of_this_win.weight_kg
@@ -137,25 +145,22 @@ def loop_all(opt):
             #     name_states_dict = {'true': true_val, 'pred': state_pred.detach().numpy()}
             #     show_skeletons(opt, name_states_dict, gui, skel_0)
 
-    pickle.dump([sub_bl_true, sub_bl_pred, None, None, opt.osim_dof_columns + moment_names,
-                 None, height_m_all, weight_kg_all], open(f"results/da_guided_baseline.pkl", "wb"))
-    pickle.dump([sub_ts_true, sub_ts_pred, None, None, opt.osim_dof_columns + moment_names,
-                 None, height_m_all, weight_kg_all], open(f"results/da_guided_trunk_sway.pkl", "wb"))
+    pickle.dump([sub_bl_true, sub_bl_pred, sub_bl_true_original_rate, sub_bl_pred_original_rate,
+                 opt.osim_dof_columns + moment_names, None, height_m_all, weight_kg_all], open(f"results/da_guided_baseline.pkl", "wb"))
+    pickle.dump([sub_ts_true, sub_ts_pred, sub_ts_true_original_rate, sub_ts_pred_original_rate,
+                 opt.osim_dof_columns + moment_names, None, height_m_all, weight_kg_all], open(f"results/da_guided_trunk_sway.pkl", "wb"))
 
 
 b3d_path = f'/mnt/d/Local/Data/MotionPriorData/uhlrich_dset/'
 
-""" To use this code,
-
-"""
 
 if __name__ == "__main__":
     opt = parse_opt()
-    opt.n_guided_steps = 5
-    opt.guidance_lr = 0.02
+    opt.n_guided_steps = 3
+    opt.guidance_lr = 0.01
     opt.guide_x_start_the_beginning_step = 1000
     opt.guide_x_start_the_end_step = 0
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'7680_diffusion'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'2560_diffusion'}.pt"
     loop_all(opt)
 
 

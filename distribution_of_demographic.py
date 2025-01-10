@@ -1,14 +1,9 @@
-import numpy as np
 from args import parse_opt, set_with_arm_opt
-import torch
 import os
 from model.model import MotionModel
 from data.addb_dataset import MotionDataset
-from figures.fig_utils import show_skeletons, set_up_gui
 import matplotlib.pyplot as plt
 
-
-gui = set_up_gui()
 
 if __name__ == "__main__":
     opt = parse_opt()

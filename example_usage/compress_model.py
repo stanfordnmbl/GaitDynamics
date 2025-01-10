@@ -129,11 +129,11 @@ if __name__ == '__main__':
     set_with_arm_opt(opt, False)
 
     # diffusion
-    checkpoint_path = os.getcwd() + '/../trained_models/train-7680_diffusion.pt'
+    checkpoint_path = os.getcwd() + '/../trained_models/train-2560_diffusion.pt'
     compress_model(checkpoint_path, DanceDecoder, 'GaitDynamicsDiffusion')
 
     # # full-body tf
-    # checkpoint_path = os.getcwd() + '/../trained_models/train-7680_tf.pt'
+    # checkpoint_path = os.getcwd() + '/../trained_models/train-2560_tf.pt'
     # compress_model(checkpoint_path, TransformerEncoderArchitecture, 'GaitDynamicsRefinement')
 
     # # hip-knee tf

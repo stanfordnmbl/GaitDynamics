@@ -15,6 +15,7 @@ __pycache__/
 *.mot
 *.pt
 *.trc
+*.webm
 cached_features/
 custom_music/
 data/AMASS

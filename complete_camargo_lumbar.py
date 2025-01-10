@@ -22,7 +22,7 @@ def load_model(opt):
     if opt.use_server:
         opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'no_camargo_carter'}/weights/train-{'5994'}.pt"
     else:
-        opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'7680_diffusion'}.pt"
+        opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/trained_models/train-{'2560_diffusion'}.pt"
     set_with_arm_opt(opt, False)
     model = MotionModel(opt)
     model_key = 'diffusion'

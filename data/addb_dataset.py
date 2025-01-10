@@ -72,8 +72,7 @@ class MotionDataset(Dataset):
             self.trials = self.divide_jittery_trials(self.trials, opt.model_states_column_names)
         self.guess_vel_and_replace_txtytz()
 
-        self.trial_num = len(self.trials)
-        if self.trial_num == 0:
+        if len(self.trials) == 0:
             print("No trials loaded")
             return None
         self.dset_and_trials = {}
@@ -87,7 +86,7 @@ class MotionDataset(Dataset):
             print(f"{dset_name}: {len(self.dset_and_trials[dset_name])} trials")
         total_hour = sum([trial.length for trial in self.trials]) / self.target_sampling_rate / 60 / 60
         total_clip_num = sum([trial.length for trial in self.trials]) / self.target_sampling_rate / 3
-        print(f"In total, {self.trial_num} trials, {total_hour} hours, {total_clip_num} clips not considering overlapping")
+        print(f"In total, {len(self.trials)} trials, {total_hour} hours, {total_clip_num} clips not considering overlapping")
         print(f"Removed trials: {self.num_of_excluded_trials}")
 
         if train:
@@ -131,7 +130,7 @@ class MotionDataset(Dataset):
 
         else:
             self.normalizer = normalizer
-        for i in range(self.trial_num):
+        for i in range(len(self.trials)):
             self.trials[i].converted_pose = self.normalizer.normalize(self.trials[i].converted_pose).clone().detach().float()
 
     def guess_vel_and_replace_txtytz(self):
@@ -317,6 +316,18 @@ class MotionDataset(Dataset):
                                       trial_.weight_kg, trial_.cond))
         return windows
 
+    def get_one_win_from_the_end_of_each_trial_with_offset(self, col_loc_to_unmask, end_offset):
+        windows = []
+        for i_trial, trial_ in enumerate(self.trials):
+            len_ = min(self.opt.window_len, trial_.length-end_offset)
+            mask = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
+            mask[-len_:, col_loc_to_unmask] = 1
+            pose = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
+            pose[-len_:] = trial_.converted_pose[-len_-end_offset:-end_offset]
+            windows.append(WindowData(pose, trial_.model_offsets, i_trial, None, mask, trial_.height_m,
+                                      trial_.weight_kg, trial_.cond))
+        return windows
+
     def get_all_gait_cycles_and_set_gait_phase_label(self):
         cycles_ = []
         for i_trial, trial_ in enumerate(self.trials):
@@ -450,7 +461,19 @@ class MotionDataset(Dataset):
                     continue
                 poses = [frame.pos for frame in first_passes]
                 forces = np.array([frame.groundContactForce for frame in first_passes])
-                cops = np.array([frame.groundContactCenterOfPressure for frame in first_passes])
+
+                if 'Carter' not in subject_path:
+                    cops = np.array([frame.groundContactCenterOfPressure for frame in first_passes])
+                else:
+                    plates = subject.readForcePlates(trial_id)
+                    if len(plates) == 1:
+                        cops = np.concatenate([np.array(plates[0].centersOfPressure), np.array(plates[0].centersOfPressure)], axis=1)
+                    elif len(plates) == 2:
+                        cops = np.concatenate([np.array(plates[1].centersOfPressure), np.array(plates[0].centersOfPressure)], axis=1)
+                    else:
+                        print(f'{subject_name}, {trial_id} has {len(plates)} force plates, skipping')
+                        continue
+
                 if self.restrict_contact_bodies and len(forces[0]) != 6:
                     self.num_of_excluded_trials['contact_body_num'] += 1
                     continue        # only include data with 2 contact bodies.
@@ -548,6 +571,7 @@ class MotionDataset(Dataset):
                                        dset_name, rot_mat, pos_vec, self.window_len, cond, mtp_r_vel, mtp_l_vel)
                 if self.include_trials_shorter_than_window_len or len(trial_data.available_win_start) > 0:
                     self.trials.append(trial_data)
+                    print(f'{sub_and_trial_name} loaded')
                 self.dset_set.add(dset_name)
 
                 if max_trial_num is not None and len(self.trials) >= max_trial_num:

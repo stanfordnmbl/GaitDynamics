@@ -203,7 +203,7 @@ class GaussianDiffusion(nn.Module):
         self.horizon = horizon
         self.transition_dim = repr_dim
         self.model = model
-        self.ema = EMA(0.99)
+        self.ema = EMA(0.999)
         self.master_model = copy.deepcopy(self.model)
         self.opt = opt
 
@@ -394,58 +394,6 @@ class GaussianDiffusion(nn.Module):
             return x
 
     @torch.no_grad()
-    def inpaint_ddim_guided(self, shape, noise=None, constraint=None, return_diffusion=False, start_point=None):
-        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
-
-        times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
-        times = list(reversed(times.int().tolist()))
-        time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
-
-        x = torch.randn(shape, device=device)
-        cond = constraint["cond"].to(device)
-
-        mask = constraint["mask"].to(device)  # batch x horizon x channels
-        value = constraint["value"].to(device)  # batch x horizon x channels
-        value_diff_thd = constraint["value_diff_thd"].to(device)  # channels
-        value_diff_weight = constraint["value_diff_weight"].to(device)  # channels
-
-        for time, time_next in time_pairs:
-            time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
-
-            if self.opt.guide_x_start_the_end_step <= time <= self.opt.guide_x_start_the_beginning_step:
-                x.requires_grad_()
-                with torch.enable_grad():
-                    for step_ in range(self.opt.n_guided_steps):
-                        pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
-                        value_diff = torch.subtract(x_start, value)
-                        loss = torch.relu(value_diff.abs() - value_diff_thd) * value_diff_weight
-                        grad = torch.autograd.grad([loss.sum()], [x])[0]
-                        x = x - self.opt.guidance_lr * grad
-
-            pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
-            if time_next < 0:
-                x = x_start
-                x = value * mask + (1.0 - mask) * x
-                return x
-
-            alpha = self.alphas_cumprod[time]
-            alpha_next = self.alphas_cumprod[time_next]
-
-            sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
-            c = (1 - alpha_next - sigma ** 2).sqrt()
-
-            noise = torch.randn_like(x)
-
-            x = x_start * alpha_next.sqrt() + \
-                c * pred_noise + \
-                sigma * noise
-
-            timesteps = torch.full((batch,), time_next, device=device, dtype=torch.long)
-            value_ = self.q_sample(value, timesteps) if (time > 0) else x
-            x = value_ * mask + (1.0 - mask) * x
-        return x
-
-    @torch.no_grad()
     def inpaint_ddim_loop(self, shape, noise=None, constraint=None, return_diffusion=False, start_point=None):
         batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
 
@@ -511,8 +459,6 @@ class GaussianDiffusion(nn.Module):
         if isinstance(shape, tuple):
             if mode == "inpaint":
                 func_class = self.inpaint_ddim_loop
-            elif mode == "inpaint_ddim_guided":
-                func_class = self.inpaint_ddim_guided
             else:
                 assert False, "Unrecognized inference mode"
             samples = (
@@ -803,7 +749,7 @@ class DiffusionShellForAdaptingTheOriginalFramework(nn.Module):
         super(DiffusionShellForAdaptingTheOriginalFramework, self).__init__()
         self.device = 'cuda'
         self.model = model
-        self.ema = EMA(0.99)
+        self.ema = EMA(0.999)
         self.master_model = copy.deepcopy(self.model)
 
     def set_normalizer(self, normalizer):
@@ -2428,11 +2374,10 @@ class MotionDataset(Dataset):
     def load_addb(self, opt):
         file_paths = []
         if os.path.isdir(self.data_path):
-            for root, dirs, files in os.walk(self.data_path):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    if file.endswith(".mot") and '_pred___' not in file:
-                        file_paths.append(file_path)
+            for file in os.listdir(self.data_path):
+                file_path = os.path.join(self.data_path, file)
+                if file.endswith(".mot") and '_pred___' not in file:
+                    file_paths.append(file_path)
 
         customOsim: nimble.biomechanics.OpenSimFile = nimble.biomechanics.OpenSimParser.parseOsim(self.subject_osim_model, self.opt.geometry_folder)
         skel = customOsim.skeleton
@@ -2535,7 +2480,6 @@ class TrialData:
         self.model_offsets = model_offsets
         self.height_m = height_m
         self.weight_kg = weight_kg
-        self.length = converted_states.shape[0]
         self.rot_mat_for_moving_direction_alignment = rot_mat_for_moving_direction_alignment
         self.pos_vec_for_pos_alignment = pos_vec_for_pos_alignment
         self.window_len = window_len
@@ -2616,8 +2560,8 @@ def usr_inputs():
 
 
 def predict_grf(opt):
-    model = BaselineModel(opt, TransformerEncoderArchitecture)
-    dataset = MotionDataset(opt, normalizer=model.normalizer)
+    refinement_model = BaselineModel(opt, TransformerEncoderArchitecture)
+    dataset = MotionDataset(opt, normalizer=refinement_model.normalizer)
     diffusion_model_for_filling = None
     filling_method = DiffusionFilling()
     for i_trial in range(len(dataset.trials)):
@@ -2640,7 +2584,7 @@ def predict_grf(opt):
             state_true = torch.stack([win.pose for win in windows_reconstructed[i_win:i_win+opt.batch_size_inference]])
             masks = torch.stack([win.mask for win in windows_reconstructed[i_win:i_win+opt.batch_size_inference]])
 
-            state_pred_list_batch = model.eval_loop(opt, state_true, masks, num_of_generation_per_window=1)[0]
+            state_pred_list_batch = refinement_model.eval_loop(opt, state_true, masks, num_of_generation_per_window=1)[0]
             state_pred_list.append(state_pred_list_batch)
 
         state_pred = torch.cat(state_pred_list, dim=0)
@@ -2658,10 +2602,6 @@ def predict_grf(opt):
         results_pred[:, -12:-9] = results_pred[:, -12:-9] * opt.weight_kg  # convert to N
         results_pred[:, -6:-3] = results_pred[:, -6:-3] * opt.weight_kg  # convert to N
         df = pd.DataFrame(results_pred, columns=opt.osim_dof_columns)
-
-        # plt.figure()        # !!!
-        # plt.plot(df['calcn_r_force_vy'].values[:1000], label='calcn_r_force_vx')
-        # plt.show()
 
         trial_save_path = f'{dataset.file_names[i_trial][:-4]}_pred___.mot'
         convertDfToGRFMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3))
