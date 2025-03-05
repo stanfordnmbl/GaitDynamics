@@ -1208,6 +1208,7 @@ def convertDfToGRFMot(df, out_folder, dt, max_time=None):
             out_file.write('\t' + str(0))
         out_file.write('\n')
     out_file.close()
+    print('GRF file exported to ' + out_folder)
 
 
 def rotation_6d_to_matrix(d6: torch.Tensor) -> torch.Tensor:

@@ -531,7 +531,7 @@ class GaussianDiffusion(nn.Module):
     @torch.no_grad()
     def inpaint_ddim_trust_sampling(self, shape, noise=None, constraint=None, return_diffusion=False, start_point=None):
         # From "Constrained Diffusion with Trust Sampling"
-        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 1
+        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
 
         times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
         times = list(reversed(times.int().tolist()))

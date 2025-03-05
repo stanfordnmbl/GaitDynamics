@@ -40,6 +40,7 @@ class MotionDataset(Dataset):
             restrict_contact_bodies=True,
             use_camargo_lumbar_reconstructed=False,
             check_cop_to_calcn_distance=True,
+            wrong_cop_ratio=0.002
     ):
         self.data_path = data_path
         self.trial_start_num = trial_start_num
@@ -54,6 +55,7 @@ class MotionDataset(Dataset):
         self.restrict_contact_bodies = restrict_contact_bodies
         self.use_camargo_lumbar_reconstructed = use_camargo_lumbar_reconstructed
         self.check_cop_to_calcn_distance = check_cop_to_calcn_distance
+        self.wrong_cop_ratio = wrong_cop_ratio
         self.skels = {}
         self.num_of_excluded_trials = {'contact_body_num': 0, 'trial_length': 0, 'lumbar_rotation': 0, 'wrong_cop': 0,
                                        'large_moving_direction_change': 0, 'jittery_sample': 0}
@@ -513,7 +515,7 @@ class MotionDataset(Dataset):
                     #       f' flipped {len(grf_flag_counts)} times, thus setting all to True.', end='')
                     probably_missing = [False] * len(probably_missing)
 
-                states = norm_cops(skel, states, opt, weight_kg, height_m, self.check_cop_to_calcn_distance)
+                states = norm_cops(skel, states, opt, weight_kg, height_m, self.check_cop_to_calcn_distance, self.wrong_cop_ratio)
                 if states is False:
                     print(f'{sub_and_trial_name} has CoP far away from foot, skipping')
                     self.num_of_excluded_trials['wrong_cop'] += 1

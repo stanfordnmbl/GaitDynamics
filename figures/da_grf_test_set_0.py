@@ -72,9 +72,9 @@ def load_baseline_model(opt, model_to_test):
     elif model_to_test == 3:
         model_architecture_class = SugaiNetArchitecture
         if opt.use_server:
-            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'SugaiNetArchitecture_ema999'}/weights/train-{'2000_sugainet'}.pt"
+            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'SugaiNetArchitecture_ema999'}/weights/train-{'2020_sugainet'}.pt"
         else:
-            opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'2000_sugainet'}.pt"
+            opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'2020_sugainet'}.pt"
         model_key = 'sugainet'
 
     set_with_arm_opt(opt, False)
@@ -403,6 +403,10 @@ def load_test_dataset_dict():
     for dset in DATASETS_NO_ARM:
         if dset in dset_to_skip:
             continue
+        if 'vanderZee2022' in dset:
+            wrong_cop_ratio = 0.01
+        else:
+            wrong_cop_ratio = 0.002
         print(dset)
         test_dataset = MotionDataset(
             data_path=opt.data_path_test,
@@ -414,6 +418,7 @@ def load_test_dataset_dict():
             include_trials_shorter_than_window_len=True,
             restrict_contact_bodies=False,
             max_trial_num=max_trial_num,
+            wrong_cop_ratio=wrong_cop_ratio
         )
         test_dataset_dict[dset] = test_dataset
     return test_dataset_dict

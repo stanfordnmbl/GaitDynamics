@@ -104,7 +104,7 @@ def inverse_norm_cops(skel, states, opt, sub_mass, height_m, grf_thd_to_zero_cop
     return states
 
 
-def norm_cops(skel, states, opt, sub_mass, height_m, check_cop_to_calcn_distance):
+def norm_cops(skel, states, opt, sub_mass, height_m, check_cop_to_calcn_distance, wrong_cop_ratio=0.002):
     grf_thd_to_zero_vector = 20
     states = torch.from_numpy(states)
     poses = states[:, opt.kinematic_osim_col_loc]
@@ -135,8 +135,9 @@ def norm_cops(skel, states, opt, sub_mass, height_m, check_cop_to_calcn_distance
 
         vector = (cops - heel_centers)[:, 3*i_plate:3*(i_plate+1)]
         stance_phase = force_vector[:, 1] > (50 / sub_mass)
-        if check_cop_to_calcn_distance and ((vector[stance_phase, :].abs() > 0.3).sum() / 3) > 0.002 * len(stance_phase):
-            return False
+        if check_cop_to_calcn_distance:
+            if ((vector[stance_phase, :].abs() > 0.3).sum() / 3) > wrong_cop_ratio * len(stance_phase):
+                return False
         normed_vector = vector * force_vector[:, 1:2] / height_m
         if grf_thd_to_zero_vector:
             normed_vector[force_vector[:, 1] * sub_mass < grf_thd_to_zero_vector] = 0

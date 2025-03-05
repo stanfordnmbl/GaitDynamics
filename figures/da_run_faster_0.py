@@ -38,11 +38,18 @@ def profile_to_peak(states, columns, model_offsets):
         start_conservative = stance_starts_conservative[i_start]
         start_ = stance_starts_conservative[i_start]
         for i in range(start_conservative-1, 0, -1):
-            if v_grf_r[i] > 0.2:          # 20% Body weight, roughly 15 N
+            if v_grf_r[i] < 1:          # 10% Body weight, roughly 15 N
                 start_ = i
-            else:
                 break
+            else:
+                continue
         end_ = stance_starts_conservative[i_start + 1]
+        for i in range(end_, 0, -1):
+            if v_grf_r[i] < 1:
+                end_ = i
+                break
+            else:
+                continue
 
         vilr = np.diff(states[start_:end_, columns.index('calcn_r_force_vy')]).max() * 9.81 / 100
         peak_apgrf = states[start_:end_, columns.index('calcn_r_force_vx')].max() * 9.81 / 100
@@ -149,11 +156,16 @@ def loop_one_sub(opt):
         value_diff_thd[test_dataset_40.do_not_follow_col_loc] = 999
 
         fix_seed()
-        start_time = time.time()
         state_pred = model.eval_loop(opt, state_syn, masks, value_diff_thd, value_diff_weight, cond=cond,
                                      num_of_generation_per_window=num_of_generation_per_window, mode='inpaint_ddim_guided')
-        end_time = time.time()
-        print('Took {:.2f} seconds'.format(end_time - start_time))
+
+        # # to test time
+        # start_time = time.time()
+        # state_pred = model.eval_loop(opt, state_syn.repeat(100, 1, 1), masks.repeat(100, 1, 1), value_diff_thd, value_diff_weight, cond=cond,
+        #                              num_of_generation_per_window=num_of_generation_per_window, mode='inpaint_ddim_guided')
+        # end_time = time.time()
+        # print('Took {:.2f} seconds'.format(end_time - start_time))
+
         state_pred = inverse_convert_addb_state_to_model_input(
             state_pred, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], height_m_tensor)
         state_pred_dict[syn_speed] = state_pred
@@ -262,8 +274,8 @@ def save_win_data(win_exp_dict, win_syn_dict):
 
 b3d_path = f'/mnt/d/Local/Data/MotionPriorData/hamner_dset/'
 opt = parse_opt()
-opt.n_guided_steps = 3
-opt.guidance_lr = 0.01
+opt.n_guided_steps = 5
+opt.guidance_lr = 0.02
 opt.guide_x_start_the_beginning_step = 1000
 opt.guide_x_start_the_end_step = 0
 opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/{'train-2560_diffusion.pt'}"

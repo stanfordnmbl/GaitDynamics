@@ -1,11 +1,9 @@
-import os
 import pickle
 import pandas as pd
 import numpy as np
 from args import parse_opt
-from fig_utils import show_skeletons, set_up_gui, format_axis, FONT_DICT_LARGE, LINE_WIDTH
+from fig_utils import format_axis
 from example_usage.gait_dynamics import convertDfToGRFMot
-import nimblephysics as nimble
 import matplotlib.pyplot as plt
 import matplotlib
 from matplotlib.animation import FuncAnimation, PillowWriter
@@ -44,11 +42,12 @@ def convertDfToMotionMot(df, out_path, dt, dof_to_include, max_time=None):
 
 def export_grf():
     trial_to_select_of_each_dset = {
+        'Camargo2021_Formatted_No_Arm': 81,
         'Moore2015_Formatted_No_Arm': 3,
         # 'vanderZee2022_Formatted_No_Arm': 1,
         'Wang2023_Formatted_No_Arm': 13,
     }
-    results_ = pickle.load(open(f"results/fast/tf_for_video.pkl", "rb"))
+    results_ = pickle.load(open(f"results/full/tf_for_video.pkl", "rb"))
 
     max_time = 300      # ms
     pause_time = 40     # ms
@@ -64,7 +63,7 @@ def export_grf():
 
         current_ms += (min(true_sub.shape[0], max_time)+pause_time)
         print('{}:{}'.format(int(np.floor(current_ms/100)), str(round((current_ms%100)/100*24)).zfill(2)))
-        print('From \n' + dset.split('20')[0] + ' et al., 20' + dset.split('20')[1][:2])
+        print('Data from ' + dset.split('20')[0] + ' et al., 20' + dset.split('20')[1][:2])
 
         force_magnitude_index = [i for i, col in enumerate(column_names) if 'force_v' in col]
         true_sub[:, force_magnitude_index] = true_sub[:, force_magnitude_index] * weight_kg
@@ -111,15 +110,16 @@ def export_grf():
 
 
 def export_walk_ts():
-    _, _, bl_true_ori, bl_pred_ori, columns, _, _, _, = \
+    _a, _b, bl_true_ori, bl_pred_ori, columns, _c, _d, _e, = \
         pickle.load(open(f"results/da_guided_baseline.pkl", "rb"))
     _, _, ts_true_ori, ts_pred_ori, columns, _, _, _, = \
         pickle.load(open(f"results/da_guided_trunk_sway.pkl", "rb"))
 
+    trial_index = 8
     to_export = {
-        'bl_exp': (bl_true_ori['_1'][9],),
-        'ts_exp': (ts_true_ori['_1'][9],),
-        'ts_syn': (bl_pred_ori['_2.5'][9],)
+        'bl_exp': (bl_true_ori['_1'][trial_index],),
+        'ts_exp': (ts_true_ori['_1'][trial_index],),
+        'ts_syn': (bl_pred_ori['_3'][trial_index],)
     }
 
     for trial_name, data_ in to_export.items():
@@ -130,26 +130,14 @@ def export_walk_ts():
         convertDfToGRFMot(generation_1ms_df, f'exports/mot_walk_{trial_name}_f.mot', 0.01, max_time=None)
         data_[0][:, force_magnitude_index] = data_[0][:, force_magnitude_index] / weight_kg
 
-    # customOsim = nimble.biomechanics.OpenSimParser.parseOsim(os.getcwd()+'/exports/walk3.osim', os.getcwd()+'/../example_usage/Geometry/')
-    # skel = customOsim.skeleton
-    # gui = set_up_gui()
-    # name_states_dict = {
-    #     'experiment baseline': to_export['bl_exp'][0][:, :35],
-    #     'experiment trunk sway': to_export['ts_exp'][0][:, :35],
-    #     'synthesized trunk sway': to_export['ts_syn'][0][:, :35],
-    # }
-    # opt = parse_opt()
-    # for _ in range(20):
-    #     show_skeletons(opt, name_states_dict, gui, skel)
-
 
 def export_running_speeds(angle_to_plot='knee_angle_r'):
     win_exp_list, win_syn_list = pickle.load(open(f"results/da_run_faster_win.pkl", "rb"))
 
     to_export = {
-        'exp_400': [win_exp_list[1][1],],
-        'syn_300': [win_syn_list[1][0],],
-        'syn_500': [win_syn_list[1][-1],],
+        'exp_400': [win_exp_list[6][1],],
+        'syn_300': [win_syn_list[6][0],],
+        'syn_500': [win_syn_list[6][-1],],
     }
 
     for trial_name, data_ in to_export.items():
@@ -165,7 +153,7 @@ def export_running_speeds(angle_to_plot='knee_angle_r'):
 
     matplotlib.rc('font', size=14)
     colors = [np.array(x) / 255 for x in [[110, 170, 220], [30, 90, 140], [177, 124, 90]]]
-    fig, ax = plt.subplots(figsize=(6, 5))
+    fig, ax = plt.subplots(figsize=(6, 6))
     line2 = ax.plot(to_export['syn_500'][1][:1], '--', linewidth=2, label=f'5.0 m/s - synthetic', color=colors[0])[0]
     line1 = ax.plot(to_export['exp_400'][1][:1], linewidth=2, label=f'4.0 m/s - experimental', color=colors[2])[0]
     line0 = ax.plot(to_export['syn_300'][1][:1], '--', linewidth=2, label=f'3.0 m/s - synthetic', color=colors[1])[0]
@@ -194,8 +182,8 @@ def export_running_speeds(angle_to_plot='knee_angle_r'):
 if __name__ == "__main__":
     weight_kg = 70
     opt = parse_opt()
-    # export_grf()
-    # export_walk_ts()
+    export_grf()
+    export_walk_ts()
     export_running_speeds()
 
 

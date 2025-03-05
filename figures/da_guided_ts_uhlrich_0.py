@@ -138,8 +138,12 @@ def loop_all(opt):
                 sub_ts_true_original_rate[test_name].append(true_original_rate)
                 sub_ts_pred_original_rate[test_name].append(pred_original_rate)
 
-            height_m_all[test_name] = trial_of_this_win.height_m
-            weight_kg_all[test_name] = trial_of_this_win.weight_kg
+            if test_name not in height_m_all.keys():
+                height_m_all[test_name] = []
+                weight_kg_all[test_name] = []
+            if ('walking' in trial_of_this_win.sub_and_trial_name) and ('ts' not in trial_of_this_win.sub_and_trial_name.lower()):
+                height_m_all[test_name].append(trial_of_this_win.height_m)
+                weight_kg_all[test_name].append(trial_of_this_win.weight_kg)
 
             # if x_times_lumbar_bending > 1:
             #     name_states_dict = {'true': true_val, 'pred': state_pred.detach().numpy()}
@@ -156,8 +160,8 @@ b3d_path = f'/mnt/d/Local/Data/MotionPriorData/uhlrich_dset/'
 
 if __name__ == "__main__":
     opt = parse_opt()
-    opt.n_guided_steps = 3
-    opt.guidance_lr = 0.01
+    opt.n_guided_steps = 5
+    opt.guidance_lr = 0.02
     opt.guide_x_start_the_beginning_step = 1000
     opt.guide_x_start_the_end_step = 0
     opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'2560_diffusion'}.pt"
