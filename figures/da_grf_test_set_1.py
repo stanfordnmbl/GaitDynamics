@@ -8,7 +8,7 @@ from da_grf_test_set_0 import cols_to_unmask, dset_to_skip, drop_frame_num_range
 from data.addb_dataset import MotionDataset
 from matplotlib import rc, lines
 from fig_utils import FONT_DICT_SMALL, FONT_SIZE_SMALL, format_axis, LINE_WIDTH, FONT_DICT_X_SMALL
-from scipy.stats import friedmanchisquare, wilcoxon
+from scipy.stats import friedmanchisquare, wilcoxon, ttest_rel
 
 
 def format_errorbar_cap(caplines, size=15):
@@ -279,10 +279,10 @@ def draw_fig_2(fast_run=False):
     metric_sugainet = get_all_the_metrics(model_key=f'/{folder}/sugainet_none_diffusion_filling')
 
     params_name_formal_name_pairs = {
-        'calcn_l_force_vy': 'Vertical\nForce (Profile)',
-        'calcn_l_force_vx': 'Anterior-Posterior\nForce (Profile)',
-        'calcn_l_force_vz': 'Medial-Lateral\nForce (Profile)',
-        'calcn_l_force_vy_max': 'Vertical\nForce (Peak)'}
+        'calcn_l_force_vy': 'Vertical\nForce - Profile',
+        'calcn_l_force_vx': 'Anterior-Posterior\nForce - Profile',
+        'calcn_l_force_vz': 'Medial-Lateral\nForce - Profile',
+        'calcn_l_force_vy_max': 'Vertical\nForce - Peak'}
     params_of_interest = list(params_name_formal_name_pairs.keys())
 
     rc('text', usetex=True)
@@ -291,6 +291,7 @@ def draw_fig_2(fast_run=False):
     fig = plt.figure(figsize=(7.7, 4.5))
     print('Parameter\t\tAll\t\t1-2\t\t1-3\t\t2-3')
     for i_axis, param in enumerate(params_of_interest):
+        # print(np.mean(metric_tf[param]))
         bar_locs = [i_axis, i_axis + 0.25, i_axis + 0.5]
         mean_ = [np.mean(ele) for ele in [metric_tf[param], metric_groundlink[param], metric_sugainet[param]]]
         std_ = [np.std(ele) for ele in [metric_tf[param], metric_groundlink[param], metric_sugainet[param]]]
@@ -333,7 +334,7 @@ def draw_fig_2(fast_run=False):
 
 def draw_fig_3(fast_run=False):
     def format_ticks(ax_plt):
-        ax_plt.text(-0.7, 20, 'Mean Absolute Error of Vertical Force Estimation (\% BW)', rotation=90, fontdict=FONT_DICT_SMALL, verticalalignment='center')
+        ax_plt.text(-0.7, 17, 'Mean Absolute Error of Peak Vertical Force Estimation (\% BW)', rotation=90, fontdict=FONT_DICT_SMALL, verticalalignment='center')
         ax_plt.text(-1., 37, 'Better', rotation=90, fontdict=FONT_DICT_SMALL, color='green', verticalalignment='center')
         ax_plt.annotate('', xy=(-0.11, 0.8), xycoords='axes fraction', xytext=(-0.11, 1.),
                         arrowprops=dict(arrowstyle="->", color='green'))
@@ -424,6 +425,24 @@ def draw_fig_4(fast_run=False):
     plt.show()
 
 
+def p_val_with_without_data_filter(fast_run=False):
+    folder = 'fast' if fast_run else 'full'
+    metric_tf_filtered = get_all_the_metrics(model_key=f'/{folder}/tf_none_diffusion_filling')
+    metric_tf_unfiltered = get_all_the_metrics(model_key=f'/{folder}/tf_no_data_filter_none_diffusion_filling')
+
+    params_name_formal_name_pairs = {
+        'calcn_l_force_vy': 'Vertical\nForce - Profile',
+        'calcn_l_force_vx': 'Anterior-Posterior\nForce - Profile',
+        'calcn_l_force_vz': 'Medial-Lateral\nForce - Profile',
+        'calcn_l_force_vy_max': 'Vertical\nForce - Peak'}
+    params_of_interest = list(params_name_formal_name_pairs.keys())
+    # print('Parameter\t\tAll\t\t1-2\t\t1-3\t\t2-3')
+    for i_axis, param in enumerate(params_of_interest):
+        print(param, end='\t')
+        p_val = wilcoxon(metric_tf_filtered[param], metric_tf_unfiltered[param]).pvalue
+        print(round(p_val, 3))
+
+
 opt = parse_opt()
 if __name__ == "__main__":
     # get_all_the_metrics(model_key=f'/full/tf_none_diffusion_filling')
@@ -433,6 +452,7 @@ if __name__ == "__main__":
     # draw_fig_2()
     # draw_fig_3()
     # draw_fig_4()
+    # p_val_with_without_data_filter()
 
 
 

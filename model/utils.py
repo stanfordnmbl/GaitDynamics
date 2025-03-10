@@ -295,7 +295,7 @@ def model_states_osim_dof_conversion(model_states, opt):
     return osim_dofs
 
 
-def align_moving_direction(poses, column_names):
+def align_moving_direction(poses, column_names, exclude_trial_with_large_angle_diff=True):
     if isinstance(poses, np.ndarray):
         poses = torch.from_numpy(poses)
     pose_clone = poses.clone().float()
@@ -319,7 +319,7 @@ def align_moving_direction(poses, column_names):
     l_cop = pose_clone[:, l_cop_col_loc]
 
     angles = np.arctan2(- pelvis_orientation[:, 0, 2], pelvis_orientation[:, 2, 2])
-    if np.rad2deg(angles.max() - angles.min()) > 45:
+    if exclude_trial_with_large_angle_diff and np.rad2deg(angles.max() - angles.min()) > 45:
         return False, None
     angle = angles.median()
     rot_mat = torch.tensor([[np.cos(angle), 0, np.sin(angle)], [0, 1, 0], [-np.sin(angle), 0, np.cos(angle)]]).float()

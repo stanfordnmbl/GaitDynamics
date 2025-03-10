@@ -97,39 +97,6 @@ class MotionDataset(Dataset):
 
             self.normalizer = Normalizer(data_concat, range(data_concat.shape[1]))            # Norm center and force
 
-            # # [debug] check data continuity    # TODO: Might need to check if 1D joints are continuous
-            # import matplotlib.pyplot as plt
-            # for trial in self.trials:
-            #     plt.figure()
-            #     # plt.plot(trial.converted_pose[:, 8])
-            #     # plt.plot(trial.converted_pose[:, 6])
-            #     plt.plot(np.abs(trial.converted_pose[1:, 8] - trial.converted_pose[:-1, 8]))
-            #     plt.plot(np.abs(trial.converted_pose[1:, 6] - trial.converted_pose[:-1, 6]))
-            # plt.show()
-            #
-            # sub_and_trial_names, dset_names = self.get_attributes_of_trials()
-            #
-            # num_of_sample_to_check = 100
-            # sampled_data = [self[0] for _ in range(num_of_sample_to_check)]
-            #
-            # data_concat_check = [item_[0] for item_ in sampled_data]
-            # sub_and_trial_names_data_concat = [item_[2] for item_ in sampled_data]
-            # data_concat_check = torch.cat(data_concat_check, dim=0)
-            #
-            # # data_concat_check = self.normalizer.normalize(data_concat_check)
-            # data_concat_check = data_concat_check.reshape([num_of_sample_to_check, -1, 30])
-            # values = (data_concat_check[:, 1:] - data_concat_check[:, :-1]).abs()
-            # print('{:.3f}'.format(values.mean()), end=' +- ')
-            # print('{:.3f}'.format(values.std()))
-            # print('{:.3f}'.format(values.max()))
-            #
-            # # print('{:.3f}'.format(values[:, :, 14].max()))
-            #
-            # values_np = values.cpu().numpy()
-            #
-            # max_index = np.where(values_np > values_np.max() - 0.1)
-            # print(max_index)
-
         else:
             self.normalizer = normalizer
         for i in range(len(self.trials)):

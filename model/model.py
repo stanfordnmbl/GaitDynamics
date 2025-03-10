@@ -217,7 +217,7 @@ class MotionModel:
 
                         wandb.log(log_dict)
 
-            if (epoch % 20) == 0 or epoch == opt.epochs or epoch in [2560, 5120]:
+            if (epoch % 997) == 0 or epoch == opt.epochs or epoch in [2560, 5120]:
                 ckpt.pop("model_state_dict")
                 torch.save(ckpt, os.path.join(wdir, f"train-{epoch}_{self.model}.pt"))
                 print(f"[MODEL SAVED at Epoch {epoch}]")

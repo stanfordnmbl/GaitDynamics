@@ -64,23 +64,23 @@ def draw_fig():
                 bl_true, bl_pred, ts_true, condition, params_of_interest_col_loc)]
 
             if i == 0:
-                print('Pred 1st peak diff {:.2f}'.format(true_averaged[:, i].max() - pred_averaged[:, i].max()))
-                print('Pred 2st peak diff {:.2f}'.format(true_averaged[51:, i].max() - pred_averaged[51:, i].max()))
+                print('Pred 1st peak diff {:.1f}'.format(true_averaged[:, i].max() - pred_averaged[:, i].max()))
+                print('Pred 2st peak diff {:.1f}'.format(true_averaged[51:, i].max() - pred_averaged[51:, i].max()))
             elif i == 1:
-                print('Pred 1st peak value {:.2f}'.format(pred_averaged[:, i].max()))
+                print('Pred 1st peak value {:.1f}'.format(pred_averaged[:, i].max()))
             ax.plot(pred_averaged[:, i], '--', color=colors[i_condition], linewidth=LINE_WIDTH_THICK, label=f'{condition_val} x Normal Trunk Sway - Synthetic         ')
-            ax.grid(True, linewidth=1, alpha=0.5)
+            # ax.grid(True, linewidth=1, alpha=0.5)
             if i_condition == len(condition_list) - 1:
                 ax.plot(true_averaged[:, i], '-', color=[0.4, 0.4, 0.4], label='Normal Walking - Experimental [38]')
                 ax.fill_between(range(len(true_averaged)), true_averaged[:, i] - true_std[:, i], true_averaged[:, i] + true_std[:, i], color='gray', alpha=0.3)
                 ax.plot(ts_averaged[:, i], '-', color=colors[3], label='Large Trunk Sway - Experimental [38]')
                 ax.fill_between(range(len(ts_averaged)), ts_averaged[:, i] - ts_std[:, i], ts_averaged[:, i] + ts_std[:, i], color=colors[-1], alpha=0.3)
                 if i == 0:
-                    print('Exp 1st peak diff {:.2f}'.format(true_averaged[:, i].max() - ts_averaged[:, i].max()))
-                    print('Exp 2st peak diff {:.2f}'.format(true_averaged[51:, i].max() - ts_averaged[51:, i].max()))
+                    print('Exp 1st peak diff {:.1f}'.format(true_averaged[:, i].max() - ts_averaged[:, i].max()))
+                    print('Exp 2st peak diff {:.1f}'.format(true_averaged[51:, i].max() - ts_averaged[51:, i].max()))
                 elif i == 1:
-                    print('Exp normal gait 1st peak value {:.2f}'.format(true_averaged[:, i].max()))
-                    print('Exp large trunk sway 1st peak value {:.2f}'.format(ts_averaged[:, i].max()))
+                    print('Exp normal gait 1st peak value {:.1f}'.format(true_averaged[:, i].max()))
+                    print('Exp large trunk sway 1st peak value {:.1f}'.format(ts_averaged[:, i].max()))
             format_axis(ax)
 
     plt.legend(frameon=False, bbox_to_anchor=(1.7, 1.6), ncol=2)       # fontsize=font_size,

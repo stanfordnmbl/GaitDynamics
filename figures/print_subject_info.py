@@ -18,7 +18,7 @@ def get_heights_weights(data_path):
                 if file.endswith(".b3d"):
                     subject_paths.append(file_path)
 
-    dset_subject_names, weights, heights, ages = [], [], [], []
+    dset_subject_names, weights, heights, ages, sexes = [], [], [], [], []
     for i_sub, subject_path in enumerate(subject_paths):
         try:
             subject = nimble.biomechanics.SubjectOnDisk(subject_path)
@@ -43,8 +43,10 @@ def get_heights_weights(data_path):
         weights.append(weight_kg)
         age = subject.getAgeYears()
         ages.append(age)
+        sex = subject.getBiologicalSex()
+        sexes.append(sex)
 
-    return heights, weights, dset_subject_names, ages
+    return heights, weights, dset_subject_names, ages, sexes
 
 
 def get_text_from_log(log_path):
@@ -88,8 +90,11 @@ def get_total_num_of_removed_trials(lines_removed_trial_num_train, lines_removed
 
 
 if __name__ == "__main__":
-    heights_train, weights_train, subject_names_train, ages_train = get_heights_weights('/dataNAS/people/alanttan/mfm/data/b3d_no_arm/train_cleaned/')
-    heights_test, weights_test, subject_names_test, ages_test = get_heights_weights('/dataNAS/people/alanttan/mfm/data/b3d_no_arm/test_cleaned/')
+    heights_train, weights_train, subject_names_train, ages_train, sexes_train = get_heights_weights('/dataNAS/people/alanttan/mfm/data/b3d_no_arm/train_cleaned/')
+    heights_test, weights_test, subject_names_test, ages_test, sexes_test = get_heights_weights('/dataNAS/people/alanttan/mfm/data/b3d_no_arm/test_cleaned/')
+
+    print(ages_train+ages_test)
+    print(sexes_train+sexes_test)
 
     print(np.sort(subject_names_train))
     print('Num subjects: {}'.format(len(heights_train)))

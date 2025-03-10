@@ -1,6 +1,6 @@
 
 # GaitDynamics: A Foundation Model for Analyzing Gait Dynamics 
-By Tian Tan, Tom Van Wouwe, Keenon F. Werling, Scott L. Delp, Jennifer L. Hicks, C. Karen Liu, and Akshay S. Chaudhari
+By Tian Tan, Tom Van Wouwe, Keenon F. Werling, C. Karen Liu, Scott L. Delp, Jennifer L. Hicks, and Akshay S. Chaudhari
 
 ## Exclusive Summary
 GaitDynamics is a generative foundation model for general-purpose gait dynamics prediction.

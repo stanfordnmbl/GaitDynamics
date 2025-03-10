@@ -31,11 +31,7 @@ def convert_overlapped_list_to_array(trial_len, win_list, s_, e_, fun=np.nanmedi
 def load_model(model_to_test):
     if model_to_test == 0:
         model, model_key = load_diffusion_model(opt)
-    elif model_to_test == 1:
-        model, model_key = load_baseline_model(opt, model_to_test=model_to_test)
-    elif model_to_test == 2:
-        model, model_key = load_baseline_model(opt, model_to_test=model_to_test)
-    elif model_to_test == 3:
+    elif model_to_test in [1, 2, 3, 4]:
         model, model_key = load_baseline_model(opt, model_to_test=model_to_test)
     else:
         raise ValueError('Invalid model_to_test')
@@ -76,6 +72,13 @@ def load_baseline_model(opt, model_to_test):
         else:
             opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'2020_sugainet'}.pt"
         model_key = 'sugainet'
+    elif model_to_test == 4:
+        model_architecture_class = TransformerEncoderArchitecture
+        if opt.use_server:
+            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'no_data_filter'}/weights/train-{'7680_tf'}.pt"
+        else:
+            raise RuntimeError('Only available on server')
+        model_key = 'tf_no_data_filter'
 
     set_with_arm_opt(opt, False)
     model = BaselineModel(opt, model_architecture_class, EMA=True)
@@ -168,7 +171,7 @@ def loop_mask_segment_conditions(model, model_key, test_dataset_dict):
     n_split = 10
     diffusion_model_for_filling, _ = load_diffusion_model(opt)
     for mask_key, unmask_col_loc in cols_to_unmask.items():
-        if model_key in ['groundlink', 'sugainet'] and mask_key != 'none':
+        if model_key in ['groundlink', 'sugainet', 'tf_no_data_filter'] and mask_key != 'none':
             continue
         print(mask_key)
         masked_state_names = [opt.model_states_column_names[i] for i in opt.kinematic_diffusion_col_loc if i not in unmask_col_loc]
@@ -456,7 +459,7 @@ dset_specific_trial['Wang2023_Formatted_No_Arm'] = ['walk', 'run']
 skel_num = 2
 
 if __name__ == "__main__":
-    # 0: diffusion, 1: tf, 2: groundlink, 3: Sugai LSTM
+    # 0: diffusion, 1: tf, 2: groundlink, 3: Sugai LSTM, 4: tf no data filter
     model_to_test = 1
     max_trial_num = None     # None for all trials
 
