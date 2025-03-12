@@ -59,7 +59,7 @@ def draw_fig():
     ax_angles = fig.add_subplot(gs[1, 0])
     for i, (ax, scale) in enumerate(zip([ax_kam, ax_angles], [1, - 180/np.pi])):
         for i_condition, condition in enumerate(condition_list):
-            condition_val = condition.split('_')[-1]
+            condition_val = float(condition.split('_')[-1])
             true_averaged, pred_averaged, ts_averaged, true_std, pred_std, ts_std = [scale * ele for ele in get_average_and_std(
                 bl_true, bl_pred, ts_true, condition, params_of_interest_col_loc)]
 
@@ -68,12 +68,12 @@ def draw_fig():
                 print('Pred 2st peak diff {:.1f}'.format(true_averaged[51:, i].max() - pred_averaged[51:, i].max()))
             elif i == 1:
                 print('Pred 1st peak value {:.1f}'.format(pred_averaged[:, i].max()))
-            ax.plot(pred_averaged[:, i], '--', color=colors[i_condition], linewidth=LINE_WIDTH_THICK, label=f'{condition_val} x Normal Trunk Sway - Synthetic         ')
+            ax.plot(pred_averaged[:, i], '--', color=colors[i_condition], linewidth=LINE_WIDTH_THICK, label='{:.1f} x Normal Trunk Sway - Synthetic         '.format(condition_val))
             # ax.grid(True, linewidth=1, alpha=0.5)
             if i_condition == len(condition_list) - 1:
-                ax.plot(true_averaged[:, i], '-', color=[0.4, 0.4, 0.4], label='Normal Walking - Experimental [38]')
+                ax.plot(true_averaged[:, i], '-', color=[0.4, 0.4, 0.4], label='Normal Walking - Experimental')
                 ax.fill_between(range(len(true_averaged)), true_averaged[:, i] - true_std[:, i], true_averaged[:, i] + true_std[:, i], color='gray', alpha=0.3)
-                ax.plot(ts_averaged[:, i], '-', color=colors[3], label='Large Trunk Sway - Experimental [38]')
+                ax.plot(ts_averaged[:, i], '-', color=colors[3], label='Large Trunk Sway - Experimental')
                 ax.fill_between(range(len(ts_averaged)), ts_averaged[:, i] - ts_std[:, i], ts_averaged[:, i] + ts_std[:, i], color=colors[-1], alpha=0.3)
                 if i == 0:
                     print('Exp 1st peak diff {:.1f}'.format(true_averaged[:, i].max() - ts_averaged[:, i].max()))

@@ -279,10 +279,10 @@ def draw_fig_2(fast_run=False):
     metric_sugainet = get_all_the_metrics(model_key=f'/{folder}/sugainet_none_diffusion_filling')
 
     params_name_formal_name_pairs = {
-        'calcn_l_force_vy': 'Vertical\nForce - Profile',
-        'calcn_l_force_vx': 'Anterior-Posterior\nForce - Profile',
-        'calcn_l_force_vz': 'Medial-Lateral\nForce - Profile',
-        'calcn_l_force_vy_max': 'Vertical\nForce - Peak'}
+        'calcn_l_force_vy': 'Vertical\nForce—Profile',
+        'calcn_l_force_vx': 'Anterior-Posterior\nForce—Profile',
+        'calcn_l_force_vz': 'Medial-Lateral\nForce\u2014Profile',
+        'calcn_l_force_vy_max': 'Vertical\nForce\u2014Peak'}
     params_of_interest = list(params_name_formal_name_pairs.keys())
 
     rc('text', usetex=True)
@@ -310,23 +310,23 @@ def draw_fig_2(fast_run=False):
 
     # From "Comparison of different machine learning models to enhance sacral acceleration-based estimations of running stride temporal variables and peak vertical ground reaction force"
     line0, = plt.plot([2.8, 3.7], [13, 13], '--', linewidth=2, color=[0.0, 0.0, 0.0], alpha=0.5)
-    plt.text(4.1, 14, 'Running MDC - Healthy [25]', fontdict=FONT_DICT_SMALL, color=[0.0, 0.0, 0.0], va='center')
+    plt.text(4.1, 14, 'Running MDC - Healthy$^{\ 31}$', fontdict=FONT_DICT_SMALL, color=[0.0, 0.0, 0.0], va='center')
     plt.annotate('', xytext=(4.05, 14), xycoords='data', xy=(3.75, 13), arrowprops=dict(arrowstyle="->"))
 
     # From "Intra-rater repeatability of gait parameters in healthy adults during self-paced treadmill-based virtual reality walking"
     line1, = plt.plot([2.8, 3.7], [10.18, 10.18], '--', linewidth=2, color=[0.0, 0.0, 0.0], alpha=0.5)
-    plt.text(4.1, 11.18, 'Walking MDC - Healthy [26]', fontdict=FONT_DICT_SMALL, color=[0.0, 0.0, 0.0], va='center')
+    plt.text(4.1, 11.18, 'Walking MDC - Healthy$^{\ 32}$', fontdict=FONT_DICT_SMALL, color=[0.0, 0.0, 0.0], va='center')
     plt.annotate('', xytext=(4.05, 11.18), xycoords='data', xy=(3.75, 10.18), arrowprops=dict(arrowstyle="->"))
 
     # and "Minimal detectable change for gait variables collected during treadmill walking in individuals post-stroke"
     line2, = plt.plot([2.8, 3.7], [4.65, 4.65], '--', linewidth=2, color=[0.0, 0.0, 0.0], alpha=0.5)
-    plt.text(4.1, 5.65, 'Walking MDC - Stroke [27]', fontdict=FONT_DICT_SMALL, color=[0.0, 0.0, 0.0], va='center')
+    plt.text(4.1, 5.65, 'Walking MDC - Stroke$^{\ 33}$', fontdict=FONT_DICT_SMALL, color=[0.0, 0.0, 0.0], va='center')
     plt.annotate('', xytext=(4.05, 5.65), xycoords='data', xy=(3.75, 4.65), arrowprops=dict(arrowstyle="->"))
 
     format_axis(plt.gca())
     format_ticks(plt.gca())
     plt.tight_layout(rect=[-0.03, 0., 1.03, 0.88])
-    plt.legend(list(bars), ['GaitDynamics', 'Convolutional Neural Network [19]', 'Recurrent Neural Network [20]'],
+    plt.legend(list(bars), ['GaitDynamics', 'Convolutional Neural Network$^{\ 21}$', 'Recurrent Neural Network$^{\ 22}$'],
                frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0.7, 1.2), ncols=1)
     plt.savefig(f'exports/da_grf.png', dpi=300, bbox_inches='tight')
     plt.show()
@@ -384,7 +384,7 @@ def draw_fig_3(fast_run=False):
     format_axis(plt.gca())
     format_ticks(ax_plt)
     ax_plt.legend(list(bars) + [line_1], [
-        'Partial-Body Kinematics with Inpainting Filling (GaitDynamics)', 'Partial-Body Kinematics with Median Filling', 'Full-Body Kinematics (GaitDynamics)'],
+        'Partial-Body Kinematics with Inpainting (GaitDynamics)', 'Partial-Body Kinematics with Median Filling', 'Full-Body Kinematics (GaitDynamics)'],
                   frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0., 0.88), loc='lower left')
     plt.savefig(f'exports/da_segment_filling.png', dpi=300, bbox_inches='tight')
     plt.show()

@@ -157,7 +157,7 @@ def draw_speed_only_fig():
 
         if i_param == 1:
             ax.legend([ebar1, ebar0, ebar2],
-                      ['Experimental Measurement[xxxx]', 'GaitDynamics Generation', 'OmniControl Generation [36]'],
+                      ['Experimental Measurement', 'GaitDynamics Generation', 'OmniControl Generation'],
                       frameon=False, bbox_to_anchor=(0.8, 1.25), ncol=3, handlelength=4)
     plt.subplots_adjust(.08, .08, .98, .92)
     plt.savefig(f'exports/da_run_faster_1.png', dpi=300)
