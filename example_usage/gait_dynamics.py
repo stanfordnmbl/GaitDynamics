@@ -1,3 +1,4 @@
+# Define functions and run GaitDynamics.
 import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset
@@ -203,7 +204,7 @@ class GaussianDiffusion(nn.Module):
         self.horizon = horizon
         self.transition_dim = repr_dim
         self.model = model
-        self.ema = EMA(0.999)
+        self.ema = EMA(0.99)
         self.master_model = copy.deepcopy(self.model)
         self.opt = opt
 
@@ -394,6 +395,58 @@ class GaussianDiffusion(nn.Module):
             return x
 
     @torch.no_grad()
+    def inpaint_ddim_guided(self, shape, noise=None, constraint=None, return_diffusion=False, start_point=None):
+        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
+
+        times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
+        times = list(reversed(times.int().tolist()))
+        time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
+
+        x = torch.randn(shape, device=device)
+        cond = constraint["cond"].to(device)
+
+        mask = constraint["mask"].to(device)  # batch x horizon x channels
+        value = constraint["value"].to(device)  # batch x horizon x channels
+        value_diff_thd = constraint["value_diff_thd"].to(device)  # channels
+        value_diff_weight = constraint["value_diff_weight"].to(device)  # channels
+
+        for time, time_next in time_pairs:
+            time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
+
+            if self.opt.guide_x_start_the_end_step <= time <= self.opt.guide_x_start_the_beginning_step:
+                x.requires_grad_()
+                with torch.enable_grad():
+                    for step_ in range(self.opt.n_guided_steps):
+                        pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
+                        value_diff = torch.subtract(x_start, value)
+                        loss = torch.relu(value_diff.abs() - value_diff_thd) * value_diff_weight
+                        grad = torch.autograd.grad([loss.sum()], [x])[0]
+                        x = x - self.opt.guidance_lr * grad
+
+            pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
+            if time_next < 0:
+                x = x_start
+                x = value * mask + (1.0 - mask) * x
+                return x
+
+            alpha = self.alphas_cumprod[time]
+            alpha_next = self.alphas_cumprod[time_next]
+
+            sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
+            c = (1 - alpha_next - sigma ** 2).sqrt()
+
+            noise = torch.randn_like(x)
+
+            x = x_start * alpha_next.sqrt() + \
+                c * pred_noise + \
+                sigma * noise
+
+            timesteps = torch.full((batch,), time_next, device=device, dtype=torch.long)
+            value_ = self.q_sample(value, timesteps) if (time > 0) else x
+            x = value_ * mask + (1.0 - mask) * x
+        return x
+
+    @torch.no_grad()
     def inpaint_ddim_loop(self, shape, noise=None, constraint=None, return_diffusion=False, start_point=None):
         batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
 
@@ -459,6 +512,8 @@ class GaussianDiffusion(nn.Module):
         if isinstance(shape, tuple):
             if mode == "inpaint":
                 func_class = self.inpaint_ddim_loop
+            elif mode == "inpaint_ddim_guided":
+                func_class = self.inpaint_ddim_guided
             else:
                 assert False, "Unrecognized inference mode"
             samples = (
@@ -749,7 +804,7 @@ class DiffusionShellForAdaptingTheOriginalFramework(nn.Module):
         super(DiffusionShellForAdaptingTheOriginalFramework, self).__init__()
         self.device = 'cuda'
         self.model = model
-        self.ema = EMA(0.999)
+        self.ema = EMA(0.99)
         self.master_model = copy.deepcopy(self.model)
 
     def set_normalizer(self, normalizer):
@@ -1144,7 +1199,7 @@ class BaselineModel:
 
 
 def load_diffusion_model(opt):
-    opt.checkpoint = opt.subject_data_path + '/GaitDynamicsDiffusion.pt'
+    opt.checkpoint = opt.subject_data_path + '/GaitDynamics/example_usage/GaitDynamicsDiffusion.pt'
     model = MotionModel(opt)
     model_key = 'diffusion'
     return model, model_key
@@ -1256,38 +1311,38 @@ def batch_identity(batch_shape, size):
 def get_knee_rotation_coefficients():
 
     knee_Z_rotation_function = np.array([[0, 0.174533, 0.349066, 0.523599, 0.698132, 0.872665, 1.0472, 1.22173,
-                                             1.39626, 1.5708, 1.74533, 1.91986, 2.0944],
-                                            [0, 0.0126809, 0.0226969, 0.0296054, 0.0332049, 0.0335354, 0.0308779,
-                                             0.0257548, 0.0189295, 0.011407, 0.00443314, -0.00050475, -0.0016782]]).T
+                                          1.39626, 1.5708, 1.74533, 1.91986, 2.0944],
+                                         [0, 0.0126809, 0.0226969, 0.0296054, 0.0332049, 0.0335354, 0.0308779,
+                                          0.0257548, 0.0189295, 0.011407, 0.00443314, -0.00050475, -0.0016782]]).T
     polyfit_knee_Z_rotation = np.polyfit(knee_Z_rotation_function[:,0], knee_Z_rotation_function[:,1], deg=2, full = True)
     coefficients_knee_Z_rotation = polyfit_knee_Z_rotation[0]
 
     knee_Y_rotation_function = np.array([[0, 0.174533, 0.349066, 0.523599, 0.698132, 0.872665, 1.0472, 1.22173,
-                                             1.39626, 1.5708, 1.74533, 1.91986, 2.0944],
-                                            [0, 0.059461, 0.109399, 0.150618, 0.18392, 0.210107, 0.229983, 0.24435, 0.254012, 0.25977, 0.262428, 0.262788, 0.261654]]).T
+                                          1.39626, 1.5708, 1.74533, 1.91986, 2.0944],
+                                         [0, 0.059461, 0.109399, 0.150618, 0.18392, 0.210107, 0.229983, 0.24435, 0.254012, 0.25977, 0.262428, 0.262788, 0.261654]]).T
     polyfit_knee_Y_rotation = np.polyfit(knee_Y_rotation_function[:, 0], knee_Y_rotation_function[:, 1], deg=2, full=True)
     coefficients_knee_Y_rotation = polyfit_knee_Y_rotation[0]
 
     knee_X_translation_function = np.array([[0, 0.174533, 0.349066, 0.523599, 0.698132, 0.872665, 1.0472, 1.22173,
-                                                1.39626, 1.5708, 1.74533, 1.91986, 2.0944],
-                                               [0, 5.3e-05, 0.000188, 0.000378, 0.000597, 0.000825, 0.001045, 0.001247, 0.00142, 0.001558, 0.001661, 0.001728, 0.00176]]).T
+                                             1.39626, 1.5708, 1.74533, 1.91986, 2.0944],
+                                            [0, 5.3e-05, 0.000188, 0.000378, 0.000597, 0.000825, 0.001045, 0.001247, 0.00142, 0.001558, 0.001661, 0.001728, 0.00176]]).T
     polyfit_knee_X_translation = np.polyfit(knee_X_translation_function[:, 0], knee_X_translation_function[:, 1], deg=2,
-                                               full=True)
+                                            full=True)
     coefficients_knee_X_translation = polyfit_knee_X_translation[0]
 
 
     knee_Y_translation_function = np.array([[0, 0.174533, 0.349066, 0.523599, 0.698132, 0.872665, 1.0472, 1.22173,
-                                                1.39626, 1.5708, 1.74533, 1.91986, 2.0944],
-                                               [0, 0.000301, 0.000143, -0.000401, -0.001233, -0.002243, -0.003316, -0.004346, -0.005239, -0.005924, -0.006361, -0.006539, -0.00648]]).T
+                                             1.39626, 1.5708, 1.74533, 1.91986, 2.0944],
+                                            [0, 0.000301, 0.000143, -0.000401, -0.001233, -0.002243, -0.003316, -0.004346, -0.005239, -0.005924, -0.006361, -0.006539, -0.00648]]).T
     polyfit_knee_Y_translation = np.polyfit(knee_Y_translation_function[:, 0], knee_Y_translation_function[:, 1], deg=2,
-                                               full=True)
+                                            full=True)
     coefficients_knee_Y_translation = polyfit_knee_Y_translation[0]
 
     knee_Z_translation_function = np.array([[0, 0.174533, 0.349066, 0.523599, 0.698132, 0.872665, 1.0472, 1.22173,
-                                                1.39626, 1.5708, 1.74533, 1.91986, 2.0944],
-                                               [0, 0.001055, 0.002061, 0.00289, 0.003447, 0.003676, 0.003559, 0.00311, 0.002373, 0.001418, 0.000329, -0.000805, -0.001898]]).T
+                                             1.39626, 1.5708, 1.74533, 1.91986, 2.0944],
+                                            [0, 0.001055, 0.002061, 0.00289, 0.003447, 0.003676, 0.003559, 0.00311, 0.002373, 0.001418, 0.000329, -0.000805, -0.001898]]).T
     polyfit_knee_Z_translation = np.polyfit(knee_Z_translation_function[:, 0], knee_Z_translation_function[:, 1], deg=2,
-                                               full=True)
+                                            full=True)
     coefficients_knee_Z_translation = polyfit_knee_Z_translation[0]
 
     walker_knee_coefficients = np.stack((coefficients_knee_Y_rotation, coefficients_knee_Z_rotation, coefficients_knee_X_translation, coefficients_knee_Y_translation, coefficients_knee_Z_translation), axis=1)
@@ -2251,15 +2306,15 @@ def parse_opt():
     parser.add_argument(
         "--checkpoint", type=str, default="", help="trained checkpoint path (optional)"
     )
-    parser.add_argument(
-        "--checkpoint_bl", type=str, default="", help="trained checkpoint path (optional)"
-    )
+    # parser.add_argument(
+    #     "--checkpoint_bl", type=str, default="", help="trained checkpoint path (optional)"
+    # )
     opt = parser.parse_args(args=[])
     set_no_arm_opt(opt)
     current_folder = os.getcwd()
     opt.subject_data_path = current_folder
     opt.geometry_folder = current_folder + '/Geometry/'
-    opt.checkpoint_bl = current_folder + '/GaitDynamicsRefinement.pt'
+    opt.checkpoint_bl = current_folder + '/GaitDynamics/example_usage/GaitDynamicsRefinement.pt'
     return opt
 
 
@@ -2373,13 +2428,7 @@ class MotionDataset(Dataset):
         return windows, s_list, e_list
 
     def load_addb(self, opt):
-        file_paths = []
-        if os.path.isdir(self.data_path):
-            for file in os.listdir(self.data_path):
-                file_path = os.path.join(self.data_path, file)
-                if file.endswith(".mot") and '_pred___' not in file:
-                    file_paths.append(file_path)
-
+        file_paths = opt.file_paths
         customOsim: nimble.biomechanics.OpenSimFile = nimble.biomechanics.OpenSimParser.parseOsim(self.subject_osim_model, self.opt.geometry_folder)
         skel = customOsim.skeleton
         self.skel = skel
@@ -2481,6 +2530,7 @@ class TrialData:
         self.model_offsets = model_offsets
         self.height_m = height_m
         self.weight_kg = weight_kg
+        self.length = converted_states.shape[0]
         self.rot_mat_for_moving_direction_alignment = rot_mat_for_moving_direction_alignment
         self.pos_vec_for_pos_alignment = pos_vec_for_pos_alignment
         self.window_len = window_len
@@ -2495,23 +2545,41 @@ def usr_inputs():
 
     # # [DEBUG]
     # opt.height_m = 1.84
-    # opt.weight_kg = 92.9      # there should be a better way to store and load height and weight
-    # opt.treadmill_speed = 1.15         # None in Colab
+    # opt.weight_kg = 92.9
+    # opt.treadmill_speed = 1.15
     # opt.subject_osim_model = opt.subject_data_path + '/Scaled_generic_no_arm.osim'
 
-    while True:
-        confirm_num = input("Upload .mot files and a .osim file to Colab via \n \
-      1) clicking the folder button on the left side of the window \n \
-      1) drag .mot files into the 'Files'. \n \
-      2) drag one .osim file into the same directory. \nConfirm completion of file uploading by entering 1: ")
-        try:
-            if float(confirm_num) == 1:
-                print()
-                break
-            else:
-                raise ValueError()
-        except ValueError:
-            print('Upload not confirmed.')
+    input("Upload .mot files and a .osim file to Colab via \n \
+    1) clicking the folder button on the left side of the window \n \
+    2) upload .mot files by clicking \"Upload to session storage\" button and \n \
+    3) upload .osim file by clicking \"Upload to session storage\" button. \n \
+    Please confirm completion and then entering anything ")
+
+    file_paths = []
+    for file in os.listdir(opt.subject_data_path):
+        file_path = os.path.join(opt.subject_data_path, file)
+        if file.endswith(".mot") and '_pred___' not in file:
+            file_paths.append(file_path)
+    if len(file_paths) == 0:
+        raise RuntimeError(f'No .mot file found. Upload the .mot file to Colab')
+    opt.file_paths = file_paths
+
+    osim_paths = []
+    for root, dirs, files in os.walk(opt.subject_data_path):
+        for file in files:
+            file_path = os.path.join(root, file)
+            if file.endswith(".osim") and 'example_opensim_model.osim' not in file:
+                osim_paths.append(file_path)
+    if len(osim_paths) > 1:
+        print(f'Multiple .osim files found.')
+        [print(f'{i}: {file_path}') for i, file_path in enumerate(osim_paths)]
+        i_file = int(input(f'Choose the .osim file entering its index (between 0 and {len(osim_paths)-1}): '))
+        opt.subject_osim_model = osim_paths[i_file]
+    elif len(osim_paths) == 0:
+        raise RuntimeError(f'No .osim file found. Upload the .osim file to Colab')
+    else:
+        opt.subject_osim_model = osim_paths[0]
+    print()
 
     while True:
         try:
@@ -2541,22 +2609,6 @@ def usr_inputs():
         except ValueError:
             print("Invalid input. Please enter a floating-point number between 0 and 10.")
 
-    osim_paths = []
-    for root, dirs, files in os.walk(opt.subject_data_path):
-        for file in files:
-            file_path = os.path.join(root, file)
-            if file.endswith(".osim"):
-                osim_paths.append(file_path)
-    if len(osim_paths) > 1:
-        print(f'Multiple .osim files found.')
-        [print(f'{i}: {file_path}') for i, file_path in enumerate(osim_paths)]
-        i_file = int(input(f'Choose the .osim file entering its index (between 0 and {len(osim_paths)-1}): '))
-        opt.subject_osim_model = osim_paths[i_file]
-    elif len(osim_paths) == 0:
-        raise RuntimeError(f'No .osim file found. Upload the .osim file to Colab')
-    else:
-        opt.subject_osim_model = osim_paths[0]
-    print()
     return opt
 
 
@@ -2606,6 +2658,7 @@ def predict_grf(opt):
 
         trial_save_path = f'{dataset.file_names[i_trial][:-4]}_pred___.mot'
         convertDfToGRFMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3))
+
 
 
 if __name__ == '__main__':

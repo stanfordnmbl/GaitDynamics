@@ -22,9 +22,8 @@ Downstream task 1 uses both models, while downstream task 2 and 3 use only the d
 ## Force estimation with GaitDynamics
 [A Google Colab notebook](https://colab.research.google.com/drive/1n6kH3gnwLdQ2DH5krigbkiO06NjDtyxI?usp=sharing)
 is provided for the downstream tasks 1 – force estimation using flexible combinations of kinematic inputs.
-By executing the code, the GaitDynamics models, and example .mot file with joint angles of an OpenSim skeletal model will be imported from GitHub.
-Users can upload their own .mot files to the Colab notebook to obtain force predictions.
-To use a reduced kinematic input combinations, simply delete the corresponding columns in the .mot file.
+Upload an OpenSim model file (.osim) and kinematic data files (.mot) following the instructions in the notebook.
+Example files can be found in the [example_usage](/example_usage) folder.
 
 ## Dataset
 [AddBiomechanics Dataset](https://addbiomechanics.org/download_data.html)
