@@ -29,4 +29,5 @@ Example files can be found in the [example_usage](/example_usage) folder.
 [AddBiomechanics Dataset](https://addbiomechanics.org/download_data.html)
 
 ## Publication
-This repository includes the code and models for a [preprint]() and an [abstract](./figures/readme_fig/Tan_ASB2024.pdf).
+This repository includes the code and models for a [preprint](https://assets-eu.researchsquare.com/files/rs-6206222/v1_covered_f6a08d22-5432-4743-b062-b8b8d886d664.pdf?c=1742524004)
+and an [abstract](./figures/readme_fig/Tan_ASB2024.pdf).
