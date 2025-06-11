@@ -135,9 +135,9 @@ def export_running_speeds(angle_to_plot='knee_angle_r'):
     win_exp_list, win_syn_list = pickle.load(open(f"results/da_run_faster_win.pkl", "rb"))
 
     to_export = {
-        'exp_400': [win_exp_list[6][1],],
-        'syn_300': [win_syn_list[6][0],],
-        'syn_500': [win_syn_list[6][-1],],
+        'exp_400': [win_exp_list[2][1],],
+        'syn_300': [win_syn_list[2][0],],
+        'syn_500': [win_syn_list[2][-1],],
     }
 
     for trial_name, data_ in to_export.items():
@@ -152,13 +152,13 @@ def export_running_speeds(angle_to_plot='knee_angle_r'):
         to_export[trial_name].append(generation_1ms_df[angle_to_plot] * 180 / np.pi)
 
     matplotlib.rc('font', size=14)
-    colors = [np.array(x) / 255 for x in [[110, 170, 220], [30, 90, 140], [177, 124, 90]]]
+    colors = [np.array(x) / 255 for x in [[30, 90, 140], [177, 124, 90], [110, 170, 220]]]
     fig, ax = plt.subplots(figsize=(6, 6))
     line2 = ax.plot(to_export['syn_500'][1][:1], '--', linewidth=2, label=f'5.0 m/s - synthetic', color=colors[0])[0]
-    line1 = ax.plot(to_export['exp_400'][1][:1], linewidth=2, label=f'4.0 m/s - experimental', color=colors[2])[0]
-    line0 = ax.plot(to_export['syn_300'][1][:1], '--', linewidth=2, label=f'3.0 m/s - synthetic', color=colors[1])[0]
-    ax.set(xlim=[0, 150], ylim=[0, 170],
-           xticks=range(0, 151, 30), yticks=range(0, 161, 40),
+    line1 = ax.plot(to_export['exp_400'][1][:1], linewidth=2, label=f'4.0 m/s - experimental', color=colors[1])[0]
+    line0 = ax.plot(to_export['syn_300'][1][:1], '--', linewidth=2, label=f'3.0 m/s - synthetic', color=colors[2])[0]
+    ax.set(xlim=[0, 150], ylim=[0, 170], xticks=range(0, 151, 30),
+           xticklabels=[0, 0.3, 0.6, 0.9, 1.2, 1.5], yticks=range(0, 161, 40),
            xlabel='Time (s)', ylabel='Right Knee Flexion (deg)')
     ax.legend()
     ax.grid(True, linewidth=1, alpha=0.5)

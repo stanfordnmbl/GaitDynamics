@@ -334,10 +334,10 @@ def draw_fig_2(fast_run=False):
 
 def draw_fig_3(fast_run=False):
     def format_ticks(ax_plt):
-        ax_plt.text(-0.7, 17, 'Mean Absolute Error of Peak Vertical Force Estimation (\% BW)', rotation=90, fontdict=FONT_DICT_SMALL, verticalalignment='center')
-        ax_plt.text(-1., 37, 'Better', rotation=90, fontdict=FONT_DICT_SMALL, color='green', verticalalignment='center')
-        ax_plt.annotate('', xy=(-0.11, 0.8), xycoords='axes fraction', xytext=(-0.11, 1.),
-                        arrowprops=dict(arrowstyle="->", color='green'))
+        # ax_plt.text(-0.7, 20, 'Error (\%)', rotation=90, fontdict=FONT_DICT_SMALL, verticalalignment='center')
+        ax_plt.set_ylabel('Error (\%)', fontdict=FONT_DICT_SMALL)
+        # ax_plt.annotate('', xy=(-0.11, 0.8), xycoords='axes fraction', xytext=(-0.11, 1.),
+        #                 arrowprops=dict(arrowstyle="->", color='green'))
         ax_plt.set_yticks([0, 10, 20, 30, 40])
         ax_plt.set_yticklabels([0, 10, 20, 30, 40], fontdict=FONT_DICT_SMALL)
         ax_plt.set_ylim([0, 40])
@@ -348,9 +348,10 @@ def draw_fig_3(fast_run=False):
         plt.axis('off')
         ax_text.set_xlim(ax_plt.get_xlim())
         ax_text.set_ylim([3, 10])
+        if plot_stage == 0:
+            return
         segment_list = ['trunk', 'pelvis', 'hips', 'knees', 'ankles']
         for i_test, test_name in enumerate(list(cols_to_unmask.keys())[2:-2]):
-            # test_name = test_name.replace('trunk', 'lumbar')
             masked_segments = test_name.split('_')
             for i_segment, segment in enumerate(segment_list):
                 if segment in masked_segments or segment[:-1] in masked_segments:
@@ -361,7 +362,7 @@ def draw_fig_3(fast_run=False):
     colors = [np.array(x) / 255 for x in [[70, 130, 180], [207, 154, 130]]]        #  [207, 154, 130], [100, 155, 227]
     folder = 'fast' if fast_run else 'full'
     param_of_interest = 'calcn_l_force_vy_max'
-    fig = plt.figure(figsize=(7.7, 4.8))
+    fig = plt.figure(figsize=(6, 4))
     rc('text', usetex=True)
     plt.rc('font', family='Helvetica')
     ax_plt = fig.add_axes([0.14, 0.25, 0.83, 0.66])
@@ -370,24 +371,29 @@ def draw_fig_3(fast_run=False):
     line_1, = plt.plot([-0.3, 7.6], [np.mean(full_input), np.mean(full_input)], color=np.array([70, 130, 180])/255, linewidth=LINE_WIDTH, linestyle='--')
 
     for i_test, test_name in enumerate(list(cols_to_unmask.keys())[2:-2]):
+        if plot_stage == 0:
+            continue
         metric_tf_inpainting = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')[param_of_interest]
         metric_tf_medianfilling = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_median_filling')[param_of_interest]
-        bar_locs = [i_test, i_test + 0.3]
-        mean_ = [np.mean(ele) for ele in [metric_tf_inpainting, metric_tf_medianfilling]]
-        std_ = [np.std(ele) for ele in [metric_tf_inpainting, metric_tf_medianfilling]]
+        if plot_stage == 1:
+            bar_locs = [i_test]
+            mean_ = [np.mean(ele) for ele in [metric_tf_inpainting]]
+            std_ = [np.std(ele) for ele in [metric_tf_inpainting]]
+        else:
+            bar_locs = [i_test, i_test + 0.3]
+            mean_ = [np.mean(ele) for ele in [metric_tf_inpainting, metric_tf_medianfilling]]
+            std_ = [np.std(ele) for ele in [metric_tf_inpainting, metric_tf_medianfilling]]
         bars = plt.bar(bar_locs, mean_, color=colors[:2], width=0.27)
         ebar, caplines, barlinecols = plt.errorbar(bar_locs, mean_, std_, capsize=0, ecolor='black', fmt='none', lolims=True, elinewidth=LINE_WIDTH)
         format_errorbar_cap(caplines, 8)
 
-        print(test_name, mean_ - np.mean(full_input))
-
     format_axis(plt.gca())
     format_ticks(ax_plt)
-    ax_plt.legend(list(bars) + [line_1], [
-        'Partial-Body Kinematics with Inpainting (GaitDynamics)', 'Partial-Body Kinematics with Median Filling', 'Full-Body Kinematics (GaitDynamics)'],
-                  frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0., 0.88), loc='lower left')
-    plt.savefig(f'exports/da_segment_filling.png', dpi=300, bbox_inches='tight')
-    plt.show()
+    # ax_plt.legend(list(bars) + [line_1], [
+    #     'Partial-Body Kinematics with Inpainting (GaitDynamics)', 'Partial-Body Kinematics with Median Filling', 'Full-Body Kinematics (GaitDynamics)'],
+    #               frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0., 0.88), loc='lower left')
+    plt.savefig(f'exports/da_segment_filling_stage{plot_stage}.png', dpi=300, bbox_inches='tight')
+    # plt.show()
 
 
 def draw_fig_4(fast_run=False):
@@ -486,15 +492,33 @@ def draw_fig_for_meeting(fast_run=False):
     plt.savefig('exports/for_meeting.png')
     plt.show()
 
+    # for test_name in list(cols_to_unmask.keys())[:1]:
+    #     string_ = ''
+    #     for i_segment, (segment, params) in enumerate(list(segment_to_param.items())[1:]):
+    #         if segment not in test_name:
+    #             string_ += '✓\t'
+    #         else:
+    #             string_ += '✕\t'
+    #
+    #     print(string_, end='\t')
+    #     for i_param, param in enumerate(params_of_interest):
+    #         print(f'{np.mean(metric_diffusion_dict[test_name][param]):.1f} ± {np.std(metric_diffusion_dict[test_name][param]):.1f}', end='\t')
+    #     print('\t', end='')
+    #     for i_param, param in enumerate(params_of_interest):
+    #         print(f'{np.mean(metric_tf_dict[test_name][param]):.1f} ± {np.std(metric_tf_dict[test_name][param]):.1f}', end='\t')
+    #     print('')
+    # return metric_tf_dict
+
 
 opt = parse_opt()
 if __name__ == "__main__":
     # get_all_the_metrics(model_key=f'/full/tf_none_diffusion_filling')
-    print_table_1()
+    # print_table_1()
     # print_table_2()
     # print_table_3()
     # draw_fig_2()
-    # draw_fig_3()
+    for plot_stage in range(3):
+        draw_fig_3()
     # draw_fig_4()
     # p_val_with_without_data_filter()
     # draw_fig_for_meeting()
