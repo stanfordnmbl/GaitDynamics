@@ -1,14 +1,21 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Add base path for file operations
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 import copy
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 from args import parse_opt
 from consts import NOT_IN_GAIT_PHASE, RUNNING_DSET_SHORT_NAMES, OVERGROUND_DSETS
-from da_grf_test_set_0 import cols_to_unmask, dset_to_skip, drop_frame_num_range
+from da_grf_test_set_0 import cols_to_unmask_main, dset_to_skip, drop_frame_num_range, cols_to_unmask_big_table
 from data.addb_dataset import MotionDataset
 from matplotlib import rc, lines
 from fig_utils import FONT_DICT_SMALL, FONT_SIZE_SMALL, format_axis, LINE_WIDTH, FONT_DICT_X_SMALL
 from scipy.stats import friedmanchisquare, wilcoxon, ttest_rel
+import random
+from model.utils import fix_seed
 
 
 def format_errorbar_cap(caplines, size=15):
@@ -19,7 +26,7 @@ def format_errorbar_cap(caplines, size=15):
 
 
 def print_table_1(fast_run=False):
-    """ Iterate through mask conditions """
+    """ Iterate through mask conditions, for Supplementary Table 2 """
     segment_to_param = {
         'velocity': ['pelvis_tx', 'pelvis_ty', 'pelvis_tz'],
         'trunk': ['lumbar_extension', 'lumbar_bending', 'lumbar_rotation'],
@@ -32,13 +39,13 @@ def print_table_1(fast_run=False):
     metric_tf_dict, metric_diffusion_dict, masked_segment_col_loc = {}, {}, {}
 
     folder = 'fast' if fast_run else 'full'
-    for i_test, test_name in enumerate(list(cols_to_unmask.keys())[2:-2]):
-        metric_tf_inpainting = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')
+    for i_test, test_name in enumerate(list(cols_to_unmask_main.keys())[1:]):
         metric_diffusion_inpainting = get_all_the_metrics(model_key=f'/{folder}/diffusion_{test_name}_diffusion_filling')
+        metric_tf_inpainting = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')
         metric_tf_dict[test_name] = metric_tf_inpainting
         metric_diffusion_dict[test_name] = metric_diffusion_inpainting
 
-    for test_name in list(cols_to_unmask.keys())[2:-2]:
+    for test_name in list(cols_to_unmask_main.keys())[1:]:
         string_ = ''
         for i_segment, (segment, params) in enumerate(list(segment_to_param.items())[1:]):
             if segment not in test_name:
@@ -101,7 +108,7 @@ def print_table_2():
 
 def print_table_3():
     """ Accuracies of joint moments """
-    results_tf_dict = pickle.load(open(f"results/addb_marker_based_tf.pkl", "rb"))
+    results_tf_dict = pickle.load(open(os.path.join(SCRIPT_DIR, f"results/addb_marker_based_tf.pkl"), "rb"))
     results_tf_dict = combine_splits(results_tf_dict)
     params_of_interest = ['knee_moment_l_x', 'knee_moment_l_z', 'hip_moment_l_z', 'ankle_moment_l_z']
     test_name = 'none'
@@ -189,7 +196,7 @@ def dset_data_profile_to_peak(true_, pred_, columns, dset_short):
 
 
 def get_all_the_metrics(model_key):
-    results_ = pickle.load(open(f"results/{model_key}.pkl", "rb"))
+    results_ = pickle.load(open(os.path.join(SCRIPT_DIR, f"results/{model_key}.pkl"), "rb"))
     results_ = combine_splits(results_)
     true_, pred_, _, columns = results_
     dset_list = list(true_.keys())
@@ -328,19 +335,19 @@ def draw_fig_2(fast_run=False):
     plt.tight_layout(rect=[-0.03, 0., 1.03, 0.88])
     plt.legend(list(bars), ['GaitDynamics', 'Convolutional Neural Network$^{\ 21}$', 'Recurrent Neural Network$^{\ 22}$'],
                frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0.7, 1.2), ncols=1)
-    plt.savefig(f'exports/da_grf.png', dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(SCRIPT_DIR, f'exports/da_grf.png'), dpi=300, bbox_inches='tight')
     plt.show()
 
 
 def draw_fig_3(fast_run=False):
     def format_ticks(ax_plt):
-        ax_plt.text(-0.7, 17, 'Mean Absolute Error of Peak Vertical Force Estimation (\% BW)', rotation=90, fontdict=FONT_DICT_SMALL, verticalalignment='center')
-        ax_plt.text(-1., 37, 'Better', rotation=90, fontdict=FONT_DICT_SMALL, color='green', verticalalignment='center')
+        ax_plt.text(-0.7, 33, 'Mean Absolute Error of Peak Vertical Force Estimation (\% BW)', rotation=90, fontdict=FONT_DICT_SMALL, verticalalignment='center')
+        ax_plt.text(-1., 73, 'Better', rotation=90, fontdict=FONT_DICT_SMALL, color='green', verticalalignment='center')
         ax_plt.annotate('', xy=(-0.11, 0.8), xycoords='axes fraction', xytext=(-0.11, 1.),
                         arrowprops=dict(arrowstyle="->", color='green'))
-        ax_plt.set_yticks([0, 10, 20, 30, 40])
-        ax_plt.set_yticklabels([0, 10, 20, 30, 40], fontdict=FONT_DICT_SMALL)
-        ax_plt.set_ylim([0, 40])
+        ax_plt.set_yticks([0, 20, 40, 60, 80])
+        ax_plt.set_yticklabels([0, 20, 40, 60, 80], fontdict=FONT_DICT_SMALL)
+        ax_plt.set_ylim([0, 80])
         ax_plt.set_xlim([-0.3, 4.6])
         ax_plt.set_xticks([])
 
@@ -349,8 +356,7 @@ def draw_fig_3(fast_run=False):
         ax_text.set_xlim(ax_plt.get_xlim())
         ax_text.set_ylim([3, 10])
         segment_list = ['trunk', 'pelvis', 'hips', 'knees', 'ankles']
-        for i_test, test_name in enumerate(list(cols_to_unmask.keys())[2:-2]):
-            # test_name = test_name.replace('trunk', 'lumbar')
+        for i_test, test_name in enumerate(list(cols_to_unmask_main.keys())[1:]):
             masked_segments = test_name.split('_')
             for i_segment, segment in enumerate(segment_list):
                 if segment in masked_segments or segment[:-1] in masked_segments:
@@ -364,12 +370,12 @@ def draw_fig_3(fast_run=False):
     fig = plt.figure(figsize=(7.7, 4.8))
     rc('text', usetex=True)
     plt.rc('font', family='Helvetica')
-    ax_plt = fig.add_axes([0.14, 0.25, 0.83, 0.66])
+    ax_plt = fig.add_axes([0.14, 0.25, 0.83, 0.72])
 
     full_input = get_all_the_metrics(model_key=f'/{folder}/tf_none_diffusion_filling')[param_of_interest]
     line_1, = plt.plot([-0.3, 7.6], [np.mean(full_input), np.mean(full_input)], color=np.array([70, 130, 180])/255, linewidth=LINE_WIDTH, linestyle='--')
 
-    for i_test, test_name in enumerate(list(cols_to_unmask.keys())[2:-2]):
+    for i_test, test_name in enumerate(list(cols_to_unmask_main.keys())[1:]):
         metric_tf_inpainting = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')[param_of_interest]
         metric_tf_medianfilling = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_median_filling')[param_of_interest]
         bar_locs = [i_test, i_test + 0.3]
@@ -385,8 +391,8 @@ def draw_fig_3(fast_run=False):
     format_ticks(ax_plt)
     ax_plt.legend(list(bars) + [line_1], [
         'Partial-Body Kinematics with Inpainting (GaitDynamics)', 'Partial-Body Kinematics with Median Filling', 'Full-Body Kinematics (GaitDynamics)'],
-                  frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0., 0.88), loc='lower left')
-    plt.savefig(f'exports/da_segment_filling.png', dpi=300, bbox_inches='tight')
+                  frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0.36, 0.8), loc='lower left')
+    plt.savefig(os.path.join(SCRIPT_DIR, f'exports/da_segment_filling.png'), dpi=300, bbox_inches='tight')
     plt.show()
 
 
@@ -421,9 +427,8 @@ def draw_fig_4(fast_run=False):
     ax_plt.legend(lines + [line_1], [
         'GaitDynamics - Diffusion Filling', 'GaitForce - Interpolation', 'GaitForce - Median Filling', 'GaitForce - No Package Drop'],
                   frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(1, 1.4))
-    plt.savefig(f'exports/da_temporal_filling.png', dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(SCRIPT_DIR, f'exports/da_temporal_filling.png'), dpi=300, bbox_inches='tight')
     plt.show()
-
 
 def p_val_with_without_data_filter(fast_run=False):
     folder = 'fast' if fast_run else 'full'
@@ -457,7 +462,7 @@ def draw_fig_for_meeting(fast_run=False):
     metric_tf_dict, metric_diffusion_dict, masked_segment_col_loc = {}, {}, {}
 
     folder = 'fast' if fast_run else 'full'
-    for i_test, test_name in enumerate(list(cols_to_unmask.keys())[0:1]):
+    for i_test, test_name in enumerate(list(cols_to_unmask_main.keys())[0:1]):
         metric_tf_inpainting = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')
         metric_diffusion_inpainting = get_all_the_metrics(model_key=f'/{folder}/diffusion_{test_name}_diffusion_filling')
         metric_tf_dict[test_name] = metric_tf_inpainting
@@ -483,19 +488,184 @@ def draw_fig_for_meeting(fast_run=False):
                                                capsize=0, ecolor='black', fmt='none', lolims=True, elinewidth=LINE_WIDTH)
     format_errorbar_cap(caplines, 8)
     plt.legend(fontsize=FONT_SIZE_SMALL)
-    plt.savefig('exports/for_meeting.png')
+    plt.savefig(os.path.join(SCRIPT_DIR, 'exports/for_meeting.png'))
     plt.show()
+
+
+
+def find_first_consecutive_trues_numpy(gait_phase_label, n):
+    # Convert to numpy array if it's not already
+    arr = np.asarray(gait_phase_label)
+
+    # Find runs of consecutive True values
+    runs = np.split(np.where(arr)[0], np.where(np.diff(np.where(arr)[0]) != 1)[0] + 1)
+
+    # Find the first run with length >= n
+    matching_runs = [r for r in runs if len(r) >= n]
+    if len(matching_runs) == 0:
+        return NOT_IN_GAIT_PHASE
+    else:
+        random_idx = np.random.randint(0, len(matching_runs))
+        return matching_runs[random_idx][0]
+
+
+def get_random_non_negative_one_numpy(first_true):
+    # Convert to numpy array
+    arr = np.array(first_true)
+
+    # Find indices where values are not -1
+    indices = np.where(arr != NOT_IN_GAIT_PHASE)[0]
+
+    # Check if there are any non-(-1) values
+    if indices.size > 0:
+        # Select a random index and return the corresponding value
+        random_idx = np.random.choice(indices)
+        return random_idx
+    else:
+        return None
+
+
+def draw_fig_5(fast_run=False, data_len=300):
+    """ Continuity of windows """
+    def format_ticks(ax_plt):
+        # ax_plt.set_ylabel(r'MAE of $f_v$ Peak (% Body Weight)', fontdict=FONT_DICT_SMALL)
+        ax_plt.set_xlim([0, data_len])
+        ax_plt.set_xticks([0, data_len/3, data_len/3*2, data_len])
+        ax_plt.set_xticklabels([0, int(data_len/300), int(data_len/300*2), int(data_len/100)], fontdict=FONT_DICT_SMALL)
+        ax_plt.set_xlabel('Time (s)', fontdict=FONT_DICT_SMALL)
+
+    fix_seed()
+    params_of_interest = ['calcn_l_force_vy', 'calcn_l_force_vx', 'calcn_l_force_vz', 'hip_flexion_r', 'knee_angle_r', 'ankle_angle_r']     # 'hip_flexion_r', 'knee_angle_r', 'ankle_angle_r'
+    folder = 'fast' if fast_run else 'full'
+
+    # test_name = 'none' if 'force' in param_col else param_col.split('_')[0]
+    # model_key=f'/{folder}/diffusion_{test_name}_diffusion_filling'
+    results_tf = pickle.load(open(os.path.join(SCRIPT_DIR, f"results/{folder}/tf_none_diffusion_filling.pkl"), "rb"))
+    results_tf = combine_splits(results_tf)
+    true_tf, pred_tf, _, columns = results_tf
+    
+    pred_diffusion, columns_diffusion, true_diffusion = {}, {}, {}
+    for test_name in ['none', 'hip', 'knee', 'ankle']:
+        results_diffusion = pickle.load(open(os.path.join(SCRIPT_DIR, f"results/{folder}/diffusion_{test_name}_diffusion_filling.pkl"), "rb"))
+        results_diffusion = combine_splits(results_diffusion)
+        true_diffusion_current, pred_diffusion_current, _, columns_diffusion_current = results_diffusion
+        pred_diffusion[test_name] = pred_diffusion_current
+        true_diffusion[test_name] = true_diffusion_current
+        columns_diffusion[test_name] = columns_diffusion_current
+
+    plt.figure(figsize=(9, 10))
+    random_dset_trial_id_and_start_sample_dict = {}
+    for i_dset, dset in enumerate(list(true_tf.keys())):
+        _, _, gait_phase_label = dset_data_profile_to_peak(true_tf[dset], pred_tf[dset], columns, dset)
+        start_samples = [find_first_consecutive_trues_numpy(gait_phase_label[i_trial] != NOT_IN_GAIT_PHASE, data_len) for i_trial in range(len(gait_phase_label))]
+        random_trial_id = get_random_non_negative_one_numpy(start_samples)
+        if random_trial_id is not None:
+            random_dset_trial_id_and_start_sample_dict[dset] = (random_trial_id, start_samples[random_trial_id])
+
+    fix_seed()
+    random_dset_list = random.sample(list(random_dset_trial_id_and_start_sample_dict.keys()), 3)
+    for i_dset, dset in enumerate(random_dset_list):
+        random_trial_id, start_sample = random_dset_trial_id_and_start_sample_dict[dset]
+        for i_param, param_col in enumerate(params_of_interest):
+            pred_diffusion_test_name = 'none' if 'force' in param_col else param_col.split('_')[0]
+            plt.subplot(6, 3, 3 * i_param + i_dset + 1)
+            if pred_diffusion_test_name == 'none':
+                plt.plot(pred_tf[dset][random_trial_id][start_sample:start_sample+data_len, columns.index(param_col)])
+                plt.plot(true_tf[dset][random_trial_id][start_sample:start_sample+data_len, columns.index(param_col)])
+                plt.plot(pred_diffusion[pred_diffusion_test_name][dset][random_trial_id][start_sample:start_sample+data_len, columns_diffusion[pred_diffusion_test_name].index(param_col)])
+            else:
+                plt.plot(true_diffusion[pred_diffusion_test_name][dset][random_trial_id][start_sample:start_sample+data_len, columns_diffusion[pred_diffusion_test_name].index(param_col)])
+                plt.plot(pred_diffusion[pred_diffusion_test_name][dset][random_trial_id][start_sample:start_sample+data_len, columns_diffusion[pred_diffusion_test_name].index(param_col)])
+            format_axis(plt.gca())
+            format_ticks(plt.gca())
+    plt.tight_layout()
+    plt.show()
+
+
+def draw_fig_6(fast_run=False):
+    def format_ticks(ax_plt):
+        ax_plt.text(-0.75, 11.5, 'Mean Absolute Error of Left Peak Vertical Force Estimation (\% BW)', rotation=90, fontdict=FONT_DICT_SMALL, verticalalignment='center')
+        ax_plt.text(-1.15, 27.5, 'Better', rotation=90, fontdict=FONT_DICT_SMALL, color='green', verticalalignment='center')
+        ax_plt.annotate('', xy=(-0.11, 0.8), xycoords='axes fraction', xytext=(-0.11, 1.),
+                        arrowprops=dict(arrowstyle="->", color='green'))
+        ax_plt.set_yticks([0, 5, 10, 15, 20, 25, 30])
+        ax_plt.set_yticklabels([0, 5, 10, 15, 20, 25, 30], fontdict=FONT_DICT_SMALL)
+        ax_plt.set_ylim([0, 30])
+        ax_plt.set_xlim([-0.3, 5.6])
+        ax_plt.set_xticks([])
+
+        ax_text = fig.add_axes([0.1, 0., 0.87, 0.45])
+        plt.axis('off')
+        ax_text.set_xlim(ax_plt.get_xlim())
+        ax_text.set_ylim([3, 10])
+        segment_list = ['trunk', 'pelvis', 'hips', 'knees', 'ankles']
+        segment_list_extended = ['trunk', 'pelvis', 'right hip', 'right knee', 'right ankle', 'left hip', 'left knee', 'left ankle']
+        masked_segment_list = [['trunk', 'pelvis'], 
+                               ['trunk', 'pelvis', 'ankles'],
+                               ['trunk', 'pelvis', 'knees', 'ankles'],
+                               ['trunk', 'pelvis', 'hips', 'ankles'],
+                               ['trunk', 'pelvis', 'left hip', 'left knee', 'left ankle'],
+                               ['trunk', 'pelvis', 'right hip', 'right knee', 'right ankle']]
+        for i_test, test_name in enumerate(list(cols_to_unmask_main.keys())[7:]):
+            masked_segment = masked_segment_list[i_test]
+            segment_to_print = segment_list if i_test < 4 else segment_list_extended
+            for i_segment, segment in enumerate(segment_to_print):
+                if segment in masked_segment:
+                    ax_text.text(i_test*0.96+0.35, 8.2 - i_segment*0.7, segment, fontdict=FONT_DICT_SMALL, color=[0.8, 0.8, 0.8], ha='center')
+                else:
+                    ax_text.text(i_test*0.96+0.35, 8.2 - i_segment*0.7, segment, fontdict=FONT_DICT_SMALL, ha='center')
+
+    colors = [np.array(x) / 255 for x in [[70, 130, 180], [207, 154, 130]]]        #  [207, 154, 130], [100, 155, 227]
+    folder = 'fast' if fast_run else 'full'
+    param_of_interest = 'calcn_l_force_vy_max'
+    fig = plt.figure(figsize=(7.7, 6))
+    rc('text', usetex=True)
+    plt.rc('font', family='Helvetica')
+    ax_plt = fig.add_axes([0.14, 0.38, 0.83, 0.59])
+
+    full_input = get_all_the_metrics(model_key=f'/{folder}/tf_none_diffusion_filling')[param_of_interest]
+    line_1, = plt.plot([-0.3, 7.6], [np.mean(full_input), np.mean(full_input)], color=np.array([70, 130, 180])/255, linewidth=LINE_WIDTH, linestyle='--')
+
+    for i_test, test_name in enumerate(list(cols_to_unmask_main.keys())[7:]):
+        metric_tf_inpainting = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')[param_of_interest]
+        bar_locs = [i_test + 0.15]
+        mean_ = [np.mean(ele) for ele in [metric_tf_inpainting]]
+        std_ = [np.std(ele) for ele in [metric_tf_inpainting]]
+        bars = plt.bar(bar_locs, mean_, color=colors[:1], width=0.33)
+        ebar, caplines, barlinecols = plt.errorbar(bar_locs, mean_, std_, capsize=0, ecolor='black', fmt='none', lolims=True, elinewidth=LINE_WIDTH)
+        format_errorbar_cap(caplines, 8)
+
+        print(test_name, mean_ - np.mean(full_input))
+
+    format_axis(plt.gca())
+    format_ticks(ax_plt)
+    ax_plt.legend(list(bars) + [line_1], [
+        'Partial-Body Kinematics with Inpainting (GaitDynamics)', 'Partial-Body Kinematics with Median Filling', 'Full-Body Kinematics (GaitDynamics)'],
+                  frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0., 0.88), loc='lower left')
+    plt.savefig(os.path.join(SCRIPT_DIR, f'exports/da_segment_filling_supplementary.png'), dpi=300)
+    plt.show()
+
+def print_table_4(fast_run=True):
+    folder = 'fast' if fast_run else 'full'
+    param_of_interest = 'calcn_l_force_vy_max'
+
+    for i_test, test_name in enumerate(list(cols_to_unmask_big_table.keys())):
+        metric_tf_inpainting = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')[param_of_interest]
+        print(test_name, np.mean(metric_tf_inpainting))
 
 
 opt = parse_opt()
 if __name__ == "__main__":
     # get_all_the_metrics(model_key=f'/full/tf_none_diffusion_filling')
-    print_table_1()
+    # print_table_1()
     # print_table_2()
     # print_table_3()
+    print_table_4()
     # draw_fig_2()
     # draw_fig_3()
     # draw_fig_4()
+    # draw_fig_5()
+    # draw_fig_6()
     # p_val_with_without_data_filter()
     # draw_fig_for_meeting()
 
