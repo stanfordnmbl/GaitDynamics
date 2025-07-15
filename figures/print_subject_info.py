@@ -93,12 +93,12 @@ if __name__ == "__main__":
     heights_train, weights_train, subject_names_train, ages_train, sexes_train = get_heights_weights('/dataNAS/people/alanttan/mfm/data/b3d_no_arm/train_cleaned/')
     heights_test, weights_test, subject_names_test, ages_test, sexes_test = get_heights_weights('/dataNAS/people/alanttan/mfm/data/b3d_no_arm/test_cleaned/')
 
-    print(ages_train+ages_test)
-    print(sexes_train+sexes_test)
+    print('Male Female Unknow numbers train: {}/{}/{}'.format(len([x for x in sexes_train if x == 'male']), len([x for x in sexes_train if x == 'female']), len([x for x in sexes_train if x == 'unknown'])))
+    print('Male Female Unknow numbers test: {}/{}/{}'.format(len([x for x in sexes_test if x == 'male']), len([x for x in sexes_test if x == 'female']), len([x for x in sexes_test if x == 'unknown'])))
 
-    print(np.sort(subject_names_train))
+    # print(np.sort(subject_names_train))
     print('Num subjects: {}'.format(len(heights_train)))
-    print(np.sort(subject_names_test))
+    # print(np.sort(subject_names_test))
     print('Num subjects: {}'.format(len(heights_test)))
     print('Train')
     print('Heights: {:.2f} ± {:.2f}'.format(np.mean(heights_train), np.std(heights_train)))

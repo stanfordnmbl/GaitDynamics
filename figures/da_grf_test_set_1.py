@@ -7,15 +7,17 @@ import copy
 import pickle
 import numpy as np
 import matplotlib.pyplot as plt
+import csv
 from args import parse_opt
 from consts import NOT_IN_GAIT_PHASE, RUNNING_DSET_SHORT_NAMES, OVERGROUND_DSETS
-from da_grf_test_set_0 import cols_to_unmask_main, dset_to_skip, drop_frame_num_range, cols_to_unmask_big_table
+from da_grf_test_set_0 import cols_to_unmask_main, dset_to_skip, drop_frame_num_range, cols_to_unmask_big_table, segment_to_osim_param
 from data.addb_dataset import MotionDataset
 from matplotlib import rc, lines
-from fig_utils import FONT_DICT_SMALL, FONT_SIZE_SMALL, format_axis, LINE_WIDTH, FONT_DICT_X_SMALL
+from fig_utils import FONT_DICT_SMALL, FONT_SIZE_SMALL, format_axis, LINE_WIDTH, FONT_DICT_LARGE, FONT_DICT
 from scipy.stats import friedmanchisquare, wilcoxon, ttest_rel
 import random
 from model.utils import fix_seed
+from matplotlib.lines import Line2D
 
 
 def format_errorbar_cap(caplines, size=15):
@@ -27,14 +29,6 @@ def format_errorbar_cap(caplines, size=15):
 
 def print_table_1(fast_run=False):
     """ Iterate through mask conditions, for Supplementary Table 2 """
-    segment_to_param = {
-        'velocity': ['pelvis_tx', 'pelvis_ty', 'pelvis_tz'],
-        'trunk': ['lumbar_extension', 'lumbar_bending', 'lumbar_rotation'],
-        'pelvis': ['pelvis_tilt', 'pelvis_list', 'pelvis_rotation'],
-        'hip': ['hip_flexion_r', 'hip_adduction_r', 'hip_rotation_r', 'hip_flexion_l', 'hip_adduction_l', 'hip_rotation_l'],
-        'knee': ['knee_angle_r', 'knee_angle_l'],
-        'ankle': ['ankle_angle_r', 'subtalar_angle_r', 'ankle_angle_l', 'subtalar_angle_l'],
-    }
     params_of_interest = ['calcn_l_force_vy', 'calcn_l_force_vx', 'calcn_l_force_vz']
     metric_tf_dict, metric_diffusion_dict, masked_segment_col_loc = {}, {}, {}
 
@@ -47,7 +41,7 @@ def print_table_1(fast_run=False):
 
     for test_name in list(cols_to_unmask_main.keys())[1:]:
         string_ = ''
-        for i_segment, (segment, params) in enumerate(list(segment_to_param.items())[1:]):
+        for i_segment, (segment, params) in enumerate(list(segment_to_osim_param.items())[1:]):
             if segment not in test_name:
                 string_ += '✓\t'
             else:
@@ -104,50 +98,6 @@ def print_table_2():
     results_average = np.mean(np.array(results_array), axis=0)
     results_std = np.std(np.array(results_array), axis=0)
     [print(f'{mean_:.1f} ± {std_:.1f}', end='\t') for mean_, std_ in zip(results_average, results_std)]
-
-
-def print_table_3():
-    """ Accuracies of joint moments """
-    results_tf_dict = pickle.load(open(os.path.join(SCRIPT_DIR, f"results/addb_marker_based_tf.pkl"), "rb"))
-    results_tf_dict = combine_splits(results_tf_dict)
-    params_of_interest = ['knee_moment_l_x', 'knee_moment_l_z', 'hip_moment_l_z', 'ankle_moment_l_z']
-    test_name = 'none'
-    dset_list = list(results_tf_dict[test_name][0].keys())
-
-    print('\t\t', end='')
-    for i_param, param_col in enumerate(params_of_interest):
-        print(param_col, end='\t')
-    print()
-
-    results_array = [[] for _ in range(len(dset_list))]
-    for i_dset, dset_short in enumerate(dset_list):
-        dset = dset_short + '_Formatted_No_Arm'
-        if dset in dset_to_skip:        #  or dset_short not in results_tf_dict[test_name][0].keys()
-            continue
-        print(f'{dset_short[:7]}\t', end='')
-        true_, pred_, _, columns = results_tf_dict[test_name]
-        true_ = {k: np.concatenate(v, axis=0) for k, v in true_.items()}
-        pred_ = {k: np.concatenate(v, axis=0) for k, v in pred_.items()}
-        true_ = np.concatenate(true_, axis=0)
-        pred_ = np.concatenate(pred_, axis=0)
-        for i_param, param_col in enumerate(params_of_interest):
-            param_col_loc = columns.index(param_col)
-            # metric_mean = np.sqrt(np.mean((true_[dset_short][:, param_col_loc] - pred_[dset_short][:, param_col_loc])**2))
-            metric_mean = np.mean(np.abs(true_[dset_short][:, param_col_loc] - pred_[dset_short][:, param_col_loc]))
-            print(f'{metric_mean:.2f}', end='\t\t\t')
-            results_array[i_dset].append(metric_mean)
-
-        #     # if param_col == 'hip_moment_l_z':
-        #     plt.figure()
-        #     plt.plot(true_[dset_short][:, param_col_loc], label='True')
-        #     plt.plot(pred_[dset_short][:, param_col_loc], label='Pred')
-        #     plt.title(f'{dset_short}, {param_col}, {metric_mean:.2f}')
-        # plt.show()
-
-        print()
-    results_average = np.mean(np.array(results_array), axis=0)
-    print('Average\t', end='')
-    [print(round(element, 1), end='\t') for element in results_average]
 
 
 def dset_data_profile_to_peak(true_, pred_, columns, dset_short):
@@ -229,8 +179,15 @@ def get_all_the_metrics(model_key):
             elif len(ratio) > 1:
                 raise ValueError('2 matching ratios')
             within_gait_cycle = (gait_phase_label_concat != NOT_IN_GAIT_PHASE)
-            # metric_mean = np.sqrt(np.mean((true_concat[within_gait_cycle, param_col_loc] - pred_concat[within_gait_cycle, param_col_loc])**2)) * ratio[0]
-            metric_mean = np.mean(np.abs(true_concat[within_gait_cycle, param_col_loc] - pred_concat[within_gait_cycle, param_col_loc])) * ratio[0]
+            diff_abs = np.abs(true_concat[within_gait_cycle, param_col_loc] - pred_concat[within_gait_cycle, param_col_loc])
+            metric_mean = np.mean(diff_abs) * ratio[0]
+
+            if 'pelvis_t' not in param_col and 'force' not in param_col and 'moment' not in param_col and diff_abs.max() > 0.9 * np.pi:
+                print(dset_short + ' has large angular error in ' + param_col)
+                # plt.figure()
+                # plt.plot(true_concat[within_gait_cycle, param_col_loc])
+                # plt.plot(pred_concat[within_gait_cycle, param_col_loc])
+                # plt.show()
 
             if 'normed_cop' in param_col or 'moment' in param_col:
                 stance_phase = (np.abs(true_concat[:, columns.index('calcn_l_force_normed_cop_x')]) > 1e-10) & (
@@ -262,6 +219,82 @@ def get_all_the_metrics(model_key):
     #         continue
     #     print(f'{param_col}, {np.mean(metric_list):.2f}')
     return metric_all_dsets
+
+
+def get_metrics_linear_velocity(model_key):
+    results_ = pickle.load(open(os.path.join(SCRIPT_DIR, f"results/{model_key}.pkl"), "rb"))
+    results_ = combine_splits(results_)
+    true_, pred_, _, columns = results_
+    dset_list = list(true_.keys())
+    # param_pattern_and_ratio = {'calcn_l_force_v': 100 / 9.81, 'calcn_l_force_normed_cop': 100, 'moment': 1}
+
+    metric_all_dsets = {'dset_short': []}
+    for i_dset, dset_short in enumerate(dset_list):
+        true_concat = np.concatenate(true_[dset_short], axis=0)
+        pred_concat = np.concatenate(pred_[dset_short], axis=0)
+        param_true_dict, param_pred_dict, gait_phase_label = dset_data_profile_to_peak(true_[dset_short], pred_[dset_short], columns, dset_short)
+        gait_phase_label_concat = np.concatenate(gait_phase_label, axis=0)
+        within_gait_cycle = (gait_phase_label_concat != NOT_IN_GAIT_PHASE)
+        connecting_point_index = np.ones(within_gait_cycle.shape, dtype=bool)
+        i_index = 0
+        for i_trial, gait_phase_label_trial in enumerate(gait_phase_label):
+            i_index += (gait_phase_label_trial.shape[0] - 1)
+            connecting_point_index[i_index] = False
+        ap_speed_true = np.diff(true_concat[:, columns.index('pelvis_tx')], append=true_concat[-1, columns.index('pelvis_tx')]) * opt.target_sampling_rate
+        invalid_speed = np.ones(within_gait_cycle.shape, dtype=bool)
+        invalid_speed[np.abs(ap_speed_true) > 5] = 0
+        index_for_valid_speed = within_gait_cycle & connecting_point_index & invalid_speed
+        
+        metric_dset = {}
+        for i_param, param_col in enumerate(columns):
+            if param_col not in ['pelvis_tx', 'pelvis_ty', 'pelvis_tz']:
+                continue
+            ratio = [1]
+            param_col_loc = i_param
+            
+            true_speed = np.diff(true_concat[:, param_col_loc], append=true_concat[-1, param_col_loc]) * opt.target_sampling_rate
+            pred_speed = np.diff(pred_concat[:, param_col_loc], append=pred_concat[-1, param_col_loc]) * opt.target_sampling_rate
+            
+            diff_abs = np.abs(true_speed[index_for_valid_speed] - pred_speed[index_for_valid_speed])
+            metric_mean = np.mean(diff_abs) * ratio[0]
+                
+            metric_dset[param_col] = metric_mean
+        for param_col, metric_mean in metric_dset.items():
+            if param_col not in metric_all_dsets.keys():
+                metric_all_dsets[param_col] = [metric_mean]
+            else:
+                metric_all_dsets[param_col].append(metric_mean)
+
+    return metric_all_dsets
+
+
+def sigifi_sign(mean_, std_, bar_locs, draw_23=True, draw_12=True, draw_13=True):
+    i = 0
+    lo = (0.03, 0.03, 0.03)
+    
+    bar_to_line_distance = 0.4
+    y_top = max([a + b for a, b in zip(mean_[i:i+3], std_[i:i+3])])
+    top_line_y0, top_line_y1 = y_top + 0.8, y_top + 2.3
+    if not draw_12 and not draw_23:
+        top_line_y1 = top_line_y0
+        
+    if draw_12:
+        diff_line_0x = [bar_locs[i]+lo[0], bar_locs[i]+lo[0], bar_locs[i+1]-lo[1], bar_locs[i+1]-lo[1]]
+        diff_line_0y = [mean_[i] + std_[i] + bar_to_line_distance, top_line_y0, top_line_y0, mean_[i+1] + std_[i+1] + bar_to_line_distance]
+        plt.plot(diff_line_0x, diff_line_0y, 'black', linewidth=LINE_WIDTH)
+        plt.text(bar_locs[i]*0.5 + bar_locs[i+1]*0.5, top_line_y0-0.28, '*', fontdict={'fontname': 'Times New Roman'}, color='black', size=20, ha='center')
+
+    if draw_23:
+        diff_line_0x = [bar_locs[i+1]+lo[1], bar_locs[i+1]+lo[1], bar_locs[i+2]-lo[2], bar_locs[i+2]-lo[2]]
+        diff_line_0y = [mean_[i+1] + std_[i+1] + bar_to_line_distance, top_line_y0, top_line_y0, mean_[i+2] + std_[i+2] + bar_to_line_distance]
+        plt.plot(diff_line_0x, diff_line_0y, 'black', linewidth=LINE_WIDTH)
+        plt.text(bar_locs[i+1]*0.5 + bar_locs[i+2]*0.5, top_line_y0-0.28, '*', fontdict={'fontname': 'Times New Roman'}, color='black', size=20, ha='center')
+
+    if draw_13:
+        diff_line_1x = [bar_locs[i]-lo[0], bar_locs[i]-lo[0], bar_locs[i+2]+lo[2], bar_locs[i+2]+lo[2]]
+        diff_line_1y = [mean_[i] + std_[i] + bar_to_line_distance, top_line_y1, top_line_y1, mean_[i+2] + std_[i+2] + bar_to_line_distance]
+        plt.plot(diff_line_1x, diff_line_1y, 'black', linewidth=LINE_WIDTH)
+        plt.text(bar_locs[i]*0.5 + bar_locs[i+2]*0.5, top_line_y1-0.28, '*', fontdict={'fontname': 'Times New Roman'}, color='black', size=20, ha='center')
 
 
 def draw_fig_2(fast_run=False):
@@ -296,7 +329,7 @@ def draw_fig_2(fast_run=False):
     plt.rc('font', family='Helvetica')
 
     fig = plt.figure(figsize=(7.7, 4.5))
-    print('Parameter\t\tAll\t\t1-2\t\t1-3\t\t2-3')
+    print('Parameter\tAll\t1-2\t1-3\t2-3')
     for i_axis, param in enumerate(params_of_interest):
         # print(np.mean(metric_tf[param]))
         bar_locs = [i_axis, i_axis + 0.25, i_axis + 0.5]
@@ -312,8 +345,15 @@ def draw_fig_2(fast_run=False):
         p_wilcoxon_tf_groundlink = wilcoxon(metric_tf[param], metric_groundlink[param]).pvalue
         p_wilcoxon_tf_sugainet = wilcoxon(metric_tf[param], metric_sugainet[param]).pvalue
         p_wilcoxon_groundlink_sugainet = wilcoxon(metric_groundlink[param], metric_sugainet[param]).pvalue
-        [print(round(p_val, 3), end='\t') for p_val in [p_wilcoxon_tf_groundlink, p_wilcoxon_tf_sugainet, p_wilcoxon_groundlink_sugainet]]
+        [print(round(p_val, 5), end='\t') for p_val in [p_wilcoxon_tf_groundlink, p_wilcoxon_tf_sugainet, p_wilcoxon_groundlink_sugainet]]
         print()
+        
+        if i_axis == 0:
+            sigifi_sign(mean_, std_, bar_locs)
+        elif i_axis == 2:
+            sigifi_sign(mean_, std_, bar_locs, draw_12=True, draw_23=False, draw_13=True)
+        elif i_axis == 3:
+            sigifi_sign(mean_, std_, bar_locs, draw_12=False, draw_23=True, draw_13=True)
 
     # From "Comparison of different machine learning models to enhance sacral acceleration-based estimations of running stride temporal variables and peak vertical ground reaction force"
     line0, = plt.plot([2.8, 3.7], [13, 13], '--', linewidth=2, color=[0.0, 0.0, 0.0], alpha=0.5)
@@ -373,6 +413,7 @@ def draw_fig_3(fast_run=False):
     ax_plt = fig.add_axes([0.14, 0.25, 0.83, 0.72])
 
     full_input = get_all_the_metrics(model_key=f'/{folder}/tf_none_diffusion_filling')[param_of_interest]
+    print(np.mean(full_input))
     line_1, = plt.plot([-0.3, 7.6], [np.mean(full_input), np.mean(full_input)], color=np.array([70, 130, 180])/255, linewidth=LINE_WIDTH, linestyle='--')
 
     for i_test, test_name in enumerate(list(cols_to_unmask_main.keys())[1:]):
@@ -446,18 +487,12 @@ def p_val_with_without_data_filter(fast_run=False):
         print(param, end='\t')
         p_val = wilcoxon(metric_tf_filtered[param], metric_tf_unfiltered[param]).pvalue
         print(round(p_val, 3))
+        print('{:.2f} ± {:.2f}'.format(np.mean(metric_tf_filtered[param]), np.std(metric_tf_filtered[param])))
+        print('{:.2f} ± {:.2f}'.format(np.mean(metric_tf_unfiltered[param]), np.std(metric_tf_unfiltered[param])))
 
 
 def draw_fig_for_meeting(fast_run=False):
     """ Iterate through mask conditions """
-    segment_to_param = {
-        'velocity': ['pelvis_tx', 'pelvis_ty', 'pelvis_tz'],
-        'trunk': ['lumbar_extension', 'lumbar_bending', 'lumbar_rotation'],
-        'pelvis': ['pelvis_tilt', 'pelvis_list', 'pelvis_rotation'],
-        'hip': ['hip_flexion_r', 'hip_adduction_r', 'hip_rotation_r', 'hip_flexion_l', 'hip_adduction_l', 'hip_rotation_l'],
-        'knee': ['knee_angle_r', 'knee_angle_l'],
-        'ankle': ['ankle_angle_r', 'subtalar_angle_r', 'ankle_angle_l', 'subtalar_angle_l'],
-    }
     params_of_interest = ['calcn_l_force_vy', 'calcn_l_force_vx', 'calcn_l_force_vz']
     metric_tf_dict, metric_diffusion_dict, masked_segment_col_loc = {}, {}, {}
 
@@ -492,7 +527,6 @@ def draw_fig_for_meeting(fast_run=False):
     plt.show()
 
 
-
 def find_first_consecutive_trues_numpy(gait_phase_label, n):
     # Convert to numpy array if it's not already
     arr = np.asarray(gait_phase_label)
@@ -525,60 +559,84 @@ def get_random_non_negative_one_numpy(first_true):
         return None
 
 
-def draw_fig_5(fast_run=False, data_len=300):
-    """ Continuity of windows """
-    def format_ticks(ax_plt):
-        # ax_plt.set_ylabel(r'MAE of $f_v$ Peak (% Body Weight)', fontdict=FONT_DICT_SMALL)
-        ax_plt.set_xlim([0, data_len])
-        ax_plt.set_xticks([0, data_len/3, data_len/3*2, data_len])
-        ax_plt.set_xticklabels([0, int(data_len/300), int(data_len/300*2), int(data_len/100)], fontdict=FONT_DICT_SMALL)
-        ax_plt.set_xlabel('Time (s)', fontdict=FONT_DICT_SMALL)
-
+def draw_fig_supplementary_1(fast_run=False, data_len=300):
+    rc('text', usetex=True)
     fix_seed()
-    params_of_interest = ['calcn_l_force_vy', 'calcn_l_force_vx', 'calcn_l_force_vz', 'hip_flexion_r', 'knee_angle_r', 'ankle_angle_r']     # 'hip_flexion_r', 'knee_angle_r', 'ankle_angle_r'
+    params_of_interest = {'calcn_l_force_vy': ('f_v', (0, 60, 120)),
+                          'calcn_l_force_vx': ('f_{ap}', (-20, 0, 20)),
+                          'calcn_l_force_vz': ('f_{ml}', (0, 7.5, 15))}     # 'hip_flexion_r', 'knee_angle_r', 'ankle_angle_r'
     folder = 'fast' if fast_run else 'full'
+    colors = [np.array(x) / 255 for x in [[70, 130, 180], [207, 154, 130], [177, 124, 90]]]        #  [207, 154, 130], [100, 155, 227]
 
-    # test_name = 'none' if 'force' in param_col else param_col.split('_')[0]
-    # model_key=f'/{folder}/diffusion_{test_name}_diffusion_filling'
     results_tf = pickle.load(open(os.path.join(SCRIPT_DIR, f"results/{folder}/tf_none_diffusion_filling.pkl"), "rb"))
     results_tf = combine_splits(results_tf)
     true_tf, pred_tf, _, columns = results_tf
     
-    pred_diffusion, columns_diffusion, true_diffusion = {}, {}, {}
-    for test_name in ['none', 'hip', 'knee', 'ankle']:
-        results_diffusion = pickle.load(open(os.path.join(SCRIPT_DIR, f"results/{folder}/diffusion_{test_name}_diffusion_filling.pkl"), "rb"))
-        results_diffusion = combine_splits(results_diffusion)
-        true_diffusion_current, pred_diffusion_current, _, columns_diffusion_current = results_diffusion
-        pred_diffusion[test_name] = pred_diffusion_current
-        true_diffusion[test_name] = true_diffusion_current
-        columns_diffusion[test_name] = columns_diffusion_current
+    results_tf_no_overlapping = pickle.load(open(os.path.join(SCRIPT_DIR, f"results/{folder}/tf_none_diffusion_filling_no_overlapping.pkl"), "rb"))
+    results_tf_no_overlapping = combine_splits(results_tf_no_overlapping)
+    _, pred_tf_no_overlapping, _, _ = results_tf_no_overlapping
 
-    plt.figure(figsize=(9, 10))
+    # Use GridSpec for more control over subplot spacing
+    from matplotlib.gridspec import GridSpec
+    
     random_dset_trial_id_and_start_sample_dict = {}
     for i_dset, dset in enumerate(list(true_tf.keys())):
         _, _, gait_phase_label = dset_data_profile_to_peak(true_tf[dset], pred_tf[dset], columns, dset)
         start_samples = [find_first_consecutive_trues_numpy(gait_phase_label[i_trial] != NOT_IN_GAIT_PHASE, data_len) for i_trial in range(len(gait_phase_label))]
         random_trial_id = get_random_non_negative_one_numpy(start_samples)
         if random_trial_id is not None:
-            random_dset_trial_id_and_start_sample_dict[dset] = (random_trial_id, start_samples[random_trial_id])
+            dset_name_print = dset.split('_')[0]
+            dset_name_print = 'Data from {} et al., {}'.format(dset_name_print[:-4], dset_name_print[-4:])
+            random_dset_trial_id_and_start_sample_dict[dset] = (random_trial_id, start_samples[random_trial_id], dset_name_print)
 
-    fix_seed()
-    random_dset_list = random.sample(list(random_dset_trial_id_and_start_sample_dict.keys()), 3)
-    for i_dset, dset in enumerate(random_dset_list):
-        random_trial_id, start_sample = random_dset_trial_id_and_start_sample_dict[dset]
-        for i_param, param_col in enumerate(params_of_interest):
-            pred_diffusion_test_name = 'none' if 'force' in param_col else param_col.split('_')[0]
-            plt.subplot(6, 3, 3 * i_param + i_dset + 1)
-            if pred_diffusion_test_name == 'none':
-                plt.plot(pred_tf[dset][random_trial_id][start_sample:start_sample+data_len, columns.index(param_col)])
-                plt.plot(true_tf[dset][random_trial_id][start_sample:start_sample+data_len, columns.index(param_col)])
-                plt.plot(pred_diffusion[pred_diffusion_test_name][dset][random_trial_id][start_sample:start_sample+data_len, columns_diffusion[pred_diffusion_test_name].index(param_col)])
+    for i_fig, (pred_tf_to_plot, trial_id_offset, generation_label, color_pred) in enumerate([
+        (pred_tf, 0, 'GaitDynamics Generation', colors[0]), 
+        (pred_tf_no_overlapping, 8, 'GaitDynamics Generation (None Overlapping Windows)', 'C2')]):
+
+        fig = plt.figure(figsize=(9, 12.5))
+        gs = GridSpec(11, 1, figure=fig, height_ratios=[1, 1, 1, 0.1, 1, 1, 1, 0.1, 1, 1, 1], hspace=0.4, left=0.11, right=0.98, bottom=0.04, top=0.96)
+        fix_seed()
+        random_dset_list = random.sample(list(random_dset_trial_id_and_start_sample_dict.keys()), 3)
+        for i_dset, dset in enumerate(random_dset_list):
+            random_trial_id, start_sample, dset_name_print = random_dset_trial_id_and_start_sample_dict[dset]
+            if i_dset == 2:
+                random_trial_id_pred = random_trial_id + trial_id_offset
             else:
-                plt.plot(true_diffusion[pred_diffusion_test_name][dset][random_trial_id][start_sample:start_sample+data_len, columns_diffusion[pred_diffusion_test_name].index(param_col)])
-                plt.plot(pred_diffusion[pred_diffusion_test_name][dset][random_trial_id][start_sample:start_sample+data_len, columns_diffusion[pred_diffusion_test_name].index(param_col)])
-            format_axis(plt.gca())
-            format_ticks(plt.gca())
-    plt.tight_layout()
+                random_trial_id_pred = random_trial_id
+            for i_param, param_col in enumerate(params_of_interest.keys()):
+                ax = fig.add_subplot(gs[4 * i_dset + i_param])
+                plt.plot(true_tf[dset][random_trial_id][start_sample:start_sample+data_len, columns.index(param_col)] * 100 / 9.81,
+                         color=[0.4, 0.4, 0.4], label='Experimental Measurement')
+                plt.plot(pred_tf_to_plot[dset][random_trial_id_pred][start_sample:start_sample+data_len, columns.index(param_col)] * 100 / 9.81,
+                         color=color_pred, label=generation_label)
+                
+                if i_fig == 1:
+                    if i_dset == 0 and i_param == 1:
+                        rect = plt.Rectangle((43, 5), 20, 15, linewidth=2, edgecolor=[0.6, 0.6, 0.6], facecolor='none', label='Subtle Discontinuity', linestyle='--')
+                        ax.add_patch(rect)
+                    if i_dset == 2 and i_param == 0:
+                        rect = plt.Rectangle((188, 80), 20, 40, linewidth=2, edgecolor=[0.6, 0.6, 0.6], facecolor='none', label='Subtle Discontinuity', linestyle='--')
+                        ax.add_patch(rect)
+                
+                format_axis(ax)
+                ax.set_xlim([0, data_len])
+                ax.set_xticks([0, 50, 100, 150, 200, 250, 300])
+                ax.set_xticklabels([0, 0.5, 1, 1.5, 2, 2.5, 3], fontdict=FONT_DICT_SMALL)
+                yticks = params_of_interest[param_col][1]
+                ax.set_yticks(yticks)
+                ax.set_yticklabels([str(ele) for ele in yticks], fontdict=FONT_DICT_SMALL)
+                ax.set_ylabel(r'${}$ (\% BW)'.format(params_of_interest[param_col][0]), fontdict=FONT_DICT_SMALL)
+                if i_param == 1:
+                    ax.text(-0.1, 1.8, dset_name_print, fontdict=FONT_DICT, transform=ax.transAxes, ha='center', rotation=90, va='top')
+                if i_param == 2:
+                    ax.set_xlabel('Time (s)', fontdict=FONT_DICT_SMALL)
+                if i_param == 1 and i_dset == 0:
+                    plt.legend(fontsize=FONT_SIZE_SMALL, frameon=False, bbox_to_anchor=(1.02, 2.45), loc='lower right', ncols=3)
+
+        for y_pos in [0.65, 0.325]:
+            line = Line2D([0, 1], [y_pos, y_pos], color='gray', linestyle='-', linewidth=0.5, alpha=0.5, transform=fig.transFigure)
+            fig.add_artist(line)
+        plt.savefig(os.path.join(SCRIPT_DIR, f'exports/da_grf_supplement{trial_id_offset}.png'), dpi=300)
     plt.show()
 
 
@@ -645,31 +703,91 @@ def draw_fig_6(fast_run=False):
     plt.savefig(os.path.join(SCRIPT_DIR, f'exports/da_segment_filling_supplementary.png'), dpi=300)
     plt.show()
 
-def print_table_4(fast_run=True):
+def print_table_4(fast_run=False):
+    """ Big table """
     folder = 'fast' if fast_run else 'full'
-    param_of_interest = 'calcn_l_force_vy_max'
+    params_of_interest = ['calcn_l_force_vy', 'calcn_l_force_vx', 'calcn_l_force_vz']
+    segments_full = ['trunk', 'pelvis angles', 'pelvis linear position', 'right hip', 'left hip', 'right knee', 'left knee', 'right ankle', 'left ankle']
 
-    for i_test, test_name in enumerate(list(cols_to_unmask_big_table.keys())):
-        metric_tf_inpainting = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')[param_of_interest]
-        print(test_name, np.mean(metric_tf_inpainting))
+    detailed_segment_to_osim_param = {
+        'trunk': ['lumbar_extension', 'lumbar_bending', 'lumbar_rotation'],
+        'pelvis angles': ['pelvis_tilt', 'pelvis_list', 'pelvis_rotation'],
+        'pelvis linear position': ['pelvis_tx', 'pelvis_ty', 'pelvis_tz'],
+        'right hip': ['hip_flexion_r', 'hip_adduction_r', 'hip_rotation_r'],
+        'left hip': ['hip_flexion_l', 'hip_adduction_l', 'hip_rotation_l'],
+        'right knee': ['knee_angle_r'],
+        'left knee': ['knee_angle_l'],
+        'right ankle': ['ankle_angle_r', 'subtalar_angle_r'],
+        'left ankle': ['ankle_angle_l', 'subtalar_angle_l'],
+    }
 
+    csv_data = []
+
+    header_row = segments_full + params_of_interest + ['test_name']
+    csv_data.append(header_row)
+    
+    for i_test, test_name in enumerate(list(cols_to_unmask_main.keys()) + list(cols_to_unmask_big_table.keys())):
+        if test_name == 'only_left_leg':
+            segments_masked = ['trunk', 'pelvis angles', 'pelvis linear position'] + ['right ' + segment for segment in ['hip', 'knee', 'ankle']]
+        elif test_name == 'only_right_leg':
+            segments_masked = ['trunk', 'pelvis angles', 'pelvis linear position'] + ['left ' + segment for segment in ['hip', 'knee', 'ankle']]
+        else:
+            segments_masked = test_name.split('_')
+            segments_masked += ['left ' + segment for segment in ['hip', 'knee', 'ankle'] if segment in segments_masked]
+            segments_masked += ['right ' + segment for segment in ['hip', 'knee', 'ankle'] if segment in segments_masked]
+            segments_masked += ['pelvis angles', 'pelvis linear position'] if 'pelvis' in segments_masked else []
+        
+        # Create row data
+        row_data = []
+        for segment in segments_full:
+            if segment in segments_masked:
+                if segment == 'pelvis linear position':
+                    unit, scale, precision = ' m/s', 1, 2
+                    all_the_metrics = get_metrics_linear_velocity(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')
+                else:
+                    unit, scale, precision = ' deg', 180 / np.pi, 1
+                    all_the_metrics = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')
+                param_metric = []
+                for param in detailed_segment_to_osim_param[segment]:
+                    param_metric.append(all_the_metrics[param])
+                param_metric = np.mean(param_metric, axis=0)
+                row_data.append(f'{np.mean(param_metric)*scale:.{precision}f}±{np.std(param_metric)*scale:.{precision}f}')
+            else:
+                row_data.append('✓')
+                
+        # Add metric values
+        for param in params_of_interest:
+            metrics = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')
+            row_data.append(f'{np.mean(metrics[param]):.1f}±{np.std(metrics[param]):.1f}')
+        
+        csv_data.append(row_data)
+    
+    csv_filename = os.path.join(SCRIPT_DIR, f"exports/table_4_{folder}.csv")
+    os.makedirs(os.path.dirname(csv_filename), exist_ok=True)
+    
+    with open(csv_filename, 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerows(csv_data)
+    
+    print(f"Table 4 saved to: {csv_filename}")
+    
+    print('\t'.join(segments_full))
+    for row in csv_data[1:]:  # Skip header row
+        print('\t'.join(row))
 
 opt = parse_opt()
 if __name__ == "__main__":
     # get_all_the_metrics(model_key=f'/full/tf_none_diffusion_filling')
     # print_table_1()
     # print_table_2()
-    # print_table_3()
-    print_table_4()
     # draw_fig_2()
     # draw_fig_3()
     # draw_fig_4()
-    # draw_fig_5()
+    # draw_fig_supplementary_1()
     # draw_fig_6()
+    print_table_4()
     # p_val_with_without_data_filter()
     # draw_fig_for_meeting()
-
-
 
 
 

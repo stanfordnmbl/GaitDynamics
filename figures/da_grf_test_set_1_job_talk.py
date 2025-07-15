@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from args import parse_opt
 from consts import NOT_IN_GAIT_PHASE, RUNNING_DSET_SHORT_NAMES, OVERGROUND_DSETS
-from da_grf_test_set_0 import cols_to_unmask, dset_to_skip, drop_frame_num_range
+from da_grf_test_set_0 import cols_to_unmask_main, dset_to_skip, drop_frame_num_range
 from data.addb_dataset import MotionDataset
 from matplotlib import rc, lines
 from fig_utils import FONT_DICT_SMALL, FONT_SIZE_SMALL, format_axis, LINE_WIDTH, FONT_DICT_X_SMALL
@@ -16,52 +16,6 @@ def format_errorbar_cap(caplines, size=15):
         caplines[i_cap].set_marker('_')
         caplines[i_cap].set_markersize(size)
         caplines[i_cap].set_markeredgewidth(LINE_WIDTH)
-
-
-def print_table_1(fast_run=False):
-    """ Iterate through mask conditions """
-    segment_to_param = {
-        'velocity': ['pelvis_tx', 'pelvis_ty', 'pelvis_tz'],
-        'trunk': ['lumbar_extension', 'lumbar_bending', 'lumbar_rotation'],
-        'pelvis': ['pelvis_tilt', 'pelvis_list', 'pelvis_rotation'],
-        'hip': ['hip_flexion_r', 'hip_adduction_r', 'hip_rotation_r', 'hip_flexion_l', 'hip_adduction_l', 'hip_rotation_l'],
-        'knee': ['knee_angle_r', 'knee_angle_l'],
-        'ankle': ['ankle_angle_r', 'subtalar_angle_r', 'ankle_angle_l', 'subtalar_angle_l'],
-    }
-    params_of_interest = ['calcn_l_force_vy', 'calcn_l_force_vx', 'calcn_l_force_vz']
-    metric_tf_dict, metric_diffusion_dict, masked_segment_col_loc = {}, {}, {}
-
-    folder = 'fast' if fast_run else 'full'
-    for i_test, test_name in enumerate(list(cols_to_unmask.keys())[2:-2]):
-        metric_tf_inpainting = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')
-        metric_diffusion_inpainting = get_all_the_metrics(model_key=f'/{folder}/diffusion_{test_name}_diffusion_filling')
-        metric_tf_dict[test_name] = metric_tf_inpainting
-        metric_diffusion_dict[test_name] = metric_diffusion_inpainting
-
-    for test_name in list(cols_to_unmask.keys())[2:-2]:
-        string_ = ''
-        for i_segment, (segment, params) in enumerate(list(segment_to_param.items())[1:]):
-            if segment not in test_name:
-                string_ += '✓\t'
-            else:
-                # if segment == 'velocity':
-                #     unit, scale = ' m/s', 1
-                # else:
-                #     unit, scale = ' deg', 180 / np.pi
-                # param_metric = []
-                # for param in params:
-                #     param_metric.extend(metric_tf_dict[test_name][param])
-                # string_ += f'{np.mean(param_metric)*scale:.1f} ± {np.std(param_metric)*scale:.1f}{unit}\t'
-                string_ += '✕\t'
-
-        print(string_, end='\t')
-        for i_param, param in enumerate(params_of_interest):
-            print(f'{np.mean(metric_diffusion_dict[test_name][param]):.1f} ± {np.std(metric_diffusion_dict[test_name][param]):.1f}', end='\t')
-        print('\t', end='')
-        for i_param, param in enumerate(params_of_interest):
-            print(f'{np.mean(metric_tf_dict[test_name][param]):.1f} ± {np.std(metric_tf_dict[test_name][param]):.1f}', end='\t')
-        print('')
-    return metric_tf_dict
 
 
 def combine_splits(results_):
@@ -76,71 +30,6 @@ def combine_splits(results_):
             true_all[dset_short].extend(true_[dset])
             pred_all[dset_short].extend(pred_[dset])
     return (true_all, pred_all, pred_std_, columns)
-
-
-def print_table_2():
-    """ Accuracies of each dataset """
-    dset_order = ['Camargo2021', 'Moore2015', 'Tan2022', 'vanderZee2022', 'Wang2023', 'Carter2023', 'Tan2021',
-                  'Falisse2017', 'Han2023', 'Tiziana2019', 'Uhlrich2023', 'Hamner2013', 'Fregly2012', 'Li2021']
-    params_of_interest = ['calcn_l_force_vy', 'calcn_l_force_vx', 'calcn_l_force_vz']
-
-    metric_all_dsets = get_all_the_metrics(model_key='full/tf_none_diffusion_filling')
-
-    results_array = [[] for _ in range(len(dset_order))]
-    for i_dset, dset_short in enumerate(dset_order):
-        dset_index = metric_all_dsets['dset_short'].index(dset_short)
-
-        for i_param, param_col in enumerate(params_of_interest):
-            print(f'{metric_all_dsets[param_col][dset_index]:.1f}', end='\t')
-            results_array[i_dset].append(metric_all_dsets[param_col][dset_index])
-        print()
-    results_average = np.mean(np.array(results_array), axis=0)
-    results_std = np.std(np.array(results_array), axis=0)
-    [print(f'{mean_:.1f} ± {std_:.1f}', end='\t') for mean_, std_ in zip(results_average, results_std)]
-
-
-def print_table_3():
-    """ Accuracies of joint moments """
-    results_tf_dict = pickle.load(open(f"results/addb_marker_based_tf.pkl", "rb"))
-    results_tf_dict = combine_splits(results_tf_dict)
-    params_of_interest = ['knee_moment_l_x', 'knee_moment_l_z', 'hip_moment_l_z', 'ankle_moment_l_z']
-    test_name = 'none'
-    dset_list = list(results_tf_dict[test_name][0].keys())
-
-    print('\t\t', end='')
-    for i_param, param_col in enumerate(params_of_interest):
-        print(param_col, end='\t')
-    print()
-
-    results_array = [[] for _ in range(len(dset_list))]
-    for i_dset, dset_short in enumerate(dset_list):
-        dset = dset_short + '_Formatted_No_Arm'
-        if dset in dset_to_skip:        #  or dset_short not in results_tf_dict[test_name][0].keys()
-            continue
-        print(f'{dset_short[:7]}\t', end='')
-        true_, pred_, _, columns = results_tf_dict[test_name]
-        true_ = {k: np.concatenate(v, axis=0) for k, v in true_.items()}
-        pred_ = {k: np.concatenate(v, axis=0) for k, v in pred_.items()}
-        true_ = np.concatenate(true_, axis=0)
-        pred_ = np.concatenate(pred_, axis=0)
-        for i_param, param_col in enumerate(params_of_interest):
-            param_col_loc = columns.index(param_col)
-            # metric_mean = np.sqrt(np.mean((true_[dset_short][:, param_col_loc] - pred_[dset_short][:, param_col_loc])**2))
-            metric_mean = np.mean(np.abs(true_[dset_short][:, param_col_loc] - pred_[dset_short][:, param_col_loc]))
-            print(f'{metric_mean:.2f}', end='\t\t\t')
-            results_array[i_dset].append(metric_mean)
-
-        #     # if param_col == 'hip_moment_l_z':
-        #     plt.figure()
-        #     plt.plot(true_[dset_short][:, param_col_loc], label='True')
-        #     plt.plot(pred_[dset_short][:, param_col_loc], label='Pred')
-        #     plt.title(f'{dset_short}, {param_col}, {metric_mean:.2f}')
-        # plt.show()
-
-        print()
-    results_average = np.mean(np.array(results_array), axis=0)
-    print('Average\t', end='')
-    [print(round(element, 1), end='\t') for element in results_average]
 
 
 def dset_data_profile_to_peak(true_, pred_, columns, dset_short):
@@ -240,20 +129,6 @@ def get_all_the_metrics(model_key):
             else:
                 metric_all_dsets[param_col].append(metric_mean)
 
-        # if 'Li' in dset_short:
-        #     plt.figure()
-        #     param = 'calcn_l_force_vy'
-        #     param_col_loc = columns.index(param)
-        #     within_gait_cycle = (gait_phase_label_concat != NOT_IN_GAIT_PHASE)
-        #     plt.plot(true_concat[within_gait_cycle, param_col_loc])
-        #     plt.plot(pred_concat[within_gait_cycle, param_col_loc])
-        #     plt.title(dset_short + ' ' + str(metric_dset[param]))
-        # plt.show()
-
-    # for param_col, metric_list in metric_all_dsets.items():
-    #     if param_col == 'dset_short':
-    #         continue
-    #     print(f'{param_col}, {np.mean(metric_list):.2f}')
     return metric_all_dsets
 
 
@@ -351,7 +226,7 @@ def draw_fig_3(fast_run=False):
         if plot_stage == 0:
             return
         segment_list = ['trunk', 'pelvis', 'hips', 'knees', 'ankles']
-        for i_test, test_name in enumerate(list(cols_to_unmask.keys())[2:-2]):
+        for i_test, test_name in enumerate(list(cols_to_unmask_main.keys())[2:-2]):
             masked_segments = test_name.split('_')
             for i_segment, segment in enumerate(segment_list):
                 if segment in masked_segments or segment[:-1] in masked_segments:
@@ -370,7 +245,7 @@ def draw_fig_3(fast_run=False):
     full_input = get_all_the_metrics(model_key=f'/{folder}/tf_none_diffusion_filling')[param_of_interest]
     line_1, = plt.plot([-0.3, 7.6], [np.mean(full_input), np.mean(full_input)], color=np.array([70, 130, 180])/255, linewidth=LINE_WIDTH, linestyle='--')
 
-    for i_test, test_name in enumerate(list(cols_to_unmask.keys())[2:-2]):
+    for i_test, test_name in enumerate(list(cols_to_unmask_main.keys())[2:-2]):
         if plot_stage == 0:
             continue
         metric_tf_inpainting = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')[param_of_interest]
@@ -463,7 +338,7 @@ def draw_fig_for_meeting(fast_run=False):
     metric_tf_dict, metric_diffusion_dict, masked_segment_col_loc = {}, {}, {}
 
     folder = 'fast' if fast_run else 'full'
-    for i_test, test_name in enumerate(list(cols_to_unmask.keys())[0:1]):
+    for i_test, test_name in enumerate(list(cols_to_unmask_main.keys())[0:1]):
         metric_tf_inpainting = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')
         metric_diffusion_inpainting = get_all_the_metrics(model_key=f'/{folder}/diffusion_{test_name}_diffusion_filling')
         metric_tf_dict[test_name] = metric_tf_inpainting
@@ -491,23 +366,6 @@ def draw_fig_for_meeting(fast_run=False):
     plt.legend(fontsize=FONT_SIZE_SMALL)
     plt.savefig('exports/for_meeting.png')
     plt.show()
-
-    # for test_name in list(cols_to_unmask.keys())[:1]:
-    #     string_ = ''
-    #     for i_segment, (segment, params) in enumerate(list(segment_to_param.items())[1:]):
-    #         if segment not in test_name:
-    #             string_ += '✓\t'
-    #         else:
-    #             string_ += '✕\t'
-    #
-    #     print(string_, end='\t')
-    #     for i_param, param in enumerate(params_of_interest):
-    #         print(f'{np.mean(metric_diffusion_dict[test_name][param]):.1f} ± {np.std(metric_diffusion_dict[test_name][param]):.1f}', end='\t')
-    #     print('\t', end='')
-    #     for i_param, param in enumerate(params_of_interest):
-    #         print(f'{np.mean(metric_tf_dict[test_name][param]):.1f} ± {np.std(metric_tf_dict[test_name][param]):.1f}', end='\t')
-    #     print('')
-    # return metric_tf_dict
 
 
 opt = parse_opt()

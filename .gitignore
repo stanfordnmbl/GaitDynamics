@@ -25,3 +25,4 @@ runs/
 .idea/*
 model/hip_knee_only_models.py
 example_usage/Geometry
+figures/exports/*

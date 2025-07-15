@@ -351,10 +351,10 @@ def data_filter(data, cut_off_fre, sampling_fre, filter_order=4):
     return data_filtered
 
 
-def fix_seed():
-    torch.manual_seed(0)
-    random.seed(0)
-    np.random.seed(0)
+def fix_seed(seed=0):
+    torch.manual_seed(seed)
+    random.seed(seed)
+    np.random.seed(seed)
 
 
 def nan_helper(y):

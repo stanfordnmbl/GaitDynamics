@@ -14,9 +14,10 @@ from model.model import MotionModel, BaselineModel, TransformerEncoderArchitectu
 from model_baseline.grf_baseline import GroundLinkArchitecture, SugaiNetArchitecture
 from data.addb_dataset import MotionDataset
 import numpy as np
-from model.utils import inverse_convert_addb_state_to_model_input, inverse_norm_cops, \
+from model.utils import inverse_convert_addb_state_to_model_input, inverse_norm_cops, fix_seed, \
     osim_states_to_moments_in_percent_BW_BH_via_cross_product, model_states_osim_dof_conversion
 import matplotlib.pyplot as plt
+from itertools import combinations
 
 
 def convert_overlapped_list_to_array(trial_len, win_list, s_, e_, fun=np.nanmedian):
@@ -29,6 +30,7 @@ def convert_overlapped_list_to_array(trial_len, win_list, s_, e_, fun=np.nanmedi
 
 
 def load_model(model_to_test):
+    """ model_to_test - 0: diffusion, 1: tf, 2: groundlink, 3: Sugai LSTM, 4: tf no data filter """
     if model_to_test == 0:
         model, model_key = load_diffusion_model(opt)
     elif model_to_test in [1, 2, 3, 4]:
@@ -166,18 +168,19 @@ def loop_all(model, opt, skels, trials, windows, windows_reconstructed, s_list, 
     return true_all, pred_all, pred_std_all, column_names
 
 
-def loop_mask_segment_conditions(model, model_key, test_dataset_dict):
-    win_step_length = 15
+def loop_mask_segment_conditions(model, model_key, test_dataset_dict, cols_to_unmask, median_filling=True,
+                                 win_step_length=15, additional_key=''):
     n_split = 10
     diffusion_model_for_filling, _ = load_diffusion_model(opt)
     for mask_key, unmask_col_loc in cols_to_unmask.items():
+        fix_seed()
         if model_key in ['groundlink', 'sugainet', 'tf_no_data_filter'] and mask_key != 'none':
             continue
         print(mask_key)
         masked_state_names = [opt.model_states_column_names[i] for i in opt.kinematic_diffusion_col_loc if i not in unmask_col_loc]
         masked_osim_dofs = model_states_osim_dof_conversion(masked_state_names, opt)
         for filling_method in [DiffusionFilling(), MedianFilling()]:
-            if mask_key != 'none' and filling_method.__str__() == 'median_filling':
+            if not median_filling and filling_method.__str__() == 'median_filling':
                 continue
             true_sub_dict, pred_sub_dict, pred_std_sub_dict = {}, {}, {}
             for dset in test_dataset_dict.keys():
@@ -223,10 +226,15 @@ def loop_mask_segment_conditions(model, model_key, test_dataset_dict):
                     pred_sub_dict[dset_name] = [trial_[:, col_loc_to_save] for trial_ in pred_sub]
                     pred_std_sub_dict[dset_name] = [trial_[:, col_loc_to_save] for trial_ in pred_std_sub]
             results_ = [true_sub_dict, pred_sub_dict, pred_std_sub_dict, col_name_to_save]
-            pickle.dump(results_, open(f"figures/results/{folder}/{model_key}_{mask_key}_{filling_method}.pkl", "wb"))
+            pickle.dump(results_, open(f"figures/results/{folder}/{model_key}_{mask_key}_{filling_method}{additional_key}.pkl", "wb"))
 
 
-def one_trial_for_video(model, test_dataset_dict):
+def supplementary_fig_test_overlapping_len():
+    cols_to_unmask = {'none': cols_to_unmask_main['none']}
+    loop_mask_segment_conditions(model, model_key, test_dataset_dict, cols_to_unmask, win_step_length=150, additional_key='_no_overlapping')
+
+
+def one_trial_for_video(model, test_dataset_dict, cols_to_unmask):
     win_step_length = 15
     diffusion_model_for_filling, _ = load_diffusion_model(opt)
     unmask_col_loc = cols_to_unmask['none']
@@ -427,25 +435,64 @@ def load_test_dataset_dict():
     return test_dataset_dict
 
 
+def generate_combinations(segment_and_dof):
+    def get_unmask_cols(excluded_body_parts):
+        """Get column indices that should remain unmasked when excluding specified body parts."""
+        excluded_cols = []
+        for body_part in excluded_body_parts:
+            excluded_cols.extend(segment_and_dof[body_part])
+        return [i_col for i_col, col in enumerate(opt.model_states_column_names) 
+                if ('force' not in col and not any(part in col for part in excluded_cols))]
+
+    body_parts = list(segment_and_dof.keys())
+    cols_to_unmask_big_table = {}
+    for r in range(len(body_parts) + 1):
+        for combo in combinations(body_parts, r):
+            combo_name = '_'.join(combo) if combo else 'none'
+            cols_to_unmask_big_table[combo_name] = get_unmask_cols(combo)
+
+    return cols_to_unmask_big_table
+
+
 opt = parse_opt()
 opt.batch_size = opt.batch_size*5
 params_of_interest = ['calcn_l_force_vy', 'calcn_l_force_vx', 'calcn_l_force_vz']
-cols_to_unmask = {
+cols_to_unmask_main = {
     'none': opt.kinematic_diffusion_col_loc,
-    'velocity': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('force' not in col and 'pelvis_t' not in col)],
     'trunk': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('force' not in col and 'lumbar' not in col)],
-    'pelvis': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('force' not in col and 'pelvis' not in col) or 'pelvis_t' in col],
+    'pelvis': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('force' not in col and 'pelvis' not in col)],
     'hip': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('force' not in col and 'hip' not in col)],
     'knee': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('force' not in col and 'knee' not in col)],
     'ankle': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('force' not in col and 'ankle' not in col and 'subtalar' not in col)],
 }
-cols_to_unmask.update({
-    'velocity_hip': list(set(cols_to_unmask['velocity']).intersection(cols_to_unmask['hip'])),
-    'trunk_pelvis_knee_ankle': list(list(set(cols_to_unmask['trunk']).intersection(cols_to_unmask['pelvis']).intersection(cols_to_unmask['knee']).intersection(cols_to_unmask['ankle']))),
-    # 'velocity_trunk_pelvis_knee_ankle': [i_col for i_col, col in enumerate(opt.model_states_column_names) if 'hip' in col],
-    # 'velocity_trunk_pelvis_ankle': [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('hip' in col or 'knee' in col)],
-})
-# cols_to_unmask = {key: cols_to_unmask[key] for key in ['none']}  # !!!
+segment_to_osim_param = {
+    'velocity': ['pelvis_tx', 'pelvis_ty', 'pelvis_tz'],
+    'trunk': ['lumbar_extension', 'lumbar_bending', 'lumbar_rotation'],
+    'pelvis': ['pelvis_tilt', 'pelvis_list', 'pelvis_rotation'],
+    'hip': ['hip_flexion_r', 'hip_adduction_r', 'hip_rotation_r', 'hip_flexion_l', 'hip_adduction_l', 'hip_rotation_l'],
+    'knee': ['knee_angle_r', 'knee_angle_l'],
+    'ankle': ['ankle_angle_r', 'subtalar_angle_r', 'ankle_angle_l', 'subtalar_angle_l'],
+}
+
+segment_and_dof = {
+    'trunk': ['lumbar_0', 'lumbar_1', 'lumbar_2', 'lumbar_3', 'lumbar_4', 'lumbar_5', 'lumbar_x_angular_vel',
+              'lumbar_y_angular_vel', 'lumbar_z_angular_vel'],
+    'pelvis': ['pelvis_tx', 'pelvis_ty', 'pelvis_tz', 'pelvis_0',
+               'pelvis_1', 'pelvis_2', 'pelvis_3', 'pelvis_4', 'pelvis_5',
+               'pelvis_x_angular_vel', 'pelvis_y_angular_vel', 'pelvis_z_angular_vel'],
+    'hip': ['hip_r_0', 'hip_r_1', 'hip_r_2', 'hip_r_3', 'hip_r_4', 'hip_r_5', 'hip_l_0', 'hip_l_1', 'hip_l_2', 'hip_l_3', 'hip_l_4', 'hip_l_5',
+            'hip_r_x_angular_vel', 'hip_r_y_angular_vel', 'hip_r_z_angular_vel',
+            'hip_l_x_angular_vel', 'hip_l_y_angular_vel', 'hip_l_z_angular_vel'],
+    'knee': ['knee_angle_r', 'knee_angle_l', 'knee_angle_r_vel', 'knee_angle_l_vel'],
+    'ankle': ['ankle_angle_r', 'subtalar_angle_r', 'ankle_angle_l', 'subtalar_angle_l',
+              'ankle_angle_r_vel', 'subtalar_angle_r_vel', 'ankle_angle_l_vel', 'subtalar_angle_l_vel'],
+}
+cols_to_unmask_big_table = generate_combinations(segment_and_dof)
+cols_to_unmask_big_table.pop('trunk_pelvis_hip_knee_ankle')            # the last one masked all columns
+for key in cols_to_unmask_main.keys():
+    cols_to_unmask_big_table.pop(key)        # no need to repeat 
+cols_to_unmask_big_table['only_right_leg'] = [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('hip_r' in col or 'angle_r' in col)]
+cols_to_unmask_big_table['only_left_leg'] =  [i_col for i_col, col in enumerate(opt.model_states_column_names) if ('hip_l' in col or 'angle_l' in col)]
 
 drop_frame_num_range = range(5, 51, 5)
 dset_to_split = ['Camargo2021_Formatted_No_Arm', 'Moore2015_Formatted_No_Arm', 'vanderZee2022_Formatted_No_Arm']
@@ -458,6 +505,7 @@ dset_specific_trial['Uhlrich2023_Formatted_No_Arm'] = 'walking'
 dset_specific_trial['Wang2023_Formatted_No_Arm'] = ['walk', 'run']
 skel_num = 2
 
+
 if __name__ == "__main__":
     # 0: diffusion, 1: tf, 2: groundlink, 3: Sugai LSTM, 4: tf no data filter
     model_to_test = 1
@@ -467,11 +515,10 @@ if __name__ == "__main__":
     model, model_key = load_model(model_to_test)
     test_dataset_dict = load_test_dataset_dict()
 
-    loop_mask_segment_conditions(model, model_key, test_dataset_dict)
-    # loop_drop_temporal_conditions(model, model_key, test_dataset_dict)
+    loop_mask_segment_conditions(model, model_key, test_dataset_dict, cols_to_unmask_main)
+    # loop_mask_segment_conditions(model, model_key, test_dataset_dict, cols_to_unmask_big_table, median_filling=False)
     # one_trial_for_video(model, test_dataset_dict)
-
-
+    # supplementary_fig_test_overlapping_len()
 
 
 

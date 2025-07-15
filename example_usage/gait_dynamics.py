@@ -26,6 +26,7 @@ from functools import partial
 from accelerate.state import AcceleratorState
 
 
+device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 torch.manual_seed(0)
 random.seed(0)
 np.random.seed(0)
@@ -536,10 +537,6 @@ class FillingBase:
     def fill_param(self, windows, diffusion_model_for_filling):
         return self.filling(windows, diffusion_model_for_filling, self.update_kinematics_and_masks_for_masking_column)
 
-    def fill_temporal(self, windows, diffusion_model_for_filling, mask_original):
-        self.mask_original = mask_original
-        return self.filling(windows, diffusion_model_for_filling, self.update_kinematics_and_masks_for_masking_temporal)
-
     @staticmethod
     def update_kinematics_and_masks_for_masking_column(windows, samples, i_win, masks):
         unmasked_samples_in_temporal_dim = (masks.sum(axis=2)).bool()
@@ -802,7 +799,7 @@ class TransformerEncoderArchitecture(nn.Module):
 class DiffusionShellForAdaptingTheOriginalFramework(nn.Module):
     def __init__(self, model):
         super(DiffusionShellForAdaptingTheOriginalFramework, self).__init__()
-        self.device = 'cuda'
+        self.device = device
         self.model = model
         self.ema = EMA(0.99)
         self.master_model = copy.deepcopy(self.model)
@@ -1220,13 +1217,13 @@ class SinusoidalPosEmb(nn.Module):
         return emb
 
 
-def convertDfToGRFMot(df, out_folder, dt, time_column):
+def convertDfToGRFMot(df, out_path, dt, time_column):
     numFrames = df.shape[0]
     for key in df.keys():
         if key == 'TimeStamp':
             continue
 
-    out_file = open(out_folder, 'w')
+    out_file = open(out_path, 'w')
     out_file.write('nColumns=9\n')
     out_file.write('nRows='+str(numFrames)+'\n')
     out_file.write('DataType=double\n')
@@ -1263,8 +1260,32 @@ def convertDfToGRFMot(df, out_folder, dt, time_column):
             out_file.write('\t' + str(0))
         out_file.write('\n')
     out_file.close()
-    print('GRF file exported to ' + out_folder)
-    print('You can now download the file from the default folder.')
+    print('Ground reaction forces exported to ' + out_path)
+
+
+def convertDataframeToTrc(df, out_path, dt, time_column):
+    numFrames = df.shape[0]
+    out_file = open(out_path, 'w')
+    out_file.write('Coordinates\n')
+    out_file.write('version=1\n')
+    out_file.write(f'nRows={numFrames}\n')
+    out_file.write(f'nColumns={len(df.columns)+1}\n')
+    out_file.write('inDegrees=no\n\n')
+    out_file.write('If the header above contains a line with \'inDegrees\', this indicates whether rotational values are in degrees (yes) or radians (no).\n\n')
+    out_file.write('endheader\n')
+
+    out_file.write('time')
+    for i in range(len(df.columns)):
+        out_file.write('\t' + df.columns[i])
+    out_file.write('\n')
+
+    for i in range(numFrames):
+        out_file.write(str(round(dt * i + time_column[0], 5)))
+        for j in range(len(df.columns)):
+            out_file.write('\t' + str(df.iloc[i, j]))
+        out_file.write('\n')
+    out_file.close()
+    print('Missing kinematics exported to ' + out_path)
 
 
 def rotation_6d_to_matrix(d6: torch.Tensor) -> torch.Tensor:
@@ -1352,7 +1373,7 @@ def get_knee_rotation_coefficients():
 
 
 walker_knee_coefficients = get_knee_rotation_coefficients()
-walker_knee_coefficients = torch.tensor(walker_knee_coefficients).to(torch.device('cuda:0'))         # Bugprone
+walker_knee_coefficients = torch.tensor(walker_knee_coefficients).to(device)
 
 
 def forward_kinematics(pose, offsets, with_arm=False):
@@ -1379,7 +1400,7 @@ def forward_kinematics(pose, offsets, with_arm=False):
     """
     if isinstance(pose, np.ndarray):
         pose = torch.from_numpy(pose)
-    pose = pose.to(torch.device('cuda:0'))      # Error-prone
+    pose = pose.to(torch.device(device))
     if len(pose.shape) == 2:
         pose = pose[None, ...]
     if len(offsets.shape) == 3:
@@ -2449,6 +2470,10 @@ class MotionDataset(Dataset):
         windows, s_list, e_list = [], [], []
         for i_trial in range(start_trial, end_trial):
             trial_ = self.trials[i_trial]
+            col_loc_to_unmask_trial = copy.deepcopy(col_loc_to_unmask)
+            for col in trial_.missing_col:
+                col_index = opt.model_states_column_names.index(col)
+                col_loc_to_unmask_trial.remove(col_index)
             trial_len = trial_.converted_pose.shape[0]
             if including_shorter_than_window_len:
                 e_of_trial = trial_len
@@ -2460,7 +2485,7 @@ class MotionDataset(Dataset):
                 s_list.append(s)
                 e_list.append(e)
                 mask = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
-                mask[:, col_loc_to_unmask] = 1
+                mask[:, col_loc_to_unmask_trial] = 1
                 mask[e-s:, :] = 0
                 data_ = torch.zeros([self.opt.window_len, len(self.opt.model_states_column_names)])
                 data_[:e-s] = trial_.converted_pose[s:e, ...]
@@ -2477,11 +2502,16 @@ class MotionDataset(Dataset):
         self.trials, self.file_names, self.rot_mat_trials, self.time_column = [], [], [], []
         for i_file, file_path in enumerate(file_paths):
             model_offsets = get_model_offsets(skel).float()
-            poses_df = pd.read_csv(file_path, sep='\t', skiprows=10)
             with open(file_path) as f:
-                for _ in range(10):
+                line_num = 0
+                endheader_line, angle_scale = None, None
+                while True:
                     header = f.readline()
-                    if 'inDegrees' in header:
+                    line_num += 1
+                    if 'endheader' in header:
+                        endheader_line = line_num
+                        break
+                    if 'inDegrees' in header and angle_scale is None:
                         if 'yes' in header and 'no' not in header:
                             angle_scale = np.pi / 180
                         elif 'no' in header and 'yes' not in header:
@@ -2490,7 +2520,9 @@ class MotionDataset(Dataset):
                             raise ValueError('No inDegrees keyword in the header, cannot determine the unit of angles. '
                                              'Here is an example header: \nCoordinates\nversion=1\nnRows=1380'
                                              '\nnColumns=26\ninDegrees=yes\n')
-                        break
+                if endheader_line is None:
+                    raise ValueError(f'No \'endheader\' line found in the header of {file_path}.')
+            poses_df = pd.read_csv(file_path, sep='\t', skiprows=endheader_line)
 
             if 'time' not in poses_df.columns:
                 raise ValueError(f'{file_path} does not have time column. Necessary for compuing sampling rate')
@@ -2608,7 +2640,7 @@ def usr_inputs():
     for root, dirs, files in os.walk(opt.subject_data_path):
         for file in files:
             file_path = os.path.join(root, file)
-            if file.endswith(".osim") and 'example_usage/example_opensim_model.osim' not in file_path:
+            if file.endswith(".osim"):
                 osim_paths.append(file_path)
     if len(osim_paths) > 1:
         print(f'Multiple .osim files found.')
@@ -2652,7 +2684,7 @@ def usr_inputs():
     return opt
 
 
-def predict_grf(opt):
+def predict_grf_and_missing_kinematics():
     refinement_model = BaselineModel(opt, TransformerEncoderArchitecture)
     dataset = MotionDataset(opt, normalizer=refinement_model.normalizer)
     diffusion_model_for_filling = None
@@ -2697,11 +2729,13 @@ def predict_grf(opt):
         results_pred[:, -6:-3] = results_pred[:, -6:-3] * opt.weight_kg  # convert to N
         df = pd.DataFrame(results_pred, columns=opt.osim_dof_columns)
 
-        trial_save_path = f'{dataset.file_names[i_trial][:-4]}_pred___.mot'
-        convertDfToGRFMot(df, trial_save_path, round(1 / opt.target_sampling_rates, 3), dataset.time_column[i_trial])
+        trial_save_path = f'{dataset.file_names[i_trial][:-4]}_grf_pred___.mot'
+        convertDfToGRFMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3), dataset.time_column[i_trial])
+        if len(windows[0].missing_col) > 0:
+            trc_save_path = f'{dataset.file_names[i_trial][:-4]}_missing_kinematics_pred___.mot'
+            convertDataframeToTrc(df[OSIM_DOF_ALL[:23]], trc_save_path, round(1 / opt.target_sampling_rate, 3), dataset.time_column[i_trial])
+    print('You can now download files from the default folder.')
 
-
-
+opt = usr_inputs()
 if __name__ == '__main__':
-    opt = usr_inputs()
-    predict_grf(opt)
+    predict_grf_and_missing_kinematics()
