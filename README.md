@@ -28,21 +28,24 @@ Example files can be found in the [example_usage](/example_usage) folder.
 ## Dataset
 [AddBiomechanics Dataset](https://addbiomechanics.org/download_data.html)
 
-## Demo video
+## Demo Videos
 
 Below are demo videos of the three downstream tasks.
 
-<video src="./figures/readme_fig/da1.mov" autoplay muted loop playsinline controls width="720"></video>
+### Downstream Task 1: Force Estimation
+**Estimating forces using kinematic inputs.** The ability to accurately estimate forces during gait from kinematics would transform biomechanics and healthcare, facilitating applications such as remote rehabilitation, exoskeleton control, and running injury prevention.
 
-- Downstream task 1: estimating forces using kinematic inputs. The ability to accurately estimate forces during gait from kinematics would transform biomechanics and healthcare, facilitating applications such as remote rehabilitation, exoskeleton control, and running injury prevention.
+https://github.com/user-attachments/assets/your-da1-video-asset-id
 
-<video src="./figures/readme_fig/da2.mov" autoplay muted loop playsinline controls width="720"></video>
+### Downstream Task 2: Knee Adduction Moment Prediction  
+**Predicting reduction in knee adduction moment during trunk sway gait without experiments.** Increasing medial-lateral trunk sway during walking can reduce knee adduction moments, which are associated with medial compartment knee osteoarthritis.
 
-- Downstream task 2: predicting reduction in knee adduction moment during trunk sway gait without experiments. Increasing medial-lateral trunk sway during walking can reduce knee adduction moments, which are associated with medial compartment knee osteoarthritis.
+https://github.com/user-attachments/assets/your-da2-video-asset-id
 
-<video src="./figures/readme_fig/da3.mov" autoplay muted loop playsinline controls width="720"></video>
+### Downstream Task 3: Running Speed Dynamics
+**Predicting comprehensive kinematics and kinetic changes that occur with increasing running speeds.**
 
-- Downstream task 3: predicting comprehensive kinematics and kinetic changes that occur with increasing running speeds.
+https://github.com/user-attachments/assets/your-da3-video-asset-id
 
 ## Methods
 
