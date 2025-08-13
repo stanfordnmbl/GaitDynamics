@@ -2,7 +2,7 @@
 # GaitDynamics: A Foundation Model for Analyzing Gait Dynamics 
 By Tian Tan, Tom Van Wouwe, Keenon F. Werling, C. Karen Liu, Scott L. Delp, Jennifer L. Hicks, and Akshay S. Chaudhari
 
-## Exclusive Summary
+## Summary
 GaitDynamics is a generative foundation model for general-purpose gait dynamics prediction.
 We illustrate in three diverse tasks with different inputs, outputs, and clinical impacts: i) estimating 
 external forces from kinematics, ii) predicting the influence of gait modifications on knee loading without human 
@@ -10,9 +10,7 @@ experiments, and iii) predicting comprehensive kinematics and kinetic changes th
 speeds.
 
 ## Environment
-Our code is developed under the following environment.
-
-numpy 1.23.5; Python 3.9.16; Pytorch 1.13.1; Cuda 11.6; Cudnn 8.3.2;
+Our code is tested with: numpy 1.23.5; Python 3.9.16; PyTorch 1.13.1; CUDA 11.6; cuDNN 8.3.2.
 
 ## Trained model
 GaitDynamics has [a diffusion model](/example_usage/GaitDynamicsDiffusion.pt) and 
@@ -29,13 +27,17 @@ Example files can be found in the [example_usage](/example_usage) folder.
 [AddBiomechanics Dataset](https://addbiomechanics.org/download_data.html)
 
 ## Demo Videos
-**Downstream Task 1: Estimating forces using kinematic inputs.**
+**Downstream Task 1: estimating forces using kinematic inputs.**
 
 https://github.com/user-attachments/assets/7a760398-d517-4e56-b20c-e2d316574a27
+
+---
 
 **Downstream Task 2: predicting reduction in knee adduction moment during trunk sway gait without experiments.**
 
 https://github.com/user-attachments/assets/a0d525d4-53e7-4ee6-b830-d4b2825f152c
+
+---
 
 **Downstream Task 3: gait generation at various running speeds.**
 
@@ -43,19 +45,26 @@ https://github.com/user-attachments/assets/69f03b3d-7bb2-4c26-b94d-a28a4ea803d6
 
 ## Methods
 
-### Model Architecture
-
 ![Figure 1](./figures/readme_fig/fig1.png)
 
-The data window and training of GaitDynamics. The data is a 2-D window with a 1.5-second time dimension and a parameter dimension. The parameter dimension includes body center velocity, joint angles, joint angular velocities, and forces. GaitDynamics has one diffusion model and one force refinement model. The diffusion model is trained to recursively restore the clean windows from the windows with different amounts of noise, whereas the refinement model is trained to map full-body kinematics to forces.
+Data window and training. Each sample is a 2D window: time (1.5 s) × parameters (body center velocity, joint angles,
+joint angular velocities, and forces). GaitDynamics comprises a diffusion model and a force refinement model. The
+diffusion model learns to denoise windows, whereas the refinement model maps full-body kinematics to forces.
+
+---
 
 ![Figure 2](./figures/readme_fig/fig2.png)
 
-Force estimation using GaitDynamics with partial-body kinematics as input. GaitDynamics generates unknown kinematics using inpainting, where the diffusion model recursively denoise the data window based on the known portion. The inpainting begins by denoising pure Gaussian noise. Then, the denoised data window (unknown kinematics only) is concatenated with known kinematics and diffused to the noisy data window of the next iteration following a Markov chain. Subsequently, the same generation, concatenation, and diffusion processes are iteratively applied to the data window for a total of 50 iterations, where the quality of generation gradually increases. Finally, the unknown kinematics generated in the last iteration are concatenated with known kinematics and fed into the refinement model to estimate forces.
+Force estimation from partial-body kinematics. The diffusion model first generates unknown kinematics via inpainting. Then full-body kinematics
+are passed to the refinement model to estimate forces.
+
+---
 
 ![Figure 3](./figures/readme_fig/fig3.png)
 
-Experiment-free prediction of knee adduction moment during walking with large medial-lateral trunk sway angles. The process is similar to the inpainting described in the above figure, with two differences. First, instead of using experimental data as input, manipulated gait data with times larger medial-lateral trunk sway are used as input. Second, a loss function g is used to regularize large discrepancies in and for each iteration. Discrepancies larger than a threshold are back-propagated to refine the noisy motion using gradient descent optimization. Finally, based on the generated kinematics and forces, we computed the knee adduction moment using the cross product of the force vector and the lever arm vector from the knee joint center to the center of pressure.
+Experiment-free prediction of knee adduction moment during walking with large medial–lateral trunk sway. The process is
+similar to that in the figure above, with two differences. First, inputs are synthetic medial–lateral trunk sway. Second, an additional loss penalizes large discrepancies between synthetic gait and model generations. Finally, based on the generated kinematics and forces, the knee adduction moment is
+computed from the cross product of the force vector and the lever arm vector.
 
 ## Acknowledgement
 
