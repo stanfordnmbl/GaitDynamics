@@ -46,7 +46,7 @@ https://github.com/user-attachments/assets/69f03b3d-7bb2-4c26-b94d-a28a4ea803d6
 ## Methods
 
 <p align="center">
-  <img src="./figures/readme_fig/fig1.png" alt="Figure 1" style="width:75%; max-width:75%;">
+  <img src="./figures/readme_fig/fig1.png" alt="Figure 1" style="width:65%; max-width:65%;">
 </p>
 
 Data window and training. Each sample is a 2D window: time (1.5 s) × parameters (body center velocity, joint angles,
