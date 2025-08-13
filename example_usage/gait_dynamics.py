@@ -1263,7 +1263,7 @@ def convertDfToGRFMot(df, out_path, dt, time_column):
     print('Ground reaction forces exported to ' + out_path)
 
 
-def convertDataframeToTrc(df, out_path, dt, time_column):
+def convertDataframeToMot(df, out_path, dt, time_column):
     numFrames = df.shape[0]
     out_file = open(out_path, 'w')
     out_file.write('Coordinates\n')
@@ -2733,7 +2733,7 @@ def predict_grf_and_missing_kinematics():
         convertDfToGRFMot(df, trial_save_path, round(1 / opt.target_sampling_rate, 3), dataset.time_column[i_trial])
         if len(windows[0].missing_col) > 0:
             trc_save_path = f'{dataset.file_names[i_trial][:-4]}_missing_kinematics_pred___.mot'
-            convertDataframeToTrc(df[OSIM_DOF_ALL[:23]], trc_save_path, round(1 / opt.target_sampling_rate, 3), dataset.time_column[i_trial])
+            convertDataframeToMot(df[OSIM_DOF_ALL[:23]], trc_save_path, round(1 / opt.target_sampling_rate, 3), dataset.time_column[i_trial])
     print('You can now download files from the default folder.')
 
 opt = usr_inputs()

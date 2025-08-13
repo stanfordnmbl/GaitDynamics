@@ -28,6 +28,54 @@ Example files can be found in the [example_usage](/example_usage) folder.
 ## Dataset
 [AddBiomechanics Dataset](https://addbiomechanics.org/download_data.html)
 
+## Demo video
+
+Below are demo videos of the three downstream tasks.
+
+<video src="./figures/readme_fig/da1.mov" autoplay muted loop playsinline controls width="720"></video>
+
+- Downstream task 1: estimating forces using kinematic inputs. The ability to accurately estimate forces during gait from kinematics would transform biomechanics and healthcare, facilitating applications such as remote rehabilitation, exoskeleton control, and running injury prevention.
+
+<video src="./figures/readme_fig/da2.mov" autoplay muted loop playsinline controls width="720"></video>
+
+- Downstream task 2: predicting reduction in knee adduction moment during trunk sway gait without experiments. Increasing medial-lateral trunk sway during walking can reduce knee adduction moments, which are associated with medial compartment knee osteoarthritis.
+
+<video src="./figures/readme_fig/da3.mov" autoplay muted loop playsinline controls width="720"></video>
+
+- Downstream task 3: predicting comprehensive kinematics and kinetic changes that occur with increasing running speeds.
+
+## Methods
+
+### Model Architecture
+
+![Figure 1](./figures/readme_fig/fig1.png)
+
+The data window and training of GaitDynamics. The data is a 2-D window with a 1.5-second time dimension and a parameter dimension. The parameter dimension includes body center velocity, joint angles, joint angular velocities, and forces. GaitDynamics has one diffusion model and one force refinement model. The diffusion model is trained to recursively restore the clean windows from the windows with different amounts of noise, whereas the refinement model is trained to map full-body kinematics to forces.
+
+![Figure 2](./figures/readme_fig/fig2.png)
+
+Force estimation using GaitDynamics with partial-body kinematics as input. GaitDynamics generates unknown kinematics using inpainting, where the diffusion model recursively denoise the data window based on the known portion. The inpainting begins by denoising pure Gaussian noise. Then, the denoised data window (unknown kinematics only) is concatenated with known kinematics and diffused to the noisy data window of the next iteration following a Markov chain. Subsequently, the same generation, concatenation, and diffusion processes are iteratively applied to the data window for a total of 50 iterations, where the quality of generation gradually increases. Finally, the unknown kinematics generated in the last iteration are concatenated with known kinematics and fed into the refinement model to estimate forces.
+
+![Figure 3](./figures/readme_fig/fig3.png)
+
+Experiment-free prediction of knee adduction moment during walking with large medial-lateral trunk sway angles. The process is similar to the inpainting described in the above figure, with two differences. First, instead of using experimental data as input, manipulated gait data with times larger medial-lateral trunk sway are used as input. Second, a loss function g is used to regularize large discrepancies in and for each iteration. Discrepancies larger than a threshold are back-propagated to refine the noisy motion using gradient descent optimization. Finally, based on the generated kinematics and forces, we computed the knee adduction moment using the cross product of the force vector and the lever arm vector from the knee joint center to the center of pressure.
+
+## Acknowledgement
+
+This work was supported in part by the Joe and Clara Tsai Foundation through the Wu Tsai Human Performance Alliance and the U.S. National Institutes of Health (NIH) under Grants P41 EB027060, P2C HD101913, R01 AR077604, R01 EB002524, and R01 AR079431.
+
+## BibTex
+
+```bibtex
+@article{tan2025gaitdynamics,
+  title={GaitDynamics: A Generative Foundation Model for Analyzing Human Walking and Running},
+  author={Tan, Tian and Van Wouwe, Tom and Werling, Keenon and Liu, C Karen and Delp, Scott and Hicks, Jennifer and Chaudhari, Akshay},
+  journal={Research Square},
+  pages={rs--3},
+  year={2025}
+}
+```
+
 ## Publication
 This repository includes the code and models for a [preprint](https://assets-eu.researchsquare.com/files/rs-6206222/v1_covered_f6a08d22-5432-4743-b062-b8b8d886d664.pdf?c=1742524004)
 and an [abstract](./figures/readme_fig/Tan_ASB2024.pdf).
