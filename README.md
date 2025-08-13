@@ -10,9 +10,9 @@ experiments, and iii) predicting comprehensive kinematics and kinetic changes th
 speeds.
 
 ## Environment
-Our code is developed under the following environment. Versions different from ours may still work.
+Our code is developed under the following environment.
 
-Python 3.9.16; Pytorch 1.13.1; Cuda 11.6; Cudnn 8.3.2; numpy 1.23.5;
+numpy 1.23.5; Python 3.9.16; Pytorch 1.13.1; Cuda 11.6; Cudnn 8.3.2;
 
 ## Trained model
 GaitDynamics has [a diffusion model](/example_usage/GaitDynamicsDiffusion.pt) and 
@@ -29,23 +29,17 @@ Example files can be found in the [example_usage](/example_usage) folder.
 [AddBiomechanics Dataset](https://addbiomechanics.org/download_data.html)
 
 ## Demo Videos
+**Downstream Task 1: Estimating forces using kinematic inputs.**
 
-Below are demo videos of the three downstream tasks.
+https://github.com/user-attachments/assets/7a760398-d517-4e56-b20c-e2d316574a27
 
-### Downstream Task 1: Force Estimation
-**Estimating forces using kinematic inputs.** The ability to accurately estimate forces during gait from kinematics would transform biomechanics and healthcare, facilitating applications such as remote rehabilitation, exoskeleton control, and running injury prevention.
+**Downstream Task 2: predicting reduction in knee adduction moment during trunk sway gait without experiments.**
 
-https://github.com/user-attachments/assets/your-da1-video-asset-id
+https://github.com/user-attachments/assets/a0d525d4-53e7-4ee6-b830-d4b2825f152c
 
-### Downstream Task 2: Knee Adduction Moment Prediction  
-**Predicting reduction in knee adduction moment during trunk sway gait without experiments.** Increasing medial-lateral trunk sway during walking can reduce knee adduction moments, which are associated with medial compartment knee osteoarthritis.
+**Downstream Task 3: gait generation at various running speeds.**
 
-https://github.com/user-attachments/assets/your-da2-video-asset-id
-
-### Downstream Task 3: Running Speed Dynamics
-**Predicting comprehensive kinematics and kinetic changes that occur with increasing running speeds.**
-
-https://github.com/user-attachments/assets/your-da3-video-asset-id
+https://github.com/user-attachments/assets/69f03b3d-7bb2-4c26-b94d-a28a4ea803d6
 
 ## Methods
 
