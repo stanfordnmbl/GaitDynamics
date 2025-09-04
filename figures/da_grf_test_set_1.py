@@ -8,6 +8,7 @@ import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 import csv
+import pandas as pd
 from args import parse_opt
 from consts import NOT_IN_GAIT_PHASE, RUNNING_DSET_SHORT_NAMES, OVERGROUND_DSETS
 from da_grf_test_set_0 import cols_to_unmask_main, dset_to_skip, drop_frame_num_range, cols_to_unmask_big_table, segment_to_osim_param
@@ -297,7 +298,35 @@ def sigifi_sign(mean_, std_, bar_locs, draw_23=True, draw_12=True, draw_13=True)
         plt.text(bar_locs[i]*0.5 + bar_locs[i+2]*0.5, top_line_y1-0.28, '*', fontdict={'fontname': 'Times New Roman'}, color='black', size=20, ha='center')
 
 
-def draw_fig_2(fast_run=False):
+def export_metrics_to_excel(metrics_dict, params_dict, filename, method_names=None, p_values=None):
+    """Generic function to export metrics to Excel"""
+    if method_names is None:
+        method_names = list(metrics_dict.keys())
+    
+    datasets = list(metrics_dict.values())[0]['dset_short']
+    data = []
+    
+    for param, param_name in params_dict.items():
+        for i, dataset in enumerate(datasets):
+            for method_key, method_name in zip(metrics_dict.keys(), method_names):
+                data.append({
+                    'Dataset': dataset, 
+                    'Parameter': param_name, 
+                    'Model Name': method_name, 
+                    'Mean Absolute Error (% BW)': metrics_dict[method_key][param][i]
+                })
+    
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    
+    with pd.ExcelWriter(filename, engine='openpyxl') as writer:
+        pd.DataFrame(data).to_excel(writer, sheet_name='Data Points', index=False)
+        if p_values:
+            pd.DataFrame(p_values).to_excel(writer, sheet_name='P_Values', index=False)
+    
+    print(f"Exported to: {filename}")
+    return filename
+
+def draw_fig_1(fast_run=False):
     def format_ticks(ax):
         ax.text(-0.7, 5, 'Mean Absolute Error (\% BW)', rotation=90, fontdict=FONT_DICT_SMALL, verticalalignment='center')
         ax.text(-0.8, 12.5, 'Better', rotation=90, fontdict=FONT_DICT_SMALL, color='green', verticalalignment='center')
@@ -318,6 +347,15 @@ def draw_fig_2(fast_run=False):
     metric_groundlink = get_all_the_metrics(model_key=f'/{folder}/groundlink_none_diffusion_filling')
     metric_sugainet = get_all_the_metrics(model_key=f'/{folder}/sugainet_none_diffusion_filling')
 
+    # Export source data
+    metrics_dict = {'tf': metric_tf, 'groundlink': metric_groundlink, 'sugainet': metric_sugainet}
+    params_name_excel_pairs = {
+        'calcn_l_force_vy': 'Vertical Force Profile',
+        'calcn_l_force_vx': 'Anterior-Posterior Force Profile', 
+        'calcn_l_force_vz': 'Medial-Lateral Force Profile',
+        'calcn_l_force_vy_max': 'Vertical Force Peak'
+    }
+
     params_name_formal_name_pairs = {
         'calcn_l_force_vy': 'Vertical\nForce—Profile',
         'calcn_l_force_vx': 'Anterior-Posterior\nForce—Profile',
@@ -329,6 +367,7 @@ def draw_fig_2(fast_run=False):
     plt.rc('font', family='Helvetica')
 
     fig = plt.figure(figsize=(7.7, 4.5))
+    p_values_data = []
     print('Parameter\tAll\t1-2\t1-3\t2-3')
     for i_axis, param in enumerate(params_of_interest):
         # print(np.mean(metric_tf[param]))
@@ -342,11 +381,19 @@ def draw_fig_2(fast_run=False):
         p_friedmanchisquare = friedmanchisquare(metric_tf[param], metric_groundlink[param], metric_sugainet[param]).pvalue
         print('{0: <15}'.format(param[8:]), end='\t')
         print(round(p_friedmanchisquare, 3), end='\t')
-        p_wilcoxon_tf_groundlink = wilcoxon(metric_tf[param], metric_groundlink[param]).pvalue
-        p_wilcoxon_tf_sugainet = wilcoxon(metric_tf[param], metric_sugainet[param]).pvalue
-        p_wilcoxon_groundlink_sugainet = wilcoxon(metric_groundlink[param], metric_sugainet[param]).pvalue
+        p_wilcoxon_tf_groundlink = wilcoxon(metric_tf[param], metric_groundlink[param], alternative='two-sided').pvalue
+        p_wilcoxon_tf_sugainet = wilcoxon(metric_tf[param], metric_sugainet[param], alternative='two-sided').pvalue
+        p_wilcoxon_groundlink_sugainet = wilcoxon(metric_groundlink[param], metric_sugainet[param], alternative='two-sided').pvalue
         [print(round(p_val, 5), end='\t') for p_val in [p_wilcoxon_tf_groundlink, p_wilcoxon_tf_sugainet, p_wilcoxon_groundlink_sugainet]]
         print()
+        
+        p_values_data.append({
+            'Parameter': params_name_excel_pairs[param],
+            'Friedman': round(p_friedmanchisquare, 2),
+            'GaitDynamics vs CNN': round(p_wilcoxon_tf_groundlink, 2),
+            'GaitDynamics vs RNN': round(p_wilcoxon_tf_sugainet, 2),
+            'CNN vs RNN': round(p_wilcoxon_groundlink_sugainet, 2)
+        })
         
         if i_axis == 0:
             sigifi_sign(mean_, std_, bar_locs)
@@ -375,11 +422,14 @@ def draw_fig_2(fast_run=False):
     plt.tight_layout(rect=[-0.03, 0., 1.03, 0.88])
     plt.legend(list(bars), ['GaitDynamics', 'Convolutional Neural Network$^{\ 21}$', 'Recurrent Neural Network$^{\ 22}$'],
                frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0.7, 1.2), ncols=1)
-    plt.savefig(os.path.join(SCRIPT_DIR, f'exports/da_grf.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(SCRIPT_DIR, f'exports/da_grf.pdf'), dpi=300, bbox_inches='tight')
     plt.show()
+    
+    filename = os.path.join(SCRIPT_DIR, f'exports/Figure 1 Source Data.xlsx')
+    export_metrics_to_excel(metrics_dict, params_name_excel_pairs, filename, ['GaitDynamics', 'Convolutional Neural Network', 'Recurrent Neural Network'], p_values_data)
 
 
-def draw_fig_3(fast_run=False):
+def draw_fig_2(fast_run=False):
     def format_ticks(ax_plt):
         ax_plt.text(-0.7, 33, 'Mean Absolute Error of Peak Vertical Force Estimation (\% BW)', rotation=90, fontdict=FONT_DICT_SMALL, verticalalignment='center')
         ax_plt.text(-1., 73, 'Better', rotation=90, fontdict=FONT_DICT_SMALL, color='green', verticalalignment='center')
@@ -416,24 +466,37 @@ def draw_fig_3(fast_run=False):
     print(np.mean(full_input))
     line_1, = plt.plot([-0.3, 7.6], [np.mean(full_input), np.mean(full_input)], color=np.array([70, 130, 180])/255, linewidth=LINE_WIDTH, linestyle='--')
 
+    # Collect metrics for export
+    metrics_dict = {}
+    full_input_metric = get_all_the_metrics(model_key=f'/{folder}/tf_none_diffusion_filling')
+    metrics_dict['full_input'] = full_input_metric
+    
     for i_test, test_name in enumerate(list(cols_to_unmask_main.keys())[1:]):
-        metric_tf_inpainting = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')[param_of_interest]
-        metric_tf_medianfilling = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_median_filling')[param_of_interest]
+        metric_tf_inpainting = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')
+        metric_tf_medianfilling = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_median_filling')
+        metrics_dict[f'inpainting_{test_name}'] = metric_tf_inpainting
+        metrics_dict[f'median_{test_name}'] = metric_tf_medianfilling
         bar_locs = [i_test, i_test + 0.3]
-        mean_ = [np.mean(ele) for ele in [metric_tf_inpainting, metric_tf_medianfilling]]
-        std_ = [np.std(ele) for ele in [metric_tf_inpainting, metric_tf_medianfilling]]
+        mean_ = [np.mean(ele) for ele in [metric_tf_inpainting[param_of_interest], metric_tf_medianfilling[param_of_interest]]]
+        std_ = [np.std(ele) for ele in [metric_tf_inpainting[param_of_interest], metric_tf_medianfilling[param_of_interest]]]
         bars = plt.bar(bar_locs, mean_, color=colors[:2], width=0.27)
         ebar, caplines, barlinecols = plt.errorbar(bar_locs, mean_, std_, capsize=0, ecolor='black', fmt='none', lolims=True, elinewidth=LINE_WIDTH)
         format_errorbar_cap(caplines, 8)
 
         print(test_name, mean_ - np.mean(full_input))
 
+    # Export source data
+    params_dict = {param_of_interest: 'Vertical Force Peak'}
+    filename = os.path.join(SCRIPT_DIR, f'exports/Figure 2 Source Data.xlsx')
+    method_names = ['Full-Body Kinematics (GaitDynamics)'] + [f'{method}_{test}' for test in list(cols_to_unmask_main.keys())[1:] for method in ['Partial-Body Kinematics with Inpainting (GaitDynamics)', 'Partial-Body Kinematics with Median Filling']]
+    export_metrics_to_excel(metrics_dict, params_dict, filename, method_names)
+    
     format_axis(plt.gca())
     format_ticks(ax_plt)
     ax_plt.legend(list(bars) + [line_1], [
         'Partial-Body Kinematics with Inpainting (GaitDynamics)', 'Partial-Body Kinematics with Median Filling', 'Full-Body Kinematics (GaitDynamics)'],
                   frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0.36, 0.8), loc='lower left')
-    plt.savefig(os.path.join(SCRIPT_DIR, f'exports/da_segment_filling.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(SCRIPT_DIR, f'exports/da_segment_filling.pdf'), dpi=300, bbox_inches='tight')
     plt.show()
 
 
@@ -636,72 +699,9 @@ def draw_fig_supplementary_1(fast_run=False, data_len=300):
         for y_pos in [0.65, 0.325]:
             line = Line2D([0, 1], [y_pos, y_pos], color='gray', linestyle='-', linewidth=0.5, alpha=0.5, transform=fig.transFigure)
             fig.add_artist(line)
-        plt.savefig(os.path.join(SCRIPT_DIR, f'exports/da_grf_supplement{trial_id_offset}.png'), dpi=300)
+        plt.savefig(os.path.join(SCRIPT_DIR, f'exports/da_grf_supplement{trial_id_offset}.jpg'), dpi=600)
     plt.show()
 
-
-def draw_fig_6(fast_run=False):
-    def format_ticks(ax_plt):
-        ax_plt.text(-0.75, 11.5, 'Mean Absolute Error of Left Peak Vertical Force Estimation (\% BW)', rotation=90, fontdict=FONT_DICT_SMALL, verticalalignment='center')
-        ax_plt.text(-1.15, 27.5, 'Better', rotation=90, fontdict=FONT_DICT_SMALL, color='green', verticalalignment='center')
-        ax_plt.annotate('', xy=(-0.11, 0.8), xycoords='axes fraction', xytext=(-0.11, 1.),
-                        arrowprops=dict(arrowstyle="->", color='green'))
-        ax_plt.set_yticks([0, 5, 10, 15, 20, 25, 30])
-        ax_plt.set_yticklabels([0, 5, 10, 15, 20, 25, 30], fontdict=FONT_DICT_SMALL)
-        ax_plt.set_ylim([0, 30])
-        ax_plt.set_xlim([-0.3, 5.6])
-        ax_plt.set_xticks([])
-
-        ax_text = fig.add_axes([0.1, 0., 0.87, 0.45])
-        plt.axis('off')
-        ax_text.set_xlim(ax_plt.get_xlim())
-        ax_text.set_ylim([3, 10])
-        segment_list = ['trunk', 'pelvis', 'hips', 'knees', 'ankles']
-        segment_list_extended = ['trunk', 'pelvis', 'right hip', 'right knee', 'right ankle', 'left hip', 'left knee', 'left ankle']
-        masked_segment_list = [['trunk', 'pelvis'], 
-                               ['trunk', 'pelvis', 'ankles'],
-                               ['trunk', 'pelvis', 'knees', 'ankles'],
-                               ['trunk', 'pelvis', 'hips', 'ankles'],
-                               ['trunk', 'pelvis', 'left hip', 'left knee', 'left ankle'],
-                               ['trunk', 'pelvis', 'right hip', 'right knee', 'right ankle']]
-        for i_test, test_name in enumerate(list(cols_to_unmask_main.keys())[7:]):
-            masked_segment = masked_segment_list[i_test]
-            segment_to_print = segment_list if i_test < 4 else segment_list_extended
-            for i_segment, segment in enumerate(segment_to_print):
-                if segment in masked_segment:
-                    ax_text.text(i_test*0.96+0.35, 8.2 - i_segment*0.7, segment, fontdict=FONT_DICT_SMALL, color=[0.8, 0.8, 0.8], ha='center')
-                else:
-                    ax_text.text(i_test*0.96+0.35, 8.2 - i_segment*0.7, segment, fontdict=FONT_DICT_SMALL, ha='center')
-
-    colors = [np.array(x) / 255 for x in [[70, 130, 180], [207, 154, 130]]]        #  [207, 154, 130], [100, 155, 227]
-    folder = 'fast' if fast_run else 'full'
-    param_of_interest = 'calcn_l_force_vy_max'
-    fig = plt.figure(figsize=(7.7, 6))
-    rc('text', usetex=True)
-    plt.rc('font', family='Helvetica')
-    ax_plt = fig.add_axes([0.14, 0.38, 0.83, 0.59])
-
-    full_input = get_all_the_metrics(model_key=f'/{folder}/tf_none_diffusion_filling')[param_of_interest]
-    line_1, = plt.plot([-0.3, 7.6], [np.mean(full_input), np.mean(full_input)], color=np.array([70, 130, 180])/255, linewidth=LINE_WIDTH, linestyle='--')
-
-    for i_test, test_name in enumerate(list(cols_to_unmask_main.keys())[7:]):
-        metric_tf_inpainting = get_all_the_metrics(model_key=f'/{folder}/tf_{test_name}_diffusion_filling')[param_of_interest]
-        bar_locs = [i_test + 0.15]
-        mean_ = [np.mean(ele) for ele in [metric_tf_inpainting]]
-        std_ = [np.std(ele) for ele in [metric_tf_inpainting]]
-        bars = plt.bar(bar_locs, mean_, color=colors[:1], width=0.33)
-        ebar, caplines, barlinecols = plt.errorbar(bar_locs, mean_, std_, capsize=0, ecolor='black', fmt='none', lolims=True, elinewidth=LINE_WIDTH)
-        format_errorbar_cap(caplines, 8)
-
-        print(test_name, mean_ - np.mean(full_input))
-
-    format_axis(plt.gca())
-    format_ticks(ax_plt)
-    ax_plt.legend(list(bars) + [line_1], [
-        'Partial-Body Kinematics with Inpainting (GaitDynamics)', 'Partial-Body Kinematics with Median Filling', 'Full-Body Kinematics (GaitDynamics)'],
-                  frameon=False, fontsize=FONT_SIZE_SMALL, bbox_to_anchor=(0., 0.88), loc='lower left')
-    plt.savefig(os.path.join(SCRIPT_DIR, f'exports/da_segment_filling_supplementary.png'), dpi=300)
-    plt.show()
 
 def print_table_4(fast_run=False):
     """ Big table """
@@ -780,12 +780,11 @@ if __name__ == "__main__":
     # get_all_the_metrics(model_key=f'/full/tf_none_diffusion_filling')
     # print_table_1()
     # print_table_2()
-    # draw_fig_2()
-    # draw_fig_3()
+    # draw_fig_1()
+    draw_fig_2()
     # draw_fig_4()
     # draw_fig_supplementary_1()
-    # draw_fig_6()
-    print_table_4()
+    # print_table_4()
     # p_val_with_without_data_filter()
     # draw_fig_for_meeting()
 

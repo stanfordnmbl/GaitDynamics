@@ -5,6 +5,7 @@ currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentfram
 parentdir = os.path.dirname(currentdir)
 sys.path.insert(0, parentdir)
 import pickle
+import pandas as pd
 from fig_utils import FONT_DICT_SMALL, FONT_SIZE_SMALL, LINE_WIDTH, LINE_WIDTH_THICK, format_axis
 import numpy as np
 import matplotlib.pyplot as plt
@@ -97,6 +98,54 @@ def load_omnicontrol(speeds=[3, 3.4, 3.8, 4.2, 4.6, 5]):
     return stride_length_all, angle_all, cadence_all
 
 
+def export_to_excel(speed_param_syn, speed_param_exp, filename):
+    param_names = {
+        'stride_length': 'Stride Length (m)',
+        'peak_vgrf': 'Peak Vertical Force (% BW)',
+        'knee_angle_r_max': 'Peak Knee Flexion (°)',
+        'peak_apgrf': 'Peak Anterior-Posterior Force (% BW)'
+    }
+    
+    data = []
+    all_speeds = set(speed_param_syn.keys()) | set(speed_param_exp.keys())
+    
+    for param, param_name in param_names.items():
+        ratio = 100 if 'BW' in param_name else 1
+        
+        for condition, speed_param_data in [('GaitDynamics Generation', speed_param_syn), ('Experimental Measurement', speed_param_exp)]:
+            for speed in sorted(all_speeds):
+                if speed in speed_param_data and param in speed_param_data[speed]:
+                    values = speed_param_data[speed][param]
+                    data.append({
+                        'Parameter': param_name,
+                        'Condition': condition,
+                        'Speed (m/s)': float(speed) / 10,
+                        'Mean': np.mean(values) * ratio,
+                        'One Standard Deviation': np.abs(np.std(values) * ratio)
+                    })
+        
+        # Add OmniControl data for relevant parameters
+        if param in ['stride_length', 'knee_angle_r_max']:
+            stride_length_all, angle_all, cadence_all = load_omnicontrol()
+            if param == 'stride_length':
+                omni_data = stride_length_all
+            else:
+                omni_data = angle_all
+            
+            for i, speed in enumerate(sorted(all_speeds)):
+                if i < len(omni_data):
+                    data.append({
+                        'Parameter': param_name,
+                        'Condition': 'OmniControl Generation',
+                        'Speed (m/s)': float(speed) / 10,
+                        'Mean': np.nanmean(omni_data[i]) * ratio,
+                        'One Standard Deviation': np.abs(np.nanstd(omni_data[i]) * ratio)
+                    })
+    
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    pd.DataFrame(data).to_excel(filename, index=False)
+    print(f"Exported to: {filename}")
+
 def format_errorbar_cap(caplines):
     for i_cap in range(2):
         caplines[i_cap].set_marker('_')
@@ -178,7 +227,7 @@ def draw_speed_only_fig():
                       ['Experimental Measurement', 'GaitDynamics Generation', 'OmniControl Generation'],
                       frameon=False, bbox_to_anchor=(0.8, 1.25), ncol=3, handlelength=4)
     plt.subplots_adjust(.08, .08, .98, .92)
-    plt.savefig(os.path.join(SCRIPT_DIR, "exports", "da_run_faster_1.png"), dpi=300)
+    plt.savefig(os.path.join(SCRIPT_DIR, "exports", "da_run_faster_1.svg"), dpi=300)
 
         
 def draw_extreme_speed_fig():
@@ -240,10 +289,17 @@ def draw_extreme_speed_fig():
                       ['Experimental Measurement', 'GaitDynamics Generation Guided by 2 m/s Data', 'GaitDynamics Generation Guided by 5 m/s Data'],
                       frameon=False, bbox_to_anchor=(1.1, 1.25), ncol=3, handlelength=3)
     plt.subplots_adjust(.08, .08, .98, .92)
-    plt.savefig(os.path.join(SCRIPT_DIR, "exports", "da_run_faster_1_extreme.png"), dpi=300)
+    plt.savefig(os.path.join(SCRIPT_DIR, "exports", "da_run_faster_1_extreme.jpg"), dpi=600)
 
 
 if __name__ == "__main__":
     # draw_speed_only_fig()
     draw_extreme_speed_fig()
+    
+    # Export source data
+    [speed_param_syn, speed_param_exp] = pickle.load(open(os.path.join(
+        SCRIPT_DIR, "results", "da_run_faster_speed_base_40_speed_lower_30_increment_4.pkl"), "rb"))
+    filename = os.path.join(SCRIPT_DIR, 'exports', 'Figure 4 Source Data.xlsx')
+    export_to_excel(speed_param_syn, speed_param_exp, filename)
+
     plt.show()

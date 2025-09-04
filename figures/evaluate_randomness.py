@@ -103,7 +103,7 @@ def one_trial_for_quantifying_randomness(num_of_tests):
     for y_pos in [0.64, 0.32]:
         line = Line2D([0, 1], [y_pos, y_pos], color='gray', linestyle='-', linewidth=0.5, alpha=0.5, transform=fig.transFigure)
         fig.add_artist(line)
-    plt.savefig(os.path.join(SCRIPT_DIR, f'exports/da_randomness.png'), dpi=300)
+    plt.savefig(os.path.join(SCRIPT_DIR, f'exports/da_randomness.jpg'), dpi=600)
     plt.show()
             
 

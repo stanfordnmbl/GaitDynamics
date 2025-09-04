@@ -2,7 +2,7 @@ import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import pickle
-from consts import NOT_IN_GAIT_PHASE, EXCLUDE_FROM_ASB
+import pandas as pd
 from fig_utils import FONT_DICT_SMALL, FONT_SIZE_SMALL, LINE_WIDTH, LINE_WIDTH_THICK, format_axis, FONT_DICT_LARGE, \
     FONT_DICT
 import numpy as np
@@ -10,6 +10,63 @@ import matplotlib.pyplot as plt
 from matplotlib import rc
 import matplotlib.gridspec as gridspec
 
+
+def export_to_excel(bl_true, bl_pred, ts_true, condition_list, params_of_interest, columns, filename):
+    param_names = {
+        'knee_moment_l_x': 'Knee Adduction Moment (% BW·BH)',
+        'lumbar_bending': 'Medial-Lateral Trunk Angle (°)'
+    }
+    
+    data = []
+    params_col_loc = [columns.index(col) for col in params_of_interest]
+    
+    # Get normal walking and large trunk sway data (use first condition for reference)
+    first_condition = condition_list[0]
+    true_avg, _, ts_avg, true_std, _, ts_std = get_average_and_std(bl_true, bl_pred, ts_true, first_condition, params_col_loc)
+    
+    # Add normal walking data
+    for i, param in enumerate(params_of_interest):
+        scale = -180/np.pi if param == 'lumbar_bending' else 1
+        for phase in range(len(true_avg)):
+            data.append({
+                'Condition': 'Normal Walking - Experimental',
+                'Parameter': param_names[param],
+                'Stance Phase (%)': phase,
+                'Mean': true_avg[phase, i] * scale,
+                'One Standard Deviation': np.abs(true_std[phase, i] * scale)
+            })
+    
+    # Add large trunk sway data
+    for i, param in enumerate(params_of_interest):
+        scale = -180/np.pi if param == 'lumbar_bending' else 1
+        for phase in range(len(ts_avg)):
+            data.append({
+                'Condition': 'Large Trunk Sway - Experimental',
+                'Parameter': param_names[param],
+                'Stance Phase (%)': phase,
+                'Mean': ts_avg[phase, i] * scale,
+                'One Standard Deviation': np.abs(ts_std[phase, i] * scale)
+            })
+    
+    # Add synthetic conditions
+    for condition in condition_list:
+        condition_val = float(condition.split('_')[-1])
+        _, pred_avg, _, _, pred_std, _ = get_average_and_std(bl_true, bl_pred, ts_true, condition, params_col_loc)
+        
+        for i, param in enumerate(params_of_interest):
+            scale = -180/np.pi if param == 'lumbar_bending' else 1
+            for phase in range(len(pred_avg)):
+                data.append({
+                    'Condition': f'{condition_val:.1f}x Normal Trunk Sway - Synthetic',
+                    'Parameter': param_names[param],
+                    'Stance Phase (%)': phase,
+                    'Mean': pred_avg[phase, i] * scale,
+                    'One Standard Deviation': np.abs(pred_std[phase, i] * scale)
+                })
+    
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    pd.DataFrame(data).to_excel(filename, index=False)
+    print(f"Exported to: {filename}")
 
 def get_average_and_std(bl_true, bl_pred, ts_true, condition, params_of_interest_col_loc):
     # Average Stance phase
@@ -86,9 +143,13 @@ def draw_fig():
                     print('Exp large trunk sway 1st peak value {:.1f}'.format(ts_averaged[:, i].max()))
             format_axis(ax)
 
+    # Export data
+    filename = os.path.join(script_dir, 'exports', 'Figure 3 Source Data.xlsx')
+    export_to_excel(bl_true, bl_pred, ts_true, condition_list, params_of_interest, columns, filename)
+
     plt.legend(frameon=False, bbox_to_anchor=(1.7, 1.6), ncol=2)       # fontsize=font_size,
     format_ticks(ax_kam, ax_angles)
-    plt.savefig(os.path.join(script_dir, 'exports', 'da_guided_ts.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(script_dir, 'exports', 'da_guided_ts.pdf'), dpi=300, bbox_inches='tight')
     plt.show()
 
 
@@ -155,13 +216,13 @@ def draw_supplementary_fig():
     
     plt.legend(frameon=False, bbox_to_anchor=(0.935, 6.25), ncol=1, handles=[bl_plot, ts_plot])
 
-    plt.savefig(os.path.join(script_dir, 'exports', 'da_guided_ts_supplementary.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(script_dir, 'exports', 'da_guided_ts_supplementary.jpg'), dpi=600, bbox_inches='tight')
     plt.show()
 
 
 if __name__ == "__main__":
     draw_fig()
-    # draw_supplementary_fig()
+    draw_supplementary_fig()
 
 
 
