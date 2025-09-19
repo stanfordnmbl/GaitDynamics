@@ -137,8 +137,9 @@ JOINTS_3D_ALL = {
     'hip_r': ['hip_flexion_r', 'hip_adduction_r', 'hip_rotation_r'],
     'hip_l': ['hip_flexion_l', 'hip_adduction_l', 'hip_rotation_l'],
     'lumbar': ['lumbar_extension', 'lumbar_bending', 'lumbar_rotation'],
-    'arm_r': ['arm_flex_r', 'arm_add_r', 'arm_rot_r'],
-    'arm_l': ['arm_flex_l', 'arm_add_l', 'arm_rot_l']}
+    # 'arm_r': ['arm_flex_r', 'arm_add_r', 'arm_rot_r'],
+    # 'arm_l': ['arm_flex_l', 'arm_add_l', 'arm_rot_l']
+    }
 
 OSIM_DOF_ALL = [
     'pelvis_tilt', 'pelvis_list', 'pelvis_rotation', 'pelvis_tx', 'pelvis_ty', 'pelvis_tz', 'hip_flexion_r',
@@ -178,6 +179,9 @@ FULL_OSIM_DOF = ['pelvis_tilt', 'pelvis_list', 'pelvis_rotation', 'pelvis_tx', '
                  'knee_angle_l', 'ankle_angle_l', 'subtalar_angle_l', 'mtp_angle_l', 'lumbar_extension',
                  'lumbar_bending', 'lumbar_rotation']
 
+JOINTS_1D_ALL = ['pelvis_tx', 'pelvis_ty', 'pelvis_tz',
+                 'knee_angle_r', 'ankle_angle_r', 'subtalar_angle_r', 'mtp_angle_r',
+                 'knee_angle_l', 'ankle_angle_l', 'subtalar_angle_l', 'mtp_angle_l']
 
 """ ============================ End consts.py ============================ """
 
@@ -2530,10 +2534,21 @@ class MotionDataset(Dataset):
             self.time_column.append(poses_df['time'])
 
             missing_col = []
-            for col in FULL_OSIM_DOF:
+            for col in JOINTS_1D_ALL:
                 if col not in poses_df.columns:
-                    poses_df[col] = 0.
                     missing_col.append(col)
+                    missing_col.append(col + '_vel')
+                    poses_df[col] = 0.
+
+            for key_, value_ in JOINTS_3D_ALL.items():
+                if not all([col in poses_df.columns for col in value_]):
+                    columns_not_in_poses = [col for col in value_ if col not in poses_df.columns]
+                    if len(columns_not_in_poses) < 3:
+                        print(f'Warning {key_} is a 3-D joint. Since {columns_not_in_poses.__str__()[1:-1]} is missing, '
+                              f'the other DoFs ({[dof for dof in value_ if dof not in columns_not_in_poses].__str__()[1:-1]}) are filled with zeros too.')
+                    missing_col.extend([f'{key_}_{n}' for n in range(6)])
+                    missing_col.extend([f'{key_}_{axis}_angular_vel' for axis in ['x', 'y', 'z']])
+                    poses_df[value_] = 0.
 
             poses_df = poses_df.astype(float)
             col_list = list(poses_df.columns)
@@ -2617,7 +2632,7 @@ def usr_inputs():
 
     # # [DEBUG]
     # opt.height_m = 1.84
-    # opt.weight_kg = 92.9
+    # opt.weight_kg = 71.4
     # opt.treadmill_speed = 1.15
     # opt.subject_osim_model = opt.subject_data_path + '/Scaled_generic_no_arm.osim'
 
@@ -2637,11 +2652,10 @@ def usr_inputs():
     opt.file_paths = file_paths
 
     osim_paths = []
-    for root, dirs, files in os.walk(opt.subject_data_path):
-        for file in files:
-            file_path = os.path.join(root, file)
-            if file.endswith(".osim"):
-                osim_paths.append(file_path)
+    for file in os.listdir(opt.subject_data_path):
+        file_path = os.path.join(opt.subject_data_path, file)
+        if file.endswith(".osim"):
+            osim_paths.append(file_path)
     if len(osim_paths) > 1:
         print(f'Multiple .osim files found.')
         [print(f'{i}: {file_path}') for i, file_path in enumerate(osim_paths)]
