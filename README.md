@@ -18,7 +18,7 @@ GaitDynamics has [a diffusion model](/example_usage/GaitDynamicsDiffusion.pt) an
 Downstream task 1 uses both models, while downstream task 2 and 3 use only the diffusion model.
 
 ## Force and kinematic estimation with GaitDynamics
-<span style="color: red;">[NEW]</span> [A Huggingface Demo](https://huggingface.co/spaces/alanttan/GaitDyanmics/) and
+<span style="color:red">[NEW]</span> [A Huggingface Demo](https://huggingface.co/spaces/alanttan/GaitDyanmics/) and
  [A Google Colab notebook](https://colab.research.google.com/drive/1n6kH3gnwLdQ2DH5krigbkiO06NjDtyxI?usp=sharing)
 are provided for estimating ground reaction forces and missing kinematics using flexible combinations of kinematic inputs.
 Upload an OpenSim model file (.osim) and kinematic data files (.mot) following the instructions in the notebook.
