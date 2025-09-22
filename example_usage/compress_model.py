@@ -1,6 +1,8 @@
 import torch
 import os
-from example_usage.real_time_model import TransformerHipKnee, update_opt
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# from example_usage.real_time_model import TransformerHipKnee, update_opt
 from model.dance_decoder import DanceDecoder
 from model.model import TransformerEncoderArchitecture
 from args import parse_opt, set_with_arm_opt
@@ -105,7 +107,30 @@ class Normalizer:
 
 """ ============================ End scaler.py ============================ """
 
-def compress_model(checkpoint_path, model_class, new_model_name):
+
+def split_model_file_for_huggingface_demo(model_path, num_parts=3):
+    model_data = torch.load(model_path, map_location='cpu')
+    base_name = os.path.splitext(model_path)[0]
+    
+    state_dict = model_data['ema_state_dict']
+    normalizer = model_data['normalizer']
+    
+    # Split state dict into chunks
+    keys = list(state_dict.keys())
+    key_chunks = torch.tensor_split(torch.arange(len(keys)), num_parts)
+    
+    for i, key_indices in enumerate(key_chunks, 1):
+        chunk_dict = {keys[idx]: state_dict[keys[idx]] for idx in key_indices.tolist()}
+        part_data = {'ema_state_dict': chunk_dict}
+        if i == 1:
+            part_data['normalizer'] = normalizer
+        
+        part_filename = f"{base_name}_part{i}.pt"
+        torch.save(part_data, part_filename)
+        part_size = os.path.getsize(part_filename)
+        print(f"Part {i}: {os.path.abspath(part_filename)} - {part_size / (1024*1024):.2f} MB")
+
+def compress_model(checkpoint_path, model_class, new_model_name, split_parts=None):
     checkpoint = torch.load(checkpoint_path)
     new_model_object = model_class(len(opt.model_states_column_names), opt)
     new_model_object.load_state_dict(checkpoint["ema_state_dict"])
@@ -121,7 +146,11 @@ def compress_model(checkpoint_path, model_class, new_model_name):
     new_noramlizer = Normalizer(min_max_scaler, normalizer.cols_to_normalize)
 
     new_check_point = {'ema_state_dict': new_model_object.state_dict(), 'normalizer': new_noramlizer}
-    torch.save(new_check_point, new_model_name + '.pt')
+    model_path = new_model_name + '.pt'
+    torch.save(new_check_point, model_path)
+    
+    if split_parts:
+        split_model_file_for_huggingface_demo(model_path, split_parts)
 
 
 if __name__ == '__main__':
@@ -129,8 +158,9 @@ if __name__ == '__main__':
     set_with_arm_opt(opt, False)
 
     # diffusion
-    checkpoint_path = os.getcwd() + '/../trained_models/train-2560_diffusion.pt'
+    checkpoint_path = os.getcwd() + '/trained_models/train-2560_diffusion.pt'
     compress_model(checkpoint_path, DanceDecoder, 'GaitDynamicsDiffusion')
+    split_model_file_for_huggingface_demo('GaitDynamicsDiffusion.pt', 3)
 
     # # full-body tf
     # checkpoint_path = os.getcwd() + '/../trained_models/train-7680_tf.pt'
