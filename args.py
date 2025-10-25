@@ -24,25 +24,18 @@ def parse_opt():
         help="Dataset backup path",
     )
 
-    parser.add_argument("--feature_type", type=str, default="jukebox")
     parser.add_argument(
         "--wandb_pj_name", type=str, default="MotionModel", help="project name"
     )
     parser.add_argument("--batch_size", type=int, default=machine_specific_config['batch_size'], help="batch size")
     parser.add_argument("--batch_size_inference", type=int, default=128, help="batch size during inference")
     parser.add_argument("--pseudo_dataset_len", type=int, default=machine_specific_config['pseudo_dataset_len'], help="pseudo dataset length")
-    parser.add_argument(
-        "--force_reload", action="store_true", help="force reloads the datasets"
-    )
-    parser.add_argument(
-        "--no_cache", action="store_true", help="don't reuse / cache loaded dataset"
-    )
-    parser.add_argument(
-        "--save_interval",
-        type=int,
-        default=50,
-        help='Log model after every "save_period" epoch',
-    )
+    # parser.add_argument(
+    #     "--save_interval",
+    #     type=int,
+    #     default=50,
+    #     help='Log model after every "save_period" epoch',
+    # )
     parser.add_argument("--ema_interval", type=int, default=1, help="ema every x steps")
     parser.add_argument(
         "--checkpoint", type=str, default="", help="trained checkpoint path (optional)"
@@ -53,25 +46,14 @@ def parse_opt():
     opt = parser.parse_args()
     opt.data_path_parent = machine_specific_config['b3d_path']
     opt.use_server = machine_specific_config['use_server']
-    set_with_arm_opt(opt, opt.with_arm)
-    return opt
 
 
-def set_with_arm_opt(opt, with_arm):
-    if with_arm:
-        opt.with_arm = True
-        opt.osim_dof_columns = copy.deepcopy(OSIM_DOF_ALL + KINETICS_ALL)
-        opt.joints_3d = JOINTS_3D_ALL
-        data_path = opt.data_path_parent + '/b3d_with_arm/'
-        opt.data_path_osim_model = opt.data_path_parent + 'osim_model/unscaled_generic_with_arm.osim'
-        opt.model_states_column_names = copy.deepcopy(MODEL_STATES_COLUMN_NAMES_WITH_ARM)
-    else:
-        opt.with_arm = False
-        opt.osim_dof_columns = copy.deepcopy(OSIM_DOF_ALL[:23] + KINETICS_ALL)
-        opt.joints_3d = {key_: value_ for key_, value_ in JOINTS_3D_ALL.items() if key_ in ['pelvis', 'hip_r', 'hip_l', 'lumbar']}
-        data_path = opt.data_path_parent + '/b3d_no_arm/'
-        opt.data_path_osim_model = opt.data_path_parent + 'osim_model/unscaled_generic_no_arm.osim'
-        opt.model_states_column_names = copy.deepcopy(MODEL_STATES_COLUMN_NAMES_NO_ARM)
+    opt.with_arm = False
+    opt.osim_dof_columns = copy.deepcopy(OSIM_DOF_ALL[:23] + KINETICS_ALL)
+    opt.joints_3d = {key_: value_ for key_, value_ in JOINTS_3D_ALL.items() if key_ in ['pelvis', 'hip_r', 'hip_l', 'lumbar']}
+    data_path = opt.data_path_parent + '/b3d_no_arm/'
+    opt.data_path_osim_model = opt.data_path_parent + 'osim_model/unscaled_generic_no_arm.osim'
+    opt.model_states_column_names = copy.deepcopy(MODEL_STATES_COLUMN_NAMES_NO_ARM)
 
     for joint_name, joints_with_3_dof in opt.joints_3d.items():
         opt.model_states_column_names = opt.model_states_column_names + [
@@ -94,3 +76,4 @@ def set_with_arm_opt(opt, with_arm):
     opt.cop_osim_col_loc = [i_col for i_col, col in enumerate(opt.osim_dof_columns) if '_cop_' in col]
     opt.kinematic_osim_col_loc = [i_col for i_col, col in enumerate(opt.osim_dof_columns) if 'force' not in col]
 
+    return opt

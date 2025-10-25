@@ -6,12 +6,11 @@ parentdir = os.path.dirname(currentdir)
 sys.path.insert(0, parentdir)
 import pickle
 import pandas as pd
-from fig_utils import FONT_DICT_SMALL, FONT_SIZE_SMALL, LINE_WIDTH, LINE_WIDTH_THICK, format_axis
+from fig_utils import FONT_DICT_SMALL, LINE_WIDTH, format_axis
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import rc
 import matplotlib.gridspec as gridspec
-import matplotlib as mpl
 from model.utils import data_filter
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -72,7 +71,6 @@ def load_omnicontrol(speeds=[3, 3.4, 3.8, 4.2, 4.6, 5]):
     
     num_of_speeds = len(speeds)
     npy_path = '/mnt/d/Local/MotionPrior/OmniControl/save/omnicontrol_ckpt/samples_omnicontrol/results.npy'
-    # npy_path = '/mnt/d/Local/MotionPrior/OmniControl/save/omnicontrol_ckpt/samples_omnicontrol_ckpt__humanml3d_seed10_predefined/results.npy'
     results = np.load(npy_path, allow_pickle=True).item()
     num_of_repetitions = int(len(results['text']) / num_of_speeds)
 

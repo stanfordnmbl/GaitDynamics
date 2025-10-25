@@ -7,7 +7,7 @@ sys.path.insert(0, parentdir)
 import copy
 import pickle
 import pandas as pd
-from args import parse_opt, set_with_arm_opt
+from args import parse_opt
 import torch
 from consts import DATASETS_NO_ARM
 from model.model import MotionModel, BaselineModel, TransformerEncoderArchitecture
@@ -46,7 +46,6 @@ def load_diffusion_model(opt):
         opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'Diffusion_ema999'}/weights/{'train-2560_diffusion.pt'}"
     else:
         opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/{'train-2560_diffusion.pt'}"
-    set_with_arm_opt(opt, False)
     model = MotionModel(opt)
     model_key = 'diffusion'
     return model, model_key
@@ -82,7 +81,6 @@ def load_baseline_model(opt, model_to_test):
             raise RuntimeError('Only available on server')
         model_key = 'tf_no_data_filter'
 
-    set_with_arm_opt(opt, False)
     model = BaselineModel(opt, model_architecture_class, EMA=True)
     return model, model_key
 

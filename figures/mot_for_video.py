@@ -44,7 +44,6 @@ def export_grf():
     trial_to_select_of_each_dset = {
         'Camargo2021_Formatted_No_Arm': 81,
         'Moore2015_Formatted_No_Arm': 3,
-        # 'vanderZee2022_Formatted_No_Arm': 1,
         'Wang2023_Formatted_No_Arm': 13,
     }
     results_ = pickle.load(open(f"results/full/tf_for_video.pkl", "rb"))
@@ -56,8 +55,6 @@ def export_grf():
     for dset, (true_sub, pred_sub, column_names, height_m) in results_.items():
         if dset not in trial_to_select_of_each_dset.keys():
             trial_to_select_of_each_dset[dset] = 0
-        # if dset in ['Carter2023_Formatted_No_Arm']:
-        #     continue
         true_sub = true_sub[trial_to_select_of_each_dset[dset]][:max_time]
         pred_sub = pred_sub[trial_to_select_of_each_dset[dset]][:max_time]
 

@@ -7,7 +7,7 @@ sys.path.insert(0, parentdir)
 import copy
 import pickle
 import numpy as np
-from args import parse_opt, set_with_arm_opt
+from args import parse_opt
 import torch
 import os
 from data.osim_fk import get_model_offsets, forward_kinematics
@@ -17,7 +17,6 @@ import matplotlib.pyplot as plt
 from model.utils import inverse_convert_addb_state_to_model_input, fix_seed
 from model.utils import inverse_norm_cops
 from fig_utils import show_skeletons, set_up_gui
-import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -87,7 +86,6 @@ def profile_to_peak(states, columns, model_offsets, speed):
 def loop_one_sub(opt, speed_base=40, speed_lower=30, speed_upper=50, increment=4):
     assert increment in [4, 6]
     assert speed_base in [20, 30, 40, 50]
-    set_with_arm_opt(opt, False)
     model = MotionModel(opt)
 
     test_dataset_30 = MotionDatasetManipulated(
@@ -183,13 +181,6 @@ def loop_one_sub(opt, speed_base=40, speed_lower=30, speed_upper=50, increment=4
         fix_seed()
         state_pred = model.eval_loop(opt, state_syn, masks, value_diff_thd, value_diff_weight, cond=cond,
                                      num_of_generation_per_window=num_of_generation_per_window, mode='inpaint_ddim_guided')
-
-        # # to test time
-        # start_time = time.time()
-        # state_pred = model.eval_loop(opt, state_syn.repeat(100, 1, 1), masks.repeat(100, 1, 1), value_diff_thd, value_diff_weight, cond=cond,
-        #                              num_of_generation_per_window=num_of_generation_per_window, mode='inpaint_ddim_guided')
-        # end_time = time.time()
-        # print('Took {:.2f} seconds'.format(end_time - start_time))
 
         state_pred = inverse_convert_addb_state_to_model_input(
             state_pred, opt.model_states_column_names, opt.joints_3d, opt.osim_dof_columns, [0, 0, 0], height_m_tensor)

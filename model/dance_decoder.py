@@ -5,8 +5,7 @@ from torch import Tensor
 from torch.nn import functional as F
 import torch
 from model.rotary_embedding_torch import RotaryEmbedding
-from model.utils import PositionalEncoding, SinusoidalPosEmb, prob_mask_like
-from einops.layers.torch import Rearrange, Reduce
+from model.utils import PositionalEncoding, SinusoidalPosEmb
 
 
 class DenseFiLM(nn.Module):
@@ -68,10 +67,6 @@ class FiLMTransformerDecoderLayer(nn.Module):
         self.film1 = DenseFiLM(d_model)
         self.film3 = DenseFiLM(d_model)
 
-        # self.norm2 = nn.LayerNorm(d_model, eps=layer_norm_eps)
-        # self.dropout2 = nn.Dropout(dropout)
-        # self.film2 = DenseFiLM(d_model)
-
         self.rotary = rotary
         self.use_rotary = rotary is not None
 
@@ -90,12 +85,6 @@ class FiLMTransformerDecoderLayer(nn.Module):
         if self.norm_first:
             x_1 = self._sa_block(self.norm1(x), tgt_mask, tgt_key_padding_mask)
             x = x + featurewise_affine(x_1, self.film1(t))
-            ## cross-attention -> film -> residual (REMOVED)
-            # x_2 = self._mha_block(
-            #     self.norm2(x), memory, memory_mask, memory_key_padding_mask
-            # )
-            # x = x + featurewise_affine(x_2, self.film2(t))
-            # feedforward -> film -> residual
             x_3 = self._ff_block(self.norm3(x))
             x = x + featurewise_affine(x_3, self.film3(t))
         else:
@@ -105,13 +94,6 @@ class FiLMTransformerDecoderLayer(nn.Module):
                     self._sa_block(x, tgt_mask, tgt_key_padding_mask), self.film1(t)
                 )
             )
-            # x = self.norm2(
-            #     x
-            #     + featurewise_affine(
-            #         self._mha_block(x, memory, memory_mask, memory_key_padding_mask),
-            #         self.film2(t),
-            #     )
-            # )
             x = self.norm3(x + featurewise_affine(self._ff_block(x), self.film3(t)))
         return x
 
@@ -203,32 +185,6 @@ class DanceDecoder(nn.Module):
 
         self.to_time_cond = nn.Sequential(nn.Linear(latent_dim * 4, latent_dim),)
 
-        # self.to_time_tokens = nn.Sequential(
-        #     nn.Linear(latent_dim * 4, latent_dim * 2),  # 2 time tokens
-        #     Rearrange("b (r d) -> b r d", r=2),
-        # )
-        # self.norm_cond = nn.LayerNorm(latent_dim)
-        # self.cond_encoder = nn.Sequential()
-        # for _ in range(2):
-        #     self.cond_encoder.append(
-        #         TransformerEncoderLayer(
-        #             d_model=latent_dim,
-        #             nhead=num_heads,
-        #             dim_feedforward=ff_size,
-        #             dropout=dropout,
-        #             activation=activation,
-        #             batch_first=True,
-        #             rotary=self.rotary,
-        #         )
-        #     )
-        # self.cond_projection = nn.Linear(cond_feature_dim, latent_dim)
-        # self.non_attn_cond_projection = nn.Sequential(
-        #     nn.LayerNorm(latent_dim),
-        #     nn.Linear(latent_dim, latent_dim),
-        #     nn.SiLU(),
-        #     nn.Linear(latent_dim, latent_dim),
-        # )
-        # decoder
         decoderstack = nn.ModuleList([])
         for _ in range(num_layers):
             decoderstack.append(
@@ -262,26 +218,3 @@ class DanceDecoder(nn.Module):
         output = self.seqTransDecoder(x, None, t)
         output = self.final_layer(output)
         return output
-
-    # # # With conditioning version
-    # def forward(self, x: Tensor, cond_embed: Tensor, times: Tensor):
-    #     x = self.input_projection(x)
-    #     x = self.abs_pos_encoding(x)
-    #
-    #     cond_tokens = self.cond_projection(cond_embed).unsqueeze(1)
-    #     # cond_tokens = self.abs_pos_encoding(cond_tokens)
-    #     # cond_tokens = self.cond_encoder(cond_tokens)
-    #
-    #     t_hidden = self.time_mlp(times)
-    #     t = self.to_time_cond(t_hidden) # linear from 4*latent_dim to latent_dim
-    #
-    #     mean_pooled_cond_tokens = cond_tokens.mean(dim=-2)
-    #     cond_hidden = self.non_attn_cond_projection(mean_pooled_cond_tokens)
-    #     t += cond_hidden
-    #     # t_tokens = self.to_time_tokens(t_hidden)
-    #     # c = torch.cat((cond_tokens, t_tokens), dim=-2)
-    #     # cond_tokens = self.norm_cond(c)
-    #
-    #     output = self.seqTransDecoder(x, cond_tokens, t)
-    #     output = self.final_layer(output)
-    #     return output

@@ -1,5 +1,4 @@
 import pickle
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -142,15 +141,6 @@ class MotionDataset(Dataset):
                 current_trial -= 1
 
             assert current_index == 0
-
-            # plt.figure()
-            # plt.plot(walking_vel)
-            # # plt.figure()
-            # # plt.plot(vel_from_t[:, 0])
-            # # plt.plot(r_foot_vel[:, 0])
-            # # plt.plot(l_foot_vel[:, 0])
-            # plt.title(self.trials[i_trial].dset_name + self.trials[i_trial].sub_and_trial_name)
-            # plt.show()
             return [], [], []
 
         for i_trial, trial in enumerate(self.trials):
@@ -362,8 +352,6 @@ class MotionDataset(Dataset):
 
         self.trials = []
         for i_sub, subject_path in enumerate(subject_paths):
-            # Add the skeleton to the list of skeletons
-
             if self.specific_dset and self.specific_dset not in subject_path:
                 continue
             if sum([keyword in subject_path for keyword in self.dset_keyworks_to_exclude]):
@@ -390,11 +378,6 @@ class MotionDataset(Dataset):
             skel = subject.readSkel(0, geometryFolder=os.path.dirname(os.path.realpath(__file__)) + "/../../data/Geometry/")
             self.skels[dset_name+'_'+subject_name] = skel
 
-            # neutral_pose = np.zeros([1, skel.getNumDofs()])
-            # body_nodes = [skel.getBodyNode(i) for i in range(skel.getNumBodyNodes())]
-            # body_locs = get_multi_body_loc_using_nimble_by_body_nodes(body_nodes, skel, neutral_pose)
-            # cond = body_loc_to_cond(body_locs).tolist()[0] + [subject.getHeightM(), subject.getMassKg() / 50]
-            # cond = torch.tensor(cond).float()
             cond = torch.zeros([6]).float()
 
             model_offsets = get_model_offsets(skel).float()
@@ -456,14 +439,12 @@ class MotionDataset(Dataset):
                 if len(poses) < 10:
                     self.num_of_excluded_trials['trial_length'] += 1
                     continue
-                    # This is to compensate an AddBiomechanics bug that first GRF is always 0.
                 if (forces[0] == 0).all() or (cops[0] == 0).all():
                     poses = poses[1:]
                     forces = forces[1:]
                     cops = cops[1:]
                     probably_missing = probably_missing[1:]
                 if (forces[-1] == 0).all() or (cops[-1] == 0).all():
-                    # print(f'Compensating an AddB bug, {subject_name}, {trial_id} has 0 GRF at the first frame.', end='')
                     poses = poses[:-1]
                     forces = forces[:-1]
                     cops = cops[:-1]
@@ -478,8 +459,6 @@ class MotionDataset(Dataset):
                 grf_flag_counts = list(mit.run_length.encode(probably_missing))
 
                 if len(grf_flag_counts) > 30:
-                    # print(f'Compensating an AddB bug, {dset_name} - {subject_name} - {trial_id} notMissingGRF flag abnormally'
-                    #       f' flipped {len(grf_flag_counts)} times, thus setting all to True.', end='')
                     probably_missing = [False] * len(probably_missing)
 
                 states = norm_cops(skel, states, opt, weight_kg, height_m, self.check_cop_to_calcn_distance, self.wrong_cop_ratio)
@@ -610,7 +589,6 @@ class GaitCycles:
         self.sub_and_trial_name = sub_and_trial_name
         self.dset_name = dset_name
         self.gait_cycle = gait_cycle_converted
-        # self.gait_cycle_raw = gait_cycle_raw
         self.gait_cycle_len = gait_cycle_converted.shape[0]
         self.index_pair = index_pair
         self.gait_cycle_resampled = torch.from_numpy(self.resample_to_1000_timesteps(gait_cycle_converted))

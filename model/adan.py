@@ -68,28 +68,16 @@ class Adan(Optimizer):
 
                 if step > 0:
                     prev_grad = state["prev_grad"]
-
-                    # main algorithm
-
                     m.mul_(1 - beta1).add_(grad, alpha=beta1)
-
                     grad_diff = grad - prev_grad
-
                     v.mul_(1 - beta2).add_(grad_diff, alpha=beta2)
-
                     next_n = (grad + (1 - beta2) * grad_diff) ** 2
-
                     n.mul_(1 - beta3).add_(next_n, alpha=beta3)
-
-                # bias correction terms
-
                 step += 1
 
                 correct_m, correct_v, correct_n = map(
                     lambda n: 1 / (1 - (1 - n) ** step), (beta1, beta2, beta3)
                 )
-
-                # gradient step
 
                 def grad_step_(data, m, v, n):
                     weighted_step_size = lr / (n * correct_n).sqrt().add_(eps)
@@ -104,16 +92,12 @@ class Adan(Optimizer):
 
                 grad_step_(data, m, v, n)
 
-                # restart condition
-
                 if exists(restart_cond) and restart_cond(state):
                     m.data.copy_(grad)
                     v.zero_()
                     n.data.copy_(grad ** 2)
 
                     grad_step_(data, m, v, n)
-
-                # set new incremented step
 
                 prev_grad.copy_(grad)
                 state["step"] = step

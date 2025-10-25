@@ -8,12 +8,10 @@ from scipy.interpolate import interp1d
 import scipy.interpolate as interpo
 import random
 from scipy.signal import filtfilt, butter
-from data.quaternion import euler_from_6v, euler_to_6v, euler_to_angular_velocity, angular_velocity_to_euler
+from data.quaternion import euler_from_6v, euler_to_6v, euler_to_angular_velocity
 from consts import JOINTS_3D_ALL, FROZEN_DOFS
 from data.rotation_conversions import euler_angles_to_matrix, matrix_to_euler_angles
-import matplotlib.pyplot as plt
 from data.osim_fk import get_model_offsets, forward_kinematics
-import nimblephysics as nimble
 
 
 def cross_product_2d(a, b):
@@ -116,23 +114,6 @@ def norm_cops(skel, states, opt, sub_mass, height_m, check_cop_to_calcn_distance
     for i_plate in range(2):
         force_vector = forces[:, 3*i_plate:3*(i_plate+1)]
 
-        # cop_to_toe = (toe_centers - cops)[:, 3*i_plate:3*(i_plate+1)]
-        # cop_to_heel = (heel_centers - cops)[:, 3*i_plate:3*(i_plate+1)]
-        #
-        # distance_to_toe = torch.norm(cop_to_toe, dim=-1)
-        # distance_to_heel = torch.norm(cop_to_heel, dim=-1)
-        # stance_phase = force_vector[:, 1] > 0.5
-        # use_toe = distance_to_toe < distance_to_heel
-        #
-        # cop_to_foot = torch.zeros_like(cop_to_toe, dtype=cop_to_toe.dtype)
-        # cop_to_foot[use_toe] = cop_to_toe[use_toe]
-        # cop_to_foot[~use_toe] = cop_to_heel[~use_toe]
-        #
-        # cop_to_foot[:, [0, 2]] = torch.clip(cop_to_foot[:, [0, 2]], -0.1, 0.1)
-        #
-        # cops[use_toe&stance_phase, 3*i_plate:3*(i_plate+1)] = toe_centers[use_toe&stance_phase, 3*i_plate:3*(i_plate+1)] - cop_to_foot[use_toe&stance_phase]
-        # cops[(~use_toe)&stance_phase, 3*i_plate:3*(i_plate+1)] = heel_centers[(~use_toe)&stance_phase, 3*i_plate:3*(i_plate+1)] - cop_to_foot[(~use_toe)&stance_phase]
-
         vector = (cops - heel_centers)[:, 3*i_plate:3*(i_plate+1)]
         stance_phase = force_vector[:, 1] > (50 / sub_mass)
         if check_cop_to_calcn_distance:
@@ -234,55 +215,6 @@ def osim_states_to_moments_in_percent_BW_BH_via_cross_product(osim_states, skel,
     return moments, moment_names
 
 
-def osim_states_to_moments_in_percent_BW_BH_via_inverse_dynamics(osim_states_unfiltered, skel, opt, heights_weights):
-    height_m, weights_kg = heights_weights
-    skel.clearExternalForces()
-    skel.setGravity([0, -9.81, 0])
-    foot_body_ids = [skel.getBodyNode(body_).getIndexInSkeleton() for body_ in ['calcn_r', 'calcn_l']]
-
-    osim_states = copy.deepcopy(osim_states_unfiltered)
-    osim_states[:, opt.kinematic_osim_col_loc] = data_filter(
-        osim_states[:, opt.kinematic_osim_col_loc], 6, opt.target_sampling_rate, 2)
-    osim_states_vel, osim_states_acc = update_d_dd(osim_states, 1 /opt.target_sampling_rate)
-    moments_id = []
-    mResidualForceHelper = nimble.biomechanics.ResidualForceHelper(skel, foot_body_ids)
-
-    for i_frame in range(osim_states.shape[0]):
-        skel.setPositions(osim_states[i_frame, opt.kinematic_osim_col_loc])
-        f_r = osim_states[i_frame, opt.grf_osim_col_loc[:3]] * weights_kg
-        cop_r_world = osim_states[i_frame, opt.cop_osim_col_loc[:3]]
-        torque_r_world = cross_product_1d(cop_r_world, f_r)
-        f_l = osim_states[i_frame, opt.grf_osim_col_loc[3:6]] * weights_kg
-        cop_l_world = osim_states[i_frame, opt.cop_osim_col_loc[3:6]]
-        torque_l_world = cross_product_1d(cop_l_world, f_l)
-        forces = np.concatenate([torque_r_world, f_r, torque_l_world, f_l])
-        id_ = mResidualForceHelper.calculateInverseDynamics(
-            osim_states[i_frame, opt.kinematic_osim_col_loc],
-            np.zeros_like(osim_states_vel[i_frame, opt.kinematic_osim_col_loc]),
-            np.zeros_like(osim_states_acc[i_frame, opt.kinematic_osim_col_loc]),
-            forces)
-        moments_id.append(id_)
-
-    moments_id = np.array(moments_id)
-    moments_id_names = [item.getName() for item in skel.getDofs()]
-
-    scale = height_m * (weights_kg * 9.81) / 100
-    moments_cp, moment_names_cp = osim_states_to_moments_in_percent_BW_BH_via_cross_product(osim_states, skel, opt, height_m)
-    plt.figure()
-    plt.plot(- moments_id[:, moments_id_names.index('knee_angle_r')] / scale)
-    plt.plot(moments_cp[:, moment_names_cp.index('knee_moment_r_z')])
-    plt.title('Knee')
-    plt.figure()
-    plt.plot(moments_id[:, moments_id_names.index('ankle_angle_r')] / scale)
-    plt.plot(moments_cp[:, moment_names_cp.index('ankle_moment_r_z')])
-    plt.title('Ankle')
-    plt.figure()
-    plt.plot(moments_id[:, moments_id_names.index('hip_flexion_r')] / scale)
-    plt.plot(moments_cp[:, moment_names_cp.index('hip_moment_r_z')])
-    plt.title('Hip')
-    plt.show()
-
-
 def model_states_osim_dof_conversion(model_states, opt):
     states = [dof for dof in model_states if '_vel' not in dof]
     osim_dofs = copy.deepcopy(states)
@@ -371,12 +303,6 @@ def nan_helper(y):
     return np.isnan(y), lambda z: z.nonzero()[0]
 
 
-def moving_average_filtering(x, N):
-    x_padded = np.pad(x, (N // 2, N - 1 - N // 2), mode='edge')
-    cumsum = np.cumsum(np.insert(x_padded, 0, 0))
-    return (cumsum[N:] - cumsum[:-N]) / float(N)
-
-
 def from_foot_loc_to_foot_vel(mtp_loc, foot_grf, sampling_rate, grf_thd=4):         # 2 times of body mass Kg
     foot_vel = np.diff(mtp_loc, axis=0) * sampling_rate
     foot_vel = np.concatenate([foot_vel, foot_vel[-1][None, :]], axis=0)
@@ -457,16 +383,6 @@ class SinusoidalPosEmb(nn.Module):
         emb = x[:, None] * emb[None, :]
         emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
         return emb
-
-
-# dropout mask
-def prob_mask_like(shape, prob, device):
-    if prob == 1:
-        return torch.ones(shape, device=device, dtype=torch.bool)
-    elif prob == 0:
-        return torch.zeros(shape, device=device, dtype=torch.bool)
-    else:
-        return torch.zeros(shape, device=device).float().uniform_(0, 1) < prob
 
 
 def extract(a, t, x_shape):

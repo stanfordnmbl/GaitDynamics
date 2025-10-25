@@ -55,7 +55,7 @@ class MotionModel:
             )
             self.normalizer = checkpoint["normalizer"]
 
-        # !!! change it back after the last run
+        # Not tested but a bigger model might be better
         # model = DanceDecoder(
         #     nfeats=repr_dim,
         #     seq_len=horizon,
@@ -528,103 +528,6 @@ class GaussianDiffusion(nn.Module):
             x = value_ * mask + (1.0 - mask) * x
         return x
 
-    @torch.no_grad()
-    def inpaint_ddim_trust_sampling(self, shape, noise=None, constraint=None, return_diffusion=False, start_point=None):
-        # From "Constrained Diffusion with Trust Sampling"
-        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
-
-        times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
-        times = list(reversed(times.int().tolist()))
-        time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
-
-        x = torch.randn(shape, device=device)
-        cond = constraint["cond"].to(device)
-
-        mask = constraint["mask"].to(device)  # batch x horizon x channels
-        value = constraint["value"].to(device)  # batch x horizon x channels
-        value_diff_thd = constraint["value_diff_thd"].to(device)  # channels
-        value_diff_weight = constraint["value_diff_weight"].to(device)  # channels
-
-        for time, time_next in tqdm(time_pairs, desc='sampling loop time step'):
-            time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
-
-            pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
-            if time_next < 0:
-                x = x_start
-                x = value * mask + (1.0 - mask) * x
-                return x
-
-            alpha = self.alphas_cumprod[time]
-            alpha_next = self.alphas_cumprod[time_next]
-
-            sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
-            c = (1 - alpha_next - sigma ** 2).sqrt()
-
-            noise = torch.randn_like(x)
-
-            x_mean = x_start * alpha_next.sqrt() + c * pred_noise
-            if self.opt.guide_x_start_the_end_step <= time <= self.opt.guide_x_start_the_beginning_step:
-                x_mean.requires_grad_()
-                with torch.enable_grad():
-                    for step_ in range(self.opt.n_guided_steps):
-                        pred_noise, x_start, *_ = self.model_predictions(x_mean, cond, time_cond, clip_x_start=self.clip_denoised)
-                        value_diff = torch.subtract(x_start, value)
-                        loss = torch.relu(value_diff.abs() - value_diff_thd) * value_diff_weight
-                        grad = torch.autograd.grad([loss.sum()], [x_mean])[0]
-
-                        ones = tuple([1 for i in range(1, len(shape))])
-                        norms = (torch.norm(grad.view(grad.shape[0], -1), dim=1)).view((grad.shape[0],) + ones).expand(grad.shape) + 1e-6  # avoid div by 0
-                        grad /= norms
-                        x_mean = x_mean - self.opt.guidance_lr * grad
-
-            x = x_mean + sigma * noise
-            timesteps = torch.full((batch,), time_next, device=device, dtype=torch.long)
-            value_ = self.q_sample(value, timesteps) if (time > 0) else x
-            x = value_ * mask + (1.0 - mask) * x
-        return x
-
-    @torch.no_grad()
-    def inpaint_ddim_blended(self, shape, noise=None, constraint=None, return_diffusion=False, start_point=None):
-        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
-
-        times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
-        times = list(reversed(times.int().tolist()))
-        time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
-
-        x = torch.randn(shape, device=device)
-        cond = constraint["cond"].to(device)
-
-        mask = constraint["mask"].to(device)  # batch x horizon x channels
-        value = constraint["value"].to(device)  # batch x horizon x channels
-        value_diff_thd = constraint["value_diff_thd"].to(device)  # channels
-        value_diff_weight = constraint["value_diff_weight"].to(device)  # channels
-
-        for time, time_next in tqdm(time_pairs, desc='sampling loop time step'):
-            time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
-
-            pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
-            if time_next < 0:
-                x = x_start
-                x = value * mask + (1.0 - mask) * x
-                return x
-
-            alpha = self.alphas_cumprod[time]
-            alpha_next = self.alphas_cumprod[time_next]
-
-            sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
-            c = (1 - alpha_next - sigma ** 2).sqrt()
-
-            noise = torch.randn_like(x)
-
-            x = x_start * alpha_next.sqrt() + \
-                c * pred_noise + \
-                sigma * noise
-
-            timesteps = torch.full((batch,), time_next, device=device, dtype=torch.long)
-            value_ = self.q_sample(value, timesteps) if (time > 0) else x
-            x = value_ * time_next / 999 + (1.0 - time_next / 999) * x
-            x = value_ * mask + (1.0 - mask) * x
-        return x
 
     @torch.no_grad()
     def inpaint_ddpm_loop_hip_6v(
@@ -729,104 +632,6 @@ class GaussianDiffusion(nn.Module):
         return x
 
     @torch.no_grad()
-    def noise_denoise_at_each_t(self, shape, noise=None, constraint=None, return_diffusion=False, start_point=None):
-        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, constraint['total_timesteps'], 10, 0
-        times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)
-        times = list(reversed(times.int().tolist()))
-        time_pairs = list(zip(times[:-1], times[1:]))
-        cond = constraint["cond"].to(device)
-        value = constraint["value"].to(device)
-
-        x_list = []
-        for time_pairs_start in range(len(time_pairs)):
-            time = time_pairs[time_pairs_start][0]
-            x = self.q_sample(value, torch.full((batch,), time, device=device, dtype=torch.long))
-
-            for time, time_next in tqdm(time_pairs[time_pairs_start:], desc='sampling loop time step'):
-                time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
-
-                pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
-                if time_next < 0:
-                    x = x_start
-                    break
-
-                alpha = self.alphas_cumprod[time]
-                alpha_next = self.alphas_cumprod[time_next]
-
-                sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
-                c = (1 - alpha_next - sigma ** 2).sqrt()
-
-                noise = torch.randn_like(x)
-
-                x = x_start * alpha_next.sqrt() + \
-                    c * pred_noise + \
-                    sigma * noise
-
-            x_list.append(x)
-        return x_list
-
-    @torch.no_grad()
-    def noise_denoise_at_each_t_ddpm(self, shape, noise=None, constraint=None, return_diffusion=False, start_point=None):
-        device = self.betas.device
-        batch_size = shape[0]
-        cond = constraint["cond"].to(device)
-        value = constraint["value"].to(device)
-
-        start_point = constraint['total_timesteps']
-        x = self.q_sample(value, torch.full((batch_size,), start_point, device=device, dtype=torch.long))
-        for i in tqdm(reversed(range(0, start_point))):
-            timesteps = torch.full((batch_size,), i, device=device, dtype=torch.long)
-            x, _ = self.p_sample(x, cond, timesteps)
-        x_list = [x]
-        return x_list
-
-    @torch.no_grad()
-    def extract_last_hidden_layer_loop(self, shape, noise=None, constraint=None, return_diffusion=False, start_point=None):
-        batch, device, total_timesteps, sampling_timesteps, eta = shape[0], self.betas.device, self.n_timestep, 50, 0
-
-        times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)   # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
-        times = list(reversed(times.int().tolist()))
-        time_pairs = list(zip(times[:-1], times[1:])) # [(T-1, T-2), (T-2, T-3), ..., (1, 0), (0, -1)]
-
-        x = torch.randn(shape, device=device)
-        cond = constraint["cond"].to(device)
-
-        mask = constraint["mask"].to(device)  # batch x horizon x channels
-        value = constraint["value"].to(device)  # batch x horizon x channels
-
-        for time, time_next in tqdm(time_pairs[:-1], desc='sampling loop time step'):
-            time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
-
-            pred_noise, x_start, *_ = self.model_predictions(x, cond, time_cond, clip_x_start=self.clip_denoised)
-
-            alpha = self.alphas_cumprod[time]
-            alpha_next = self.alphas_cumprod[time_next]
-
-            sigma = eta * ((1 - alpha / alpha_next) * (1 - alpha_next) / (1 - alpha)).sqrt()
-            c = (1 - alpha_next - sigma ** 2).sqrt()
-
-            noise = torch.randn_like(x)
-
-            x = x_start * alpha_next.sqrt() + \
-                c * pred_noise + \
-                sigma * noise
-
-            timesteps = torch.full((batch,), time_next, device=device, dtype=torch.long)
-            value_ = self.q_sample(value, timesteps) if (time > 0) else x
-            x = value_ * mask + (1.0 - mask) * x
-
-        time, time_next = time_pairs[-1]
-        time_cond = torch.full((batch,), time, device=device, dtype=torch.long)
-
-        x = self.model.input_projection(x)
-        x = self.model.abs_pos_encoding(x)
-        t_hidden = self.model.time_mlp(time_cond)
-        t = self.model.to_time_cond(t_hidden)
-        output_last_hidden = self.model.seqTransDecoder(x, None, t)
-        output = self.model.final_layer(output_last_hidden)
-        return output_last_hidden
-
-    @torch.no_grad()
     def inpaint_ddpm_loop(
             self,
             shape,
@@ -915,11 +720,7 @@ class GaussianDiffusion(nn.Module):
         foot_locations_pred, joint_locations_true, _, _ = forward_kinematics(osim_states_true, model_offsets)
 
         loss_fk = self.loss_fn(joint_locations_pred, joint_locations_true, reduction="none")
-        # loss_fk = reduce(loss_fk, "b ... -> b (...)", "mean")
         loss_fk = loss_fk * extract(self.p2_loss_weight, t, loss_fk.shape[1:])
-
-        # loss_floor_penetration = self.loss_fn(foot_locations_pred[..., 1], foot_locations_true[..., 1], reduction="none")
-        # loss_floor_penetration = loss_floor_penetration * extract(self.p2_loss_weight, t, loss_floor_penetration.shape)
 
         foot_acc_pred = (foot_locations_pred[..., 2:, :] - 2 * foot_locations_pred[..., 1:-1, :] + foot_locations_pred[..., :-2, :]).abs() * self.opt.target_sampling_rate ** 2
         stance_based_on_foot_vel = (torch.norm(foot_acc_pred, dim=-1) < 0.3)[..., None].expand(-1, -1, -1, 3)
@@ -962,14 +763,6 @@ class GaussianDiffusion(nn.Module):
                 func_class = self.inpaint_ddim_loop
             elif mode == "inpaint_ddim_guided":
                 func_class = self.inpaint_ddim_guided
-            elif mode == "inpaint_ddim_trust_sampling":
-                func_class = self.inpaint_ddim_trust_sampling
-            elif mode == "inpaint_ddim_blended":
-                func_class = self.inpaint_ddim_blended
-            elif mode == "extract_last_hidden_layer":
-                func_class = self.extract_last_hidden_layer_loop
-            elif mode == "noise_denoise_at_each_t":
-                func_class = self.noise_denoise_at_each_t
             else:
                 assert False, "Unrecognized inference mode"
             samples = (
@@ -1159,13 +952,4 @@ class BaselineModel(MotionModel):
                            for _ in range(num_of_generation_per_window)]
         state_pred_list = [self.normalizer.unnormalize(state_pred.detach().cpu()) for state_pred in state_pred_list]
         return torch.stack(state_pred_list)
-
-
-
-
-
-
-
-
-
 

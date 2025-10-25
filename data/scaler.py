@@ -2,15 +2,10 @@ import torch
 
 
 def _handle_zeros_in_scale(scale, copy=True, constant_mask=None):
-    # if we are fitting on 1D arrays, scale might be a scalar
     if constant_mask is None:
-        # Detect near constant values to avoid dividing by a very small
-        # value that could lead to surprising results and numerical
-        # stability issues.
         constant_mask = scale < 10 * torch.finfo(scale.dtype).eps
 
     if copy:
-        # New array to avoid side-effects
         scale = scale.clone()
     scale[constant_mask] = 1.0
     return scale
@@ -30,8 +25,6 @@ class StandardScaler:
         """Reset internal data-dependent state of the scaler, if necessary.
         __init__ parameters are not touched.
         """
-        # Checking one attribute is enough, because they are all set together
-        # in partial_fit
         if hasattr(self, "scale_"):
             del self.scale_
             del self.data_mean_
@@ -42,12 +35,6 @@ class StandardScaler:
         return self.partial_fit(X)
 
     def partial_fit(self, X):
-        # feature_range = self.feature_range
-        # if feature_range[0] >= feature_range[1]:
-        #     raise ValueError(
-        #         "Minimum of desired feature range must be smaller than maximum. Got %s."
-        #         % str(feature_range)
-        #     )
 
         self.data_mean_ = torch.mean(X, axis=0)
         self.scale_ = torch.std(X, axis=0)
@@ -81,8 +68,6 @@ class MinMaxScaler:
         """Reset internal data-dependent state of the scaler, if necessary.
         __init__ parameters are not touched.
         """
-        # Checking one attribute is enough, because they are all set together
-        # in partial_fit
         if hasattr(self, "scale_"):
             del self.scale_
             del self.min_

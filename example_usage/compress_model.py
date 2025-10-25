@@ -5,7 +5,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # from example_usage.real_time_model import TransformerHipKnee, update_opt
 from model.dance_decoder import DanceDecoder
 from model.model import TransformerEncoderArchitecture
-from args import parse_opt, set_with_arm_opt
+from args import parse_opt
 
 
 
@@ -155,7 +155,6 @@ def compress_model(checkpoint_path, model_class, new_model_name, split_parts=Non
 
 if __name__ == '__main__':
     opt = parse_opt()
-    set_with_arm_opt(opt, False)
 
     # diffusion
     checkpoint_path = os.getcwd() + '/trained_models/train-2560_diffusion.pt'

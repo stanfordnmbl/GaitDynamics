@@ -13,7 +13,7 @@ from args import parse_opt
 from consts import NOT_IN_GAIT_PHASE, RUNNING_DSET_SHORT_NAMES, OVERGROUND_DSETS
 from da_grf_test_set_0 import cols_to_unmask_main, dset_to_skip, drop_frame_num_range, cols_to_unmask_big_table, segment_to_osim_param
 from data.addb_dataset import MotionDataset
-from matplotlib import rc, lines
+from matplotlib import rc
 from fig_utils import FONT_DICT_SMALL, FONT_SIZE_SMALL, format_axis, LINE_WIDTH, FONT_DICT_LARGE, FONT_DICT
 from scipy.stats import friedmanchisquare, wilcoxon, ttest_rel
 import random
@@ -46,14 +46,6 @@ def print_table_1(fast_run=False):
             if segment not in test_name:
                 string_ += '✓\t'
             else:
-                # if segment == 'velocity':
-                #     unit, scale = ' m/s', 1
-                # else:
-                #     unit, scale = ' deg', 180 / np.pi
-                # param_metric = []
-                # for param in params:
-                #     param_metric.extend(metric_tf_dict[test_name][param])
-                # string_ += f'{np.mean(param_metric)*scale:.1f} ± {np.std(param_metric)*scale:.1f}{unit}\t'
                 string_ += '✕\t'
 
         print(string_, end='\t')
@@ -132,7 +124,6 @@ def dset_data_profile_to_peak(true_, pred_, columns, dset_short):
         else:
             gait_phase_label.append(trial_gait_phase_label)
         for start_, end_ in zip(stance_start_valid, stance_end_valid):
-            # for param_dict, data_dict in zip([param_true_dict, param_pred_dict], [true_, pred_]):
             max_vy = np.max(true_[i_trial][start_:end_, columns.index('calcn_l_force_vy')])
             if dset_short not in RUNNING_DSET_SHORT_NAMES and (max_vy > 13 or max_vy < 8):
                 continue        # skip abnormal max vGRF
@@ -185,10 +176,6 @@ def get_all_the_metrics(model_key):
 
             if 'pelvis_t' not in param_col and 'force' not in param_col and 'moment' not in param_col and diff_abs.max() > 0.9 * np.pi:
                 print(dset_short + ' has large angular error in ' + param_col)
-                # plt.figure()
-                # plt.plot(true_concat[within_gait_cycle, param_col_loc])
-                # plt.plot(pred_concat[within_gait_cycle, param_col_loc])
-                # plt.show()
 
             if 'normed_cop' in param_col or 'moment' in param_col:
                 stance_phase = (np.abs(true_concat[:, columns.index('calcn_l_force_normed_cop_x')]) > 1e-10) & (
@@ -197,28 +184,11 @@ def get_all_the_metrics(model_key):
                                              pred_concat[stance_phase & within_gait_cycle, param_col_loc])) * ratio[0]
 
             metric_dset[param_col] = metric_mean
-        # print(dset_short)
         for param_col, metric_mean in metric_dset.items():
-            # print(f'{param_col}, {metric_mean:.2f}')
             if param_col not in metric_all_dsets.keys():
                 metric_all_dsets[param_col] = [metric_mean]
             else:
                 metric_all_dsets[param_col].append(metric_mean)
-
-        # if 'Li' in dset_short:
-        #     plt.figure()
-        #     param = 'calcn_l_force_vy'
-        #     param_col_loc = columns.index(param)
-        #     within_gait_cycle = (gait_phase_label_concat != NOT_IN_GAIT_PHASE)
-        #     plt.plot(true_concat[within_gait_cycle, param_col_loc])
-        #     plt.plot(pred_concat[within_gait_cycle, param_col_loc])
-        #     plt.title(dset_short + ' ' + str(metric_dset[param]))
-        # plt.show()
-
-    # for param_col, metric_list in metric_all_dsets.items():
-    #     if param_col == 'dset_short':
-    #         continue
-    #     print(f'{param_col}, {np.mean(metric_list):.2f}')
     return metric_all_dsets
 
 
@@ -227,7 +197,6 @@ def get_metrics_linear_velocity(model_key):
     results_ = combine_splits(results_)
     true_, pred_, _, columns = results_
     dset_list = list(true_.keys())
-    # param_pattern_and_ratio = {'calcn_l_force_v': 100 / 9.81, 'calcn_l_force_normed_cop': 100, 'moment': 1}
 
     metric_all_dsets = {'dset_short': []}
     for i_dset, dset_short in enumerate(dset_list):

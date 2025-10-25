@@ -2370,15 +2370,11 @@ def parse_opt():
         help="Dataset backup path",
     )
 
-    parser.add_argument("--feature_type", type=str, default="jukebox")
     parser.add_argument("--batch_size", type=int, default=256, help="batch size")
     parser.add_argument("--batch_size_inference", type=int, default=32, help="batch size during inference")
     parser.add_argument(
         "--checkpoint", type=str, default="", help="trained checkpoint path (optional)"
     )
-    # parser.add_argument(
-    #     "--checkpoint_bl", type=str, default="", help="trained checkpoint path (optional)"
-    # )
     opt = parser.parse_args(args=[])
     set_no_arm_opt(opt)
     current_folder = os.getcwd()

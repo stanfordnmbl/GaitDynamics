@@ -6,7 +6,7 @@ parentdir = os.path.dirname(currentdir)
 sys.path.insert(0, parentdir)
 import matplotlib.pyplot as plt
 import numpy as np
-from args import parse_opt, set_with_arm_opt
+from args import parse_opt
 import torch
 import os
 from model.model import MotionModel
@@ -36,7 +36,6 @@ class MotionDatasetManipulated(MotionDataset):
 
 
 def loop_all(opt):
-    set_with_arm_opt(opt, False)
     model = MotionModel(opt)
     test_dataset = MotionDataset(
         data_path=b3d_path,
