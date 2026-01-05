@@ -79,9 +79,9 @@ This work was supported in part by the Joe and Clara Tsai Foundation through the
 @article{tan2025gaitdynamics,
   title={GaitDynamics: A Generative Foundation Model for Analyzing Human Walking and Running},
   author={Tan, Tian and Van Wouwe, Tom and Werling, Keenon and Liu, C Karen and Delp, Scott and Hicks, Jennifer and Chaudhari, Akshay},
-  journal={Research Square},
-  pages={rs--3},
-  year={2025}
+  journal={Nature Biomedical Engineering},
+  year={2026},
+  doi={https://doi.org/10.1038/s41551-025-01565-8}
 }
 ```
 
