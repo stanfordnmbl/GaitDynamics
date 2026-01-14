@@ -148,6 +148,7 @@ def compress_model(checkpoint_path, model_class, new_model_name, split_parts=Non
     new_check_point = {'ema_state_dict': new_model_object.state_dict(), 'normalizer': new_noramlizer}
     model_path = new_model_name + '.pt'
     torch.save(new_check_point, model_path)
+    print('Saved compressed model to:', os.path.abspath(model_path))
     
     if split_parts:
         split_model_file_for_huggingface_demo(model_path, split_parts)
@@ -157,9 +158,9 @@ if __name__ == '__main__':
     opt = parse_opt()
 
     # diffusion
-    checkpoint_path = os.getcwd() + '/trained_models/train-2560_diffusion.pt'
+    checkpoint_path = os.getcwd() + '/../trained_models/train-7680_diffusion.pt'
     compress_model(checkpoint_path, DanceDecoder, 'GaitDynamicsDiffusion')
-    split_model_file_for_huggingface_demo('GaitDynamicsDiffusion.pt', 3)
+    # split_model_file_for_huggingface_demo('GaitDynamicsDiffusion.pt', 3)
 
     # # full-body tf
     # checkpoint_path = os.getcwd() + '/../trained_models/train-7680_tf.pt'

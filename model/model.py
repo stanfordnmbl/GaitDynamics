@@ -55,24 +55,26 @@ class MotionModel:
             )
             self.normalizer = checkpoint["normalizer"]
 
-        # Not tested but a bigger model might be better
+        # # Smaller model, same as paper
         # model = DanceDecoder(
-        #     nfeats=repr_dim,
+        #     nfeats=self.repr_dim,
         #     seq_len=horizon,
-        #     latent_dim=512,
+        #     latent_dim=256,
         #     ff_size=1024,
-        #     num_layers=8,
-        #     num_heads=8,
+        #     num_layers=4,
+        #     num_heads=4,
         #     dropout=0.1,
         #     activation=F.gelu,
         # )
+
+        # Larger model
         model = DanceDecoder(
             nfeats=self.repr_dim,
             seq_len=horizon,
-            latent_dim=256,
+            latent_dim=512,
             ff_size=1024,
-            num_layers=4,
-            num_heads=4,
+            num_layers=8,
+            num_heads=8,
             dropout=0.1,
             activation=F.gelu,
         )

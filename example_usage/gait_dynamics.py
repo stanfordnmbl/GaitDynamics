@@ -1073,13 +1073,26 @@ class MotionModel:
             )
             self.normalizer = checkpoint["normalizer"]
 
+        # Smaller model
+        # model = DanceDecoder(
+        #     nfeats=self.repr_dim,
+        #     seq_len=horizon,
+        #     latent_dim=256,
+        #     ff_size=1024,
+        #     num_layers=4,
+        #     num_heads=4,
+        #     dropout=0.1,
+        #     activation=F.gelu,
+        # )
+
+        # Larger model
         model = DanceDecoder(
             nfeats=self.repr_dim,
             seq_len=horizon,
-            latent_dim=256,
+            latent_dim=512,
             ff_size=1024,
-            num_layers=4,
-            num_heads=4,
+            num_layers=8,
+            num_heads=8,
             dropout=0.1,
             activation=F.gelu,
         )
@@ -2532,9 +2545,10 @@ class MotionDataset(Dataset):
             missing_col = []
             for col in JOINTS_1D_ALL:
                 if col not in poses_df.columns:
-                    missing_col.append(col)
-                    missing_col.append(col + '_vel')
                     poses_df[col] = 0.
+                    if col not in FROZEN_DOFS:
+                        missing_col.append(col)
+                        missing_col.append(col + '_vel')
 
             for key_, value_ in JOINTS_3D_ALL.items():
                 if not all([col in poses_df.columns for col in value_]):
@@ -2700,7 +2714,7 @@ def predict_grf_and_missing_kinematics():
     diffusion_model_for_filling = None
     filling_method = DiffusionFilling()
     for i_trial in range(len(dataset.trials)):
-        windows, s_list, e_list = dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, 20, i_trial, i_trial+1)
+        windows, s_list, e_list = dataset.get_overlapping_wins(opt.kinematic_diffusion_col_loc, 150, i_trial, i_trial+1)
         if len(windows) == 0:
             continue
 

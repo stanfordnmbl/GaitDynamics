@@ -148,10 +148,10 @@ class DanceDecoder(nn.Module):
         self,
         nfeats: int,
         seq_len: int = 150,  # 5 seconds, 30 fps
-        latent_dim: int = 256,
+        latent_dim: int = 512,
         ff_size: int = 1024,
-        num_layers: int = 4,
-        num_heads: int = 4,
+        num_layers: int = 8,
+        num_heads: int = 8,
         dropout: float = 0.1,
         # cond_feature_dim: int = 6,
         activation: Callable[[Tensor], Tensor] = F.gelu,

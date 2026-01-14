@@ -169,7 +169,7 @@ if __name__ == "__main__":
     opt.guidance_lr = 0.02
     opt.guide_x_start_the_beginning_step = 1000
     opt.guide_x_start_the_end_step = 0
-    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'2560_diffusion'}.pt"
+    opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/train-{'7680_diffusion'}.pt"
     loop_all(opt)
 
 

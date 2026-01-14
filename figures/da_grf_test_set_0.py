@@ -43,9 +43,9 @@ def load_model(model_to_test):
 
 def load_diffusion_model(opt):
     if opt.use_server:
-        opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'Diffusion_ema999'}/weights/{'train-2560_diffusion.pt'}"
+        opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'larger_model'}/weights/{'train-7680_diffusion.pt'}"
     else:
-        opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/{'train-2560_diffusion.pt'}"
+        opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/{'train-7680_diffusion.pt'}"
     model = MotionModel(opt)
     model_key = 'diffusion'
     return model, model_key
