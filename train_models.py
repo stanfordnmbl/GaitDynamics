@@ -8,7 +8,7 @@ import wandb
 
 def train(opt):
     model = MotionModel(opt)
-    # model = BaselineModel(opt, TransformerEncoderArchitecture)
+    model = BaselineModel(opt, TransformerEncoderArchitecture)
     # model = BaselineModel(opt, GroundLinkArchitecture)
     # model = BaselineModel(opt, SugaiNetArchitecture)
 
@@ -22,14 +22,6 @@ def train(opt):
         opt=opt,
     )
     model.train_loop(opt, train_dataset)
-
-
-""" Steps:
-1. Download AddBiomechanics data
-2. Move data to train1, train2, and train3 folders for post-processing
-3. Run post-processing using command: addb post-process --geometry-folder "/folder/to/Geometry/" --only-dynamics False "./train2/" "./train_cleaned/"
-4. Run this script to train the model.
-"""
 
 
 if __name__ == "__main__":
