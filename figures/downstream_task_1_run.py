@@ -43,7 +43,7 @@ def load_model(model_to_test):
 
 def load_diffusion_model(opt):
     if opt.use_server:
-        opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'larger_model'}/weights/{'train-7680_diffusion.pt'}"
+        opt.checkpoint = opt.data_path_parent + f"/../code/runs/train/{'standard2'}/weights/{'train-7680_diffusion.pt'}"
     else:
         opt.checkpoint = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/{'train-7680_diffusion.pt'}"
     model = MotionModel(opt)
@@ -55,7 +55,7 @@ def load_baseline_model(opt, model_to_test):
     if model_to_test == 1:
         model_architecture_class = TransformerEncoderArchitecture
         if opt.use_server:
-            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'tf_ema9992'}/weights/{'train-7680_tf.pt'}"
+            opt.checkpoint_bl = opt.data_path_parent + f"/../code/runs/train/{'standard'}/weights/{'train-7680_tf.pt'}"
         else:
             opt.checkpoint_bl = os.path.dirname(os.path.realpath(__file__)) + f"/../trained_models/{'train-7680_tf.pt'}"
         model_key = 'tf'

@@ -2584,12 +2584,14 @@ class MotionDataset(Dataset):
             if states.shape[0] / sampling_rate * self.target_sampling_rate < self.window_len + 2:
                 print(f'Warning: {file_name} is shorter than 1.5s, skipping.')
                 continue
-            if sampling_rate != self.target_sampling_rate:
-                states = linear_resample_data(states, sampling_rate, self.target_sampling_rate)
-
             states_df = pd.DataFrame(states, columns=opt.osim_dof_columns)
             states_df = self.customized_param_manipulation(states_df)
-            states_df, pos_vec = convert_addb_state_to_model_input(states_df, opt.joints_3d, self.target_sampling_rate)
+            states_df, pos_vec = convert_addb_state_to_model_input(states_df, opt.joints_3d, sampling_rate)
+
+            if sampling_rate != self.target_sampling_rate:
+                print('Warning: Sampling rate is not 100 Hz, using linear interpolation to resample data to 100 Hz')
+                states_resampled = linear_resample_data(states_df.values, sampling_rate, self.target_sampling_rate)
+                states_df = pd.DataFrame(states_resampled, columns=states_df.columns)
 
             assert self.opt.model_states_column_names == list(states_df.columns)
             converted_states = torch.tensor(states_df.values).float()

@@ -368,6 +368,7 @@ class MotionDataset(Dataset):
             subject_name = subject_path.split('/')[-1].split('.')[0]
             dset_name = subject_path.split('/')[-3]
 
+            print(f'Loading data from {dset_name}_{subject_name}')
             if f'{dset_name}_{subject_name}' in WEIGHT_KG_OVERWRITE.keys():
                 weight_kg = WEIGHT_KG_OVERWRITE[f'{dset_name}_{subject_name}']
                 print(f'Overwriting {dset_name}_{subject_name}\'s weight to {weight_kg} kg')
@@ -482,11 +483,11 @@ class MotionDataset(Dataset):
                 if states.shape[0] < 20:        # need to be longer than 20 frames for filtering
                     self.num_of_excluded_trials['trial_length'] += 1
                     continue
-                if sampling_rate != self.target_sampling_rate:
-                    print(f'{dset_name} is collected at {sampling_rate} Hz, resampling to {self.target_sampling_rate} Hz')
-                    states = linear_resample_data(states, sampling_rate, self.target_sampling_rate)
-                    probably_missing = linear_resample_data(np.array(probably_missing).astype(float), sampling_rate, self.target_sampling_rate).astype(bool)
-                probably_missing = np.array(probably_missing).astype(np.float64)
+                # if sampling_rate != self.target_sampling_rate:
+                #     print(f'{dset_name} is collected at {sampling_rate} Hz, resampling to {self.target_sampling_rate} Hz')
+                #     states = linear_resample_data(states, sampling_rate, self.target_sampling_rate)
+                #     probably_missing = linear_resample_data(np.array(probably_missing).astype(float), sampling_rate, self.target_sampling_rate).astype(bool)
+                # probably_missing = np.array(probably_missing).astype(np.float64)
 
                 if 'camargo_reconstructed_dict' in locals():
                     if sub_and_trial_name in camargo_reconstructed_dict.keys():
@@ -496,20 +497,29 @@ class MotionDataset(Dataset):
                 foot_locations, _, _, _ = forward_kinematics(states[:, :-len(KINETICS_ALL)], model_offsets)
                 mtp_r_loc, mtp_l_loc = foot_locations[1].squeeze().cpu().numpy(), foot_locations[3].squeeze().cpu().numpy()
 
-                mtp_r_loc = data_filter(mtp_r_loc, 10, self.target_sampling_rate)
-                mtp_l_loc = data_filter(mtp_l_loc, 10, self.target_sampling_rate)
+                mtp_r_loc = data_filter(mtp_r_loc, 10, sampling_rate)
+                mtp_l_loc = data_filter(mtp_l_loc, 10, sampling_rate)
 
                 # vancriek dataset has one two foot on one plate issue.
                 if sum([keyword in subject_path.lower() for keyword in OVERGROUND_DSETS]) or ('camargo' in subject_path.lower() and '_split5' not in subject_path.lower()):
                     mtp_r_vel, mtp_l_vel = np.zeros_like(mtp_r_loc), np.zeros_like(mtp_l_loc)
                 else:
-                    mtp_r_vel = from_foot_loc_to_foot_vel(mtp_r_loc, states[:, -len(KINETICS_ALL):][:, KINETICS_ALL.index('calcn_r_force_vy')], self.target_sampling_rate)
-                    mtp_l_vel = from_foot_loc_to_foot_vel(mtp_l_loc, states[:, -len(KINETICS_ALL):][:, KINETICS_ALL.index('calcn_l_force_vy')], self.target_sampling_rate)
+                    mtp_r_vel = from_foot_loc_to_foot_vel(mtp_r_loc, states[:, -len(KINETICS_ALL):][:, KINETICS_ALL.index('calcn_r_force_vy')], sampling_rate)
+                    mtp_l_vel = from_foot_loc_to_foot_vel(mtp_l_loc, states[:, -len(KINETICS_ALL):][:, KINETICS_ALL.index('calcn_l_force_vy')], sampling_rate)
                 mtp_r_vel, mtp_l_vel = mtp_r_vel.astype(np.float32), mtp_l_vel.astype(np.float32)
 
                 states_df = pd.DataFrame(states, columns=opt.osim_dof_columns)
                 states_df, mtp_r_vel, mtp_l_vel = self.customized_param_manipulation(states_df, mtp_r_vel, mtp_l_vel)
-                states_df, pos_vec = convert_addb_state_to_model_input(states_df, opt.joints_3d, self.target_sampling_rate)
+                states_df, pos_vec = convert_addb_state_to_model_input(states_df, opt.joints_3d, sampling_rate)
+
+                if sampling_rate != self.target_sampling_rate:
+                    print(f'{dset_name} is collected at {sampling_rate} Hz, resampling to {self.target_sampling_rate} Hz')
+                    states_resampled = linear_resample_data(states_df.values, sampling_rate, self.target_sampling_rate)
+                    probably_missing = linear_resample_data(np.array(probably_missing).astype(float), sampling_rate, self.target_sampling_rate).astype(bool)
+                    states_df = pd.DataFrame(states_resampled, columns=states_df.columns)
+                    mtp_r_vel = linear_resample_data(mtp_r_vel, sampling_rate, self.target_sampling_rate)
+                    mtp_l_vel = linear_resample_data(mtp_l_vel, sampling_rate, self.target_sampling_rate)
+                probably_missing = np.array(probably_missing).astype(np.float64)
 
                 assert self.opt.model_states_column_names == list(states_df.columns)
                 converted_states = torch.tensor(states_df.values).float()

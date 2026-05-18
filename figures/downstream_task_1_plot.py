@@ -11,7 +11,7 @@ import csv
 import pandas as pd
 from args import parse_opt
 from consts import NOT_IN_GAIT_PHASE, RUNNING_DSET_SHORT_NAMES, OVERGROUND_DSETS
-from da_grf_test_set_0 import cols_to_unmask_main, dset_to_skip, drop_frame_num_range, cols_to_unmask_big_table, segment_to_osim_param
+from downstream_task_1_run import cols_to_unmask_main, dset_to_skip, drop_frame_num_range, cols_to_unmask_big_table, segment_to_osim_param
 from data.addb_dataset import MotionDataset
 from matplotlib import rc
 from fig_utils import FONT_DICT_SMALL, FONT_SIZE_SMALL, format_axis, LINE_WIDTH, FONT_DICT_LARGE, FONT_DICT
