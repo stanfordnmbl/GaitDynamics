@@ -26,3 +26,4 @@ runs/
 example_usage/Geometry
 figures/exports/*
 example_usage/data_unused/*
+.vscode
